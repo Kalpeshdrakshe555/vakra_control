@@ -11,6 +11,10 @@ import { InlineCompletionProvider } from './providers/inlineCompletionProvider';
 import { AiCodeActionProvider, registerCodeActionCommands } from './providers/codeActionProvider';
 import { AiHoverProvider } from './providers/hoverProvider';
 import { ensureAgentConfig, getGeminiApiKeys, getGeminiModel, getGeminiTimeout } from './config';
+import { RagEngine } from './rag/ragEngine';
+
+// Global reference for the RAG engine
+export let globalRagEngine: RagEngine | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Ultra Light AI');
@@ -44,6 +48,16 @@ export function activate(context: vscode.ExtensionContext) {
     const defaultRouter = new EngineRouter([geminiClient], stateMachine);
     const defaultOperator = new SequentialOperator(stateMachine, defaultRouter);
 
+    // Initialize RAG Engine
+    globalRagEngine = new RagEngine(workspaceRoot);
+    globalRagEngine.buildIndex();
+
+    // Setup file watcher for RAG
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
+    watcher.onDidChange(uri => globalRagEngine?.updateFile(uri.fsPath));
+    watcher.onDidCreate(uri => globalRagEngine?.updateFile(uri.fsPath));
+    watcher.onDidDelete(uri => globalRagEngine?.updateFile(uri.fsPath));
+
     // ──────────────────────────────────────────────────────────────────────
     // STATUS BAR ITEM
     // ──────────────────────────────────────────────────────────────────────
@@ -76,7 +90,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const activeRouter = new EngineRouter(activeEngines, stateMachine);
-        const activeOperator = new SequentialOperator(stateMachine, activeRouter);
+        const activeOperator = new SequentialOperator(stateMachine, activeRouter, globalRagEngine);
 
         try {
             const state = stateMachine.readState();
@@ -94,7 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
                     outputChannel.appendLine('Scanning workspace for files to add to the queue...');
                     const files = await vscode.workspace.findFiles(
                         '**/*',
-                        '**/node_modules/**,**/dist/**,**/.git/**,**/.vscode/**,**/.ai_state.json,**/package-lock.json,**/package.json,**/tsconfig.json,**/esbuild.js,**/out/**'
+                        '{**/node_modules/**,**/dist/**,**/.git/**,**/.vscode/**,**/.ai_state.json,**/package-lock.json,**/package.json,**/tsconfig.json,**/esbuild.js,**/out/**}'
                     );
                     
                     if (files.length === 0) {
@@ -155,7 +169,7 @@ export function activate(context: vscode.ExtensionContext) {
         } catch (error: any) {
             outputChannel.appendLine(`Failed to reset state: ${error?.message || error}`);
         }
-    });
+    }, globalRagEngine);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('ultra-light-ai-sidebar', sidebarProvider)
@@ -294,6 +308,22 @@ export function activate(context: vscode.ExtensionContext) {
                 title: 'Ultra Light AI — Switch Model'
             });
             if (selected) {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders && workspaceFolders.length > 0) {
+                    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                    const configPath = path.join(workspaceRoot, '.agent-config.json');
+                    if (fs.existsSync(configPath)) {
+                        try {
+                            const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                            if (configData.providers?.cloud) {
+                                configData.providers.cloud.model = selected.label;
+                                fs.writeFileSync(configPath, JSON.stringify(configData, null, 2), 'utf8');
+                            }
+                        } catch (err) {
+                            console.error('Failed to update config file', err);
+                        }
+                    }
+                }
                 sidebarProvider.postMessageToWebview({
                     command: 'modelSwitched',
                     model: selected.label

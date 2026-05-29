@@ -14,6 +14,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     constructor(
         private readonly _extensionUri: vscode.Uri,
         private readonly _onStartCb: (config: any) => void,
+        private readonly _onResetCb: () => void,
+        private readonly ragEngine?: any
     ) {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
@@ -100,6 +102,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 this.handleOpenConfig();
             } else if (message.command === 'newChat') {
                 this.conversationHistory.clear();
+                if (this._onResetCb) {
+                    this._onResetCb();
+                }
                 this.postMessageToWebview({ command: 'chatCleared' });
             } else if (message.command === 'rollbackChat') {
                 if (message.timestamp) {
@@ -177,7 +182,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const timeout = getGeminiTimeout(workspaceRoot);
             const config = getAgentConfig(workspaceRoot);
             const maxTokens = config?.contextLimits?.maxTokens || 8000;
-            const client = new GeminiCloudClient(keys, model, timeout, maxTokens);
+            
+            let client;
+            if (config?.activeProvider === 'local') {
+                const { LocalOllamaClient } = require('../router/realClients');
+                const endpoint = config.providers?.local?.endpoint || 'http://127.0.0.1:11434';
+                const localModel = config.providers?.local?.model || 'llama3';
+                client = new LocalOllamaClient(localModel, endpoint);
+            } else {
+                client = new GeminiCloudClient(keys, model, timeout, maxTokens);
+            }
             
             const systemInstruction = this.buildSystemInstruction(config);
             let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, workspaceRoot);
@@ -355,11 +369,7 @@ Always provide clear, concise, and actionable responses.`;
                     text: `🔍 Web Search: ${query.substring(0, 30)}...`
                 });
                 
-                // Enhance query to prioritize coding sites
                 let enhancedQuery = query;
-                if (!enhancedQuery.includes('site:')) {
-                    enhancedQuery = `${query} (site:github.com OR site:stackoverflow.com OR site:huggingface.co)`;
-                }
                 
                 const searchResults = await searchWeb(enhancedQuery);
                 contextParts.push(`--- Web Search Results ---\n${searchResults}`);
@@ -421,7 +431,7 @@ Always provide clear, concise, and actionable responses.`;
                 try {
                     const files = await vscode.workspace.findFiles(
                         '**/*',
-                        '**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock'
+                        '{**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock}'
                     );
                     const fileList = files.map(f => {
                         const rel = path.relative(workspaceRoot, f.fsPath);
@@ -438,9 +448,33 @@ Always provide clear, concise, and actionable responses.`;
             finalPrompt = finalPrompt.replace(/@workspace/gi, '').trim();
         }
 
+        // Handle RAG Semantic Search (@rag or implicit)
+        const wantsRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
+        
+        if (wantsRag && this.ragEngine) {
+            try {
+                this.postMessageToWebview({
+                    command: 'statusUpdate',
+                    text: `🧠 Semantic Search: Analyzing codebase...`
+                });
+                
+                const ragResults = await this.ragEngine.search(text, 5);
+                if (ragResults.length > 0) {
+                    contextParts.push(`--- Relevant Semantic Codebase Context ---\n${ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n')}`);
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `🧠 Semantic Search: Loaded ${ragResults.length} relevant files.`
+                    });
+                }
+            } catch (err: any) {
+                console.error("RAG search failed", err);
+            }
+            finalPrompt = finalPrompt.replace(/@rag|@smart/gi, '').trim();
+        }
+
         // Auto-include active file if no context is provided
         let autoIncludeActive = includeActiveFile;
-        if (!hasFileMatch && !text.toLowerCase().includes('@workspace') && !text.toLowerCase().includes('@active') && !text.toLowerCase().includes('@current')) {
+        if (!hasFileMatch && !wantsWorkspace && !wantsRag && !text.toLowerCase().includes('@active') && !text.toLowerCase().includes('@current')) {
             autoIncludeActive = true;
         }
 
@@ -471,6 +505,18 @@ Always provide clear, concise, and actionable responses.`;
         // Assemble final prompt with context
         if (contextParts.length > 0) {
             finalPrompt = `${finalPrompt}\n\n--- Context ---\n${contextParts.join('\n\n')}`;
+        }
+
+        const config = getAgentConfig(workspaceRoot);
+        const maxTokens = config?.contextLimits?.maxTokens || 8000;
+        const maxChars = maxTokens * 3;
+        
+        if (finalPrompt.length > maxChars) {
+            finalPrompt = finalPrompt.substring(0, maxChars) + "\n\n... (context truncated due to token limits)";
+            this.postMessageToWebview({
+                command: 'statusUpdate',
+                text: `⚠️ Context truncated to stay under ${maxTokens} tokens limit.`
+            });
         }
 
         return finalPrompt;
@@ -569,13 +615,13 @@ Always provide clear, concise, and actionable responses.`;
                     fs.mkdirSync(dir, { recursive: true });
                 }
 
-                let document: vscode.TextDocument;
-                if (!fs.existsSync(fullPath)) {
-                    fs.writeFileSync(fullPath, '', 'utf8');
+                let fileText = '';
+                if (fs.existsSync(fullPath)) {
+                    const document = await vscode.workspace.openTextDocument(fileUri);
+                    fileText = document.getText();
+                } else {
+                    edit.createFile(fileUri, { ignoreIfExists: true });
                 }
-                
-                document = await vscode.workspace.openTextDocument(fileUri);
-                let fileText = document.getText();
                 
                 for (const content of contents) {
                     // Check if the AI used Search/Replace blocks
@@ -589,14 +635,54 @@ Always provide clear, concise, and actionable responses.`;
                             const searchStr = match[1];
                             const replaceStr = match[2];
                             
+                            // Tier 1: Exact Match
                             if (fileText.includes(searchStr)) {
                                 fileText = fileText.replace(searchStr, replaceStr);
                             } else {
-                                const looseSearch = searchStr.trim();
-                                if (fileText.includes(looseSearch)) {
-                                    fileText = fileText.replace(looseSearch, replaceStr.trim());
+                                // Tier 2: Normalized Line Endings (CRLF vs LF)
+                                const normSearch = searchStr.replace(/\r\n/g, '\n');
+                                const normFile = fileText.replace(/\r\n/g, '\n');
+                                if (normFile.includes(normSearch)) {
+                                    fileText = normFile.replace(normSearch, replaceStr.replace(/\r\n/g, '\n'));
                                 } else {
-                                    throw new Error(`Could not find the specified search block in ${filepath}.`);
+                                    // Tier 3: Trimmed Match
+                                    const looseSearch = searchStr.trim();
+                                    if (fileText.includes(looseSearch)) {
+                                        fileText = fileText.replace(looseSearch, replaceStr.trim());
+                                    } else {
+                                        // Tier 4: Line-anchored match (ignore indentation)
+                                        const lines = searchStr.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                                        if (lines.length > 0) {
+                                            const firstLine = lines[0];
+                                            const lastLine = lines[lines.length - 1];
+                                            const fileLines = fileText.split('\n');
+                                            let startIdx = -1;
+                                            let endIdx = -1;
+                                            for (let i = 0; i < fileLines.length; i++) {
+                                                if (fileLines[i].trim() === firstLine) {
+                                                    startIdx = i;
+                                                    break;
+                                                }
+                                            }
+                                            if (startIdx !== -1) {
+                                                for (let i = startIdx; i < fileLines.length; i++) {
+                                                    if (fileLines[i].trim() === lastLine) {
+                                                        endIdx = i;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx) {
+                                                const pre = fileLines.slice(0, startIdx).join('\n');
+                                                const post = fileLines.slice(endIdx + 1).join('\n');
+                                                fileText = pre + (pre ? '\n' : '') + replaceStr + (post ? '\n' : '') + post;
+                                            } else {
+                                                throw new Error(`Could not find the specified search block in ${filepath}. Please try again.`);
+                                            }
+                                        } else {
+                                            throw new Error(`Empty search block in ${filepath}.`);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -607,12 +693,16 @@ Always provide clear, concise, and actionable responses.`;
                     }
                 }
 
-                const fullRange = new vscode.Range(
-                    document.positionAt(0),
-                    document.positionAt(document.getText().length)
-                );
-                
-                edit.replace(fileUri, fullRange, fileText);
+                if (fs.existsSync(fullPath)) {
+                    const document = await vscode.workspace.openTextDocument(fileUri);
+                    const fullRange = new vscode.Range(
+                        document.positionAt(0),
+                        document.positionAt(document.getText().length)
+                    );
+                    edit.replace(fileUri, fullRange, fileText);
+                } else {
+                    edit.insert(fileUri, new vscode.Position(0, 0), fileText);
+                }
                 createdFiles.push(filepath);
             }
             
@@ -660,7 +750,7 @@ Always provide clear, concise, and actionable responses.`;
     /**
      * Executes a command in the VS Code terminal with basic sandbox restrictions.
      */
-    private handleRunInTerminal(command: string) {
+    private async handleRunInTerminal(command: string) {
         // Enhanced Sandboxing: Prevent destructive OS commands
         const dangerousPatterns = [
             /rm\s+-r/i, /del\s+\/f/i, /format\s+/i, /diskpart/i, 
@@ -673,6 +763,16 @@ Always provide clear, concise, and actionable responses.`;
 
         if (isDangerous) {
             vscode.window.showErrorMessage('🛡️ Sandbox Blocked: This command contains potentially dangerous OS operations or accesses restricted paths.');
+            return;
+        }
+
+        const confirm = await vscode.window.showWarningMessage(
+            `Do you want to run this command in the terminal?\n\n${command}`,
+            { modal: true },
+            'Run Command'
+        );
+
+        if (confirm !== 'Run Command') {
             return;
         }
 

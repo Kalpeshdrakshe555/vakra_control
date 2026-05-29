@@ -92,7 +92,7 @@ export function getGeminiApiKeys(workspaceRoot?: string, extensionPath?: string)
         const geminiApiKey = srcEnv['gemini_api_key'] || srcEnv['GEMINI_API_KEY'] || 
                              rootEnv['gemini_api_key'] || rootEnv['GEMINI_API_KEY'];
 
-        if (geminiApiKey) {
+        if (geminiApiKey && !geminiApiKey.includes('your_api_key_here')) {
             keys = geminiApiKey.split(',').map(k => k.trim()).filter(Boolean);
             break;
         }

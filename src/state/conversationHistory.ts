@@ -213,7 +213,7 @@ export class ConversationHistory {
     public estimateTokens(): number {
         const session = this.activeSession;
         if (!session) return 0;
-        return session.messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 4), 0);
+        return session.messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 3), 0);
     }
 
     public trimToTokenBudget(maxTokens: number): void {

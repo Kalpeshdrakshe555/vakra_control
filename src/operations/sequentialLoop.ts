@@ -9,10 +9,12 @@ import { CompletionResult } from '../router/IEngine';
 export class SequentialOperator {
     private readonly stateMachine: StateMachine;
     private readonly router: EngineRouter;
+    private readonly ragEngine?: any;
 
-    constructor(stateMachine: StateMachine, router: EngineRouter) {
+    constructor(stateMachine: StateMachine, router: EngineRouter, ragEngine?: any) {
         this.stateMachine = stateMachine;
         this.router = router;
+        this.ragEngine = ragEngine;
     }
 
     /**
@@ -79,11 +81,15 @@ export class SequentialOperator {
         let payload: string | null = "Refactor this:\n" + fileBuffer;
 
         // Fetch external RAG context if enabled
-        if (ragEnabled) {
-            console.log('RAG Scraper active: fetching Python tutorial context...');
-            const webContext = await fetchWebContext('https://docs.python.org/3/tutorial/index.html');
-            if (webContext) {
-                payload += `\n\nAdditional Python Docs Context:\n${webContext}`;
+        if (ragEnabled && this.ragEngine) {
+            console.log('RAG Engine active: fetching relevant semantic context...');
+            try {
+                const ragResults = await this.ragEngine.search(fileBuffer.substring(0, 500), 3);
+                if (ragResults && ragResults.length > 0) {
+                    payload += `\n\n--- Relevant Codebase Context ---\n${ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n')}`;
+                }
+            } catch (err) {
+                console.warn('RAG Engine search failed during sequential processing', err);
             }
         }
 

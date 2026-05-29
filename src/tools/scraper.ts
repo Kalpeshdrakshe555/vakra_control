@@ -4,24 +4,35 @@
  */
 export async function fetchWebContext(url: string): Promise<string> {
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+        });
         if (!response.ok) {
             throw new Error(`Failed to fetch web resource. HTTP status: ${response.status}`);
         }
 
         const html = await response.text();
 
+        // Basic code block formatting preservation
+        let cleanText = html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, p1) => {
+            return '\n```\n' + p1.replace(/<[^>]+>/g, '').trim() + '\n```\n';
+        });
+
         // 1. Strip script, style and head tags including their nested contents
         // 2. Strip all remaining tags
         // 3. Normalize white spaces and trim
-        const cleanText = html
-            .replace(/<(style|script|head|title)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
+        cleanText = cleanText
+            .replace(/<(style|script|head|title|nav|footer)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
             .replace(/<[^>]+>/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Truncate to maximum of 2000 characters to stay within context tokens configuration limits
-        return cleanText.substring(0, 2000);
+        // Truncate to maximum of 3000 characters per page
+        return cleanText.substring(0, 3000);
     } catch (error) {
         console.error(`fetchWebContext failed for ${url}:`, error);
         return '';
@@ -43,12 +54,11 @@ export async function searchWeb(query: string): Promise<string> {
         }
         const html = await response.text();
         
-        const results: string[] = [];
+        const results: {url: string, snippet: string}[] = [];
         // A more lenient regex to capture result blocks in DuckDuckGo HTML
         const resultRegex = /<a class="result__snippet[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
         let match;
-        let count = 0;
-        while ((match = resultRegex.exec(html)) !== null && count < 5) {
+        while ((match = resultRegex.exec(html)) !== null && results.length < 3) {
             let url = match[1];
             // Unescape DuckDuckGo redirect url
             if (url.includes('uddg=')) {
@@ -58,15 +68,26 @@ export async function searchWeb(query: string): Promise<string> {
                 } catch { /* ignore */ }
             }
             const snippet = match[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            results.push(`[Source ${count+1}] ${url}\n${snippet}`);
-            count++;
+            if (!url.includes('duckduckgo.com')) {
+                results.push({url, snippet});
+            }
         }
         
         if (results.length === 0) {
             return "No search results found.";
         }
         
-        return "--- WEB SEARCH RESULTS FOR '" + query + "' ---\n\n" + results.join('\n\n');
+        const fullResults = await Promise.all(results.map(async (r, idx) => {
+            try {
+                const pageContent = await fetchWebContext(r.url);
+                if (pageContent && pageContent.length > 300) {
+                    return `[Source ${idx+1}] ${r.url}\n${pageContent}`;
+                }
+            } catch (err) {}
+            return `[Source ${idx+1}] ${r.url}\nSnippet: ${r.snippet}`;
+        }));
+        
+        return "--- WEB SEARCH RESULTS FOR '" + query + "' ---\n\n" + fullResults.join('\n\n---\n\n');
     } catch (error) {
         console.error("Search error:", error);
         return "Search failed.";

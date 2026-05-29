@@ -10,7 +10,7 @@ export class GeminiCloudClient implements IEngine {
 
     constructor(keys: string[], model: string, timeoutMs: number = 30000, maxTokens: number = 8000) {
         if (!keys || keys.length === 0) {
-            throw new Error('Gemini API keys array is empty. Please configure ultraLightAI.geminiApiKey in VS Code Settings or add gemini_api_key=your_key in a .env file.');
+            throw new Error('Gemini API Key is missing. Please click the ⚙️ Gear icon in the chat panel to open Agent Configuration and add your API key.');
         }
         this.keys = keys;
         this.model = model;

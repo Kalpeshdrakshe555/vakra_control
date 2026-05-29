@@ -19,8 +19,10 @@ build/
 **/.env.*
 .agent-config.json
 .chat-history.json
+.ai_state.json
 **/.agent-config.json
 **/.chat-history.json
+**/.ai_state.json
 
 # Logs
 npm-debug.log*
