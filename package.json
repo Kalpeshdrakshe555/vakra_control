@@ -1,0 +1,192 @@
+{
+  "name": "ultra-light-ai",
+  "displayName": "Ultra Light AI",
+  "description": "A Copilot-style AI coding assistant — inline completions, chat, code actions, and more",
+  "version": "0.1.0",
+  "publisher": "ultra-light-ai",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18.0.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "AI",
+    "copilot",
+    "code completion",
+    "gemini",
+    "inline suggestions",
+    "code assistant"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ultra-light-ai.startProcessing",
+        "title": "Ultra Light AI: Start Processing File Queue",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ultra-light-ai.openSidebar",
+        "title": "Ultra Light AI: Open Chat",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "ultra-light-ai.newChat",
+        "title": "Ultra Light AI: New Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ultra-light-ai.switchModel",
+        "title": "Ultra Light AI: Switch Model",
+        "icon": "$(symbol-misc)"
+      },
+      {
+        "command": "ultra-light-ai.inlineChat",
+        "title": "Ultra Light AI: Explain Selection (Inline Chat)",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "ultra-light-ai.addFileContext",
+        "title": "Ultra Light AI: Add Active File to Chat Context",
+        "icon": "$(file-add)"
+      },
+      {
+        "command": "ultra-light-ai.aiFix",
+        "title": "Ultra Light AI: AI Quick Fix"
+      },
+      {
+        "command": "ultra-light-ai.explainCode",
+        "title": "Ultra Light AI: Explain Code"
+      },
+      {
+        "command": "ultra-light-ai.refactorSelection",
+        "title": "Ultra Light AI: Refactor Selection"
+      },
+      {
+        "command": "ultra-light-ai.generateDocs",
+        "title": "Ultra Light AI: Generate Documentation"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ultra-light-ai.openSidebar",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      },
+      {
+        "command": "ultra-light-ai.inlineChat",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "ultra-light-ai.newChat",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+n"
+      },
+      {
+        "command": "ultra-light-ai.switchModel",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ultra-light-ai.inlineChat",
+          "when": "editorHasSelection",
+          "group": "ultra-light-ai@1"
+        },
+        {
+          "command": "ultra-light-ai.addFileContext",
+          "group": "ultra-light-ai@2"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "ultra-light-ai.newChat",
+          "when": "view == ultra-light-ai-sidebar",
+          "group": "navigation"
+        },
+        {
+          "command": "ultra-light-ai.switchModel",
+          "when": "view == ultra-light-ai-sidebar",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ultra-light-ai-chat-panel",
+          "title": "Ultra Light AI",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "views": {
+      "ultra-light-ai-chat-panel": [
+        {
+          "type": "webview",
+          "id": "ultra-light-ai-sidebar",
+          "name": "AI Chat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ultra Light AI",
+      "properties": {
+        "ultraLightAI.geminiApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "A comma-separated list of Google Gemini API Keys for Cloud operations and failover (e.g., key1,key2,key3)."
+        },
+        "ultraLightAI.enableInlineCompletions": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable Copilot-style inline code completions (ghost text)."
+        },
+        "ultraLightAI.enableHoverExplanations": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable AI-powered hover explanations (may increase API usage)."
+        },
+        "ultraLightAI.enableCodeActions": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable AI-powered code actions (Quick Fix, Refactor, etc.)."
+        },
+        "ultraLightAI.streamingEnabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable streaming responses in chat (token-by-token display)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production",
+    "pretest": "npm run compile && tsc -p .",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.20.2",
+    "mocha": "^11.7.6",
+    "typescript": "^5.3.3"
+  }
+}
