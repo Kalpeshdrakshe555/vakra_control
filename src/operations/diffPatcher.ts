@@ -13,7 +13,7 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
         }
 
         if (llmResponse.includes('<<<<<<< SEARCH') && llmResponse.includes('>>>>>>> REPLACE')) {
-            const blockRegex = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+            const blockRegex = /<<<<<<<\s*SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
             let match;
             let blocksFound = false;
             
@@ -22,22 +22,23 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
                 const searchStr = match[1];
                 const replaceStr = match[2];
                 
-                if (fileText.includes(searchStr)) {
-                    fileText = fileText.replace(searchStr, replaceStr);
+                const patchResult = applyRobustSearchReplace(fileText, searchStr, replaceStr);
+                if (patchResult.success) {
+                    fileText = patchResult.result;
                 } else {
-                    const looseSearch = searchStr.trim();
-                    if (fileText.includes(looseSearch)) {
-                        fileText = fileText.replace(looseSearch, replaceStr.trim());
-                    }
+                    blocksFound = false;
                 }
             }
             if (blocksFound) {
                 fs.writeFileSync(filePath, fileText, 'utf8');
                 return true;
+            } else {
+                console.error(`Malformed Search/Replace block in ${filePath}`);
+                return false;
             }
         }
 
-        const regex = /```[\w]*\n([\s\S]*?)```/;
+        const regex = /```[\w]*\r?\n([\s\S]*?)```/;
         const match = llmResponse.match(regex);
         
         let contentToWrite = llmResponse;
@@ -77,4 +78,106 @@ export async function applyDiffToActiveFile(extractedCode: string): Promise<bool
     });
 
     return success;
+}
+
+/**
+ * Robustly attempts to find and replace a block of code, falling back through 5 tiers of leniency.
+ * 1. Exact Match
+ * 2. Normalized Line Endings
+ * 3. Trimmed Match
+ * 4. Indentation & Empty Line Agnostic Match
+ * 5. First & Last Line Anchor Match
+ */
+export function applyRobustSearchReplace(fileText: string, searchStr: string, replaceStr: string): { success: boolean, result: string } {
+    // Tier 1: Exact Match
+    if (fileText.includes(searchStr)) {
+        return { success: true, result: fileText.replace(searchStr, replaceStr) };
+    }
+
+    // Tier 2: Normalized Line Endings
+    const normSearch = searchStr.replace(/\r\n/g, '\n');
+    const normFile = fileText.replace(/\r\n/g, '\n');
+    if (normFile.includes(normSearch)) {
+        return { success: true, result: normFile.replace(normSearch, replaceStr.replace(/\r\n/g, '\n')) };
+    }
+
+    // Tier 3: Trimmed Match
+    if (fileText.includes(searchStr.trim())) {
+        return { success: true, result: fileText.replace(searchStr.trim(), replaceStr.trim()) };
+    }
+
+    // Tier 4: Line-by-Line Indentation & Empty Line Agnostic Match
+    const searchLines = searchStr.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    const fileLines = fileText.split(/\r?\n/);
+    
+    if (searchLines.length === 0) {
+         return { success: false, result: fileText };
+    }
+
+    let bestMatchStart = -1;
+    let bestMatchEnd = -1;
+
+    for (let i = 0; i < fileLines.length; i++) {
+        let searchIdx = 0;
+        let fileIdx = i;
+
+        while (fileIdx < fileLines.length && searchIdx < searchLines.length) {
+            const fLine = fileLines[fileIdx].trim();
+            if (fLine.length === 0) {
+                fileIdx++;
+                continue;
+            }
+            if (fLine === searchLines[searchIdx]) {
+                searchIdx++;
+                fileIdx++;
+            } else {
+                break;
+            }
+        }
+
+        if (searchIdx === searchLines.length) {
+            bestMatchStart = i;
+            bestMatchEnd = fileIdx - 1;
+            break;
+        }
+    }
+
+    if (bestMatchStart !== -1 && bestMatchEnd !== -1) {
+        const pre = fileLines.slice(0, bestMatchStart).join('\n');
+        const post = fileLines.slice(bestMatchEnd + 1).join('\n');
+        const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
+        return { success: true, result };
+    }
+
+    // Tier 5: Fallback to First and Last line matching
+    if (searchLines.length > 1) {
+        const firstLine = searchLines[0];
+        const lastLine = searchLines[searchLines.length - 1];
+        
+        let startIdx = -1;
+        let endIdx = -1;
+        for (let i = 0; i < fileLines.length; i++) {
+            if (fileLines[i].trim() === firstLine) {
+                startIdx = i;
+                break;
+            }
+        }
+        if (startIdx !== -1) {
+            for (let i = startIdx; i < fileLines.length; i++) {
+                if (fileLines[i].trim() === lastLine) {
+                    endIdx = i;
+                    break;
+                }
+            }
+        }
+        
+        if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx && (endIdx - startIdx) < searchLines.length * 3) {
+            const pre = fileLines.slice(0, startIdx).join('\n');
+            const post = fileLines.slice(endIdx + 1).join('\n');
+            const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
+            return { success: true, result };
+        }
+    }
+
+    return { success: false, result: fileText };
 }

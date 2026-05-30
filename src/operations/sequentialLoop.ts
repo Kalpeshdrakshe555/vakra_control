@@ -78,7 +78,12 @@ export class SequentialOperator {
 
         // 2. Payload Construction
         let fileBuffer: string | null = fs.readFileSync(targetFile, 'utf8');
-        let payload: string | null = "Refactor this:\n" + fileBuffer;
+        let payload: string | null = `Please analyze and refactor the following code to improve performance, readability, and maintainability.
+Return the complete file with your improvements using the <<<<<<< SEARCH and >>>>>>> REPLACE block format.
+Make sure to explain your changes briefly before the code blocks.
+
+--- File Content ---
+${fileBuffer}`;
 
         // Fetch external RAG context if enabled
         if (ragEnabled && this.ragEngine) {
@@ -124,5 +129,113 @@ export class SequentialOperator {
             state.status = 'IDLE';
             this.stateMachine.writeState(state);
         }
+    }
+
+    private isCancelled: boolean = false;
+
+    /**
+     * Executes a Multi-Agent Architect Blueprint sequentially to prevent RPM limits and PC freezing.
+     */
+    public async runArchitectQueue(
+        workspaceRoot: string,
+        blueprint: { tasks: { file: string, description: string, injected_knowledge?: string }[] },
+        onProgress?: (file: string, status: string) => void
+    ): Promise<void> {
+        this.isCancelled = false;
+        if (!blueprint || !blueprint.tasks || blueprint.tasks.length === 0) return;
+        
+        let accumulatedProjectContext = '';
+        
+        for (let i = 0; i < blueprint.tasks.length; i++) {
+            if (this.isCancelled) {
+                if (onProgress) onProgress('Stopped', '🛑 Queue Cancelled by User.');
+                break;
+            }
+            
+            const task = blueprint.tasks[i];
+            
+            if (onProgress) {
+                onProgress(task.file, `Spawning Coder Agent for ${task.file}...`);
+            }
+
+            const targetFile = path.isAbsolute(task.file)
+                ? task.file
+                : path.join(workspaceRoot, task.file);
+
+            let existingContent = '';
+            if (fs.existsSync(targetFile)) {
+                existingContent = fs.readFileSync(targetFile, 'utf8');
+            } else {
+                // Create directory if not exists
+                const dir = path.dirname(targetFile);
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                }
+                fs.writeFileSync(targetFile, '', 'utf8');
+            }
+
+            let systemInstruction = `You are an expert Coder Agent in a multi-agent system.
+Your ONLY job is to output code. DO NOT provide conversational text, greetings, explanations, or formatting outside of the requested code block.
+Your output MUST be exclusively a valid markdown code block.`;
+
+            let payload = `FILE: ${task.file}
+TASK: ${task.description}
+
+${task.injected_knowledge ? `--- ARCHITECT SHARED KNOWLEDGE ---\n${task.injected_knowledge}\n--------------------------------\n` : ''}`;
+
+            if (accumulatedProjectContext) {
+                payload += `\n--- PREVIOUSLY GENERATED FILES IN THIS SESSION ---\nUse these to ensure imports, variables, and structure match exactly!\n${accumulatedProjectContext}\n--------------------------------------------------\n`;
+            }
+
+            if (existingContent.trim()) {
+                payload += `
+The file already has content. You MUST use standard <<<<<<< SEARCH and >>>>>>> REPLACE blocks to modify it.
+
+--- CURRENT FILE CONTENT ---
+${existingContent}`;
+            } else {
+                payload += `
+The file is currently completely EMPTY. 
+You MUST output the FULL complete file content inside a single markdown code block. 
+DO NOT use Search and Replace blocks. DO NOT provide explanations. JUST the code block.`;
+            }
+
+            try {
+                let llmResponse = await this.router.executeWithSystemInstruction(systemInstruction, payload);
+                applyDiff(targetFile, llmResponse.text);
+
+                // Add newly generated file to the shared context for the next agents
+                if (fs.existsSync(targetFile)) {
+                    let finalContent = fs.readFileSync(targetFile, 'utf8');
+                    // Truncate if too long to prevent context window explosion
+                    if (finalContent.length > 3000) {
+                        finalContent = finalContent.substring(0, 3000) + '\n...[truncated]';
+                    }
+                    accumulatedProjectContext += `\nFile: ${task.file}\n\`\`\`\n${finalContent}\n\`\`\`\n`;
+                }
+
+                if (onProgress) {
+                    onProgress(task.file, `✔️ Coder Agent finished ${task.file}`);
+                }
+                
+                // Smart Delay to avoid hitting 15 RPM (Gemini) or freezing Ollama
+                if (i < blueprint.tasks.length - 1) {
+                    if (onProgress) onProgress(task.file, `⏳ Cooldown... (Avoiding Rate Limits)`);
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                }
+            } catch (err: any) {
+                if (onProgress) {
+                    onProgress(task.file, `❌ Error on ${task.file}: ${err.message}`);
+                }
+            }
+        }
+        
+        if (onProgress && !this.isCancelled) {
+            onProgress('Done', `🚀 All Agents Finished Executing the Blueprint!`);
+        }
+    }
+
+    public cancelQueue(): void {
+        this.isCancelled = true;
     }
 }

@@ -15,6 +15,7 @@ export interface ChatMessage {
         completionTokens: number;
         totalTokens: number;
     };
+    fileBackups?: { filepath: string, content: string | null }[];
 }
 export interface ChatSession {
     id: string;
@@ -141,7 +142,8 @@ export class ConversationHistory {
             role,
             text,
             timestamp: timestamp || Date.now(),
-            usage
+            usage,
+            fileBackups: []
         });
 
         while (session.messages.length > this.maxHistory * 2) {
@@ -181,12 +183,50 @@ export class ConversationHistory {
         
         const index = session.messages.findIndex(m => m.timestamp === timestamp);
         if (index !== -1) {
+            // Restore files from all messages that are being deleted
+            const deletedMessages = session.messages.slice(index + 1);
+            
+            // Revert files in reverse chronological order
+            for (let i = deletedMessages.length - 1; i >= 0; i--) {
+                const backups = deletedMessages[i].fileBackups;
+                if (backups && backups.length > 0) {
+                    for (const backup of backups) {
+                        try {
+                            if (backup.content === null) {
+                                // File didn't exist, delete it
+                                if (fs.existsSync(backup.filepath)) {
+                                    fs.unlinkSync(backup.filepath);
+                                }
+                            } else {
+                                // Restore original content
+                                fs.writeFileSync(backup.filepath, backup.content, 'utf8');
+                            }
+                        } catch (e) {
+                            console.error(`Failed to restore backup for ${backup.filepath}`);
+                        }
+                    }
+                }
+            }
+            
             session.messages = session.messages.slice(0, index + 1);
             session.updatedAt = Date.now();
             this.saveToFile();
             return true;
         }
         return false;
+    }
+
+    public addFileBackupToLatestMessage(filepath: string, content: string | null): void {
+        const session = this.activeSession;
+        if (!session || session.messages.length === 0) return;
+        const latestMsg = session.messages[session.messages.length - 1];
+        if (!latestMsg.fileBackups) latestMsg.fileBackups = [];
+        
+        // Don't backup if already backed up in this message (preserve the oldest state for this turn)
+        if (!latestMsg.fileBackups.find(b => b.filepath === filepath)) {
+            latestMsg.fileBackups.push({ filepath, content });
+            this.saveToFile();
+        }
     }
 
     public deleteMessageByTimestamp(timestamp: number): boolean {

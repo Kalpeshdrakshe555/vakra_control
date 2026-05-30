@@ -10,6 +10,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private conversationHistory: ConversationHistory;
     private currentStreamAbortController: AbortController | null = null;
+    private currentSeqOp: any = null; // Store reference to cancel Architect queue
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -142,6 +143,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         messages: this.conversationHistory.getAllMessages()
                     });
                 }
+            } else if (message.command === 'executeCommand') {
+                const { exec } = require('child_process');
+                const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+                if (!workspaceRoot) {
+                    vscode.window.showErrorMessage('No workspace open to run commands.');
+                    return;
+                }
+                
+                vscode.window.showInformationMessage(`Running: ${message.cmd}`);
+                
+                exec(message.cmd, { cwd: workspaceRoot, timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
+                    let output = '';
+                    if (error) {
+                        output += `Exit Code/Error: ${error.message}\n`;
+                    }
+                    if (stderr) {
+                        output += `STDERR:\n${stderr}\n`;
+                    }
+                    if (stdout) {
+                        output += `STDOUT:\n${stdout}\n`;
+                    }
+                    
+                    if (!output.trim()) output = "Command executed successfully with no output.";
+                    
+                    if (output.length > 2500) {
+                        output = output.substring(0, 2500) + '\n...[output truncated due to length]';
+                    }
+
+                    const autoReply = `[Terminal Output for \`${message.cmd}\`]\n\`\`\`\n${output}\n\`\`\`\nPlease review this output and continue your task.`;
+                    
+                    this.postMessageToWebview({
+                        command: message.autoReply ? 'injectChatAndSend' : 'injectChat',
+                        text: autoReply
+                    });
+                });
             } else if (message.command === 'deleteChat') {
                 if (message.timestamp) {
                     const success = this.conversationHistory.deleteMessageByTimestamp(message.timestamp);
@@ -157,6 +193,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     this.currentStreamAbortController.abort();
                     this.currentStreamAbortController = null;
                 }
+                if (this.currentSeqOp) {
+                    this.currentSeqOp.cancelQueue();
+                    this.currentSeqOp = null;
+                }
             } else if (message.command === 'runInTerminal') {
                 this.handleRunInTerminal(message.text);
             } else if (message.command === 'insertToEditor') {
@@ -166,8 +206,69 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 vscode.window.showInformationMessage('📋 Copied to clipboard!');
             } else if (message.command === 'openFile') {
                 await this.handleOpenFile(message.filepath);
+            } else if (message.command === 'previewDiff') {
+                await this.handlePreviewDiff(message.file);
             }
         });
+    }
+
+    private async handlePreviewDiff(fileInfo: any): Promise<void> {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('No workspace folder open.');
+            }
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const fullPath = path.join(workspaceRoot, fileInfo.filepath);
+            
+            let originalContent = '';
+            if (fs.existsSync(fullPath)) {
+                originalContent = fs.readFileSync(fullPath, 'utf8');
+            }
+
+            let newContent = originalContent;
+            
+            // Check if the AI used Search/Replace blocks
+            if (fileInfo.content.includes('<<<<<<< SEARCH') && fileInfo.content.includes('>>>>>>> REPLACE')) {
+                const blockRegex = /<<<<<<<\s*SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
+                let match;
+                let blocksFound = false;
+                
+                while ((match = blockRegex.exec(fileInfo.content)) !== null) {
+                    blocksFound = true;
+                    const searchStr = match[1];
+                    const replaceStr = match[2];
+                    const { applyRobustSearchReplace } = require('../operations/diffPatcher');
+                    const patchResult = applyRobustSearchReplace(newContent, searchStr, replaceStr);
+                    if (patchResult.success) {
+                        newContent = patchResult.patched;
+                    }
+                }
+                
+                if (!blocksFound) {
+                    newContent = fileInfo.content;
+                }
+            } else {
+                newContent = fileInfo.content;
+            }
+
+            // Create temporary files for diff
+            const os = require('os');
+            const tempDir = os.tmpdir();
+            const originalFile = path.join(tempDir, `original_${path.basename(fileInfo.filepath)}`);
+            const modifiedFile = path.join(tempDir, `modified_${path.basename(fileInfo.filepath)}`);
+            
+            fs.writeFileSync(originalFile, originalContent, 'utf8');
+            fs.writeFileSync(modifiedFile, newContent, 'utf8');
+            
+            await vscode.commands.executeCommand('vscode.diff', 
+                vscode.Uri.file(originalFile), 
+                vscode.Uri.file(modifiedFile), 
+                `Preview: ${fileInfo.filepath}`
+            );
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to preview diff: ${e.message}`);
+        }
     }
 
     /**
@@ -193,7 +294,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 client = new GeminiCloudClient(keys, model, timeout, maxTokens);
             }
             
-            const systemInstruction = this.buildSystemInstruction(config);
+            // Note: message isn't passed here as this method is called via fallback, but let's assume agentMode is false for now
+            // if we need it we can update the signature later.
+            const systemInstruction = this.buildSystemInstruction(config, workspaceRoot, false);
             let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, workspaceRoot);
 
             // Add user message to history
@@ -204,7 +307,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             // Use multi-turn API
             const history = this.conversationHistory.getHistory(
-                config?.contextLimits?.historyLength || 10
+                config?.contextLimits?.historyLength || 20
             );
 
             // Remove the last user message from history since we pass it separately
@@ -255,15 +358,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 client = new GeminiCloudClient(keys, model, timeout, maxTokens);
             }
             
-            const systemInstruction = this.buildSystemInstruction(config);
-            let finalPrompt = await this.buildPrompt(message.text, message.includeActiveFile, message.includeWebSearch, workspaceRoot);
+            const systemInstruction = this.buildSystemInstruction(config, workspaceRoot, message.agentMode, message.architectMode);
+            let finalPrompt = await this.buildPrompt(message.text, message.includeActiveFile, message.includeWebSearch, message.includeWorkspace, workspaceRoot);
 
             // Add user message to history
             this.conversationHistory.addMessage('user', finalPrompt, undefined, message.timestamp);
             this.conversationHistory.trimToTokenBudget(config?.contextLimits?.maxTokens || 8000);
 
             const history = this.conversationHistory.getHistory(
-                config?.contextLimits?.historyLength || 10
+                config?.contextLimits?.historyLength || 20
             );
             const historyWithoutLast = history.slice(0, -1);
 
@@ -291,6 +394,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             // Add AI response to history
             this.conversationHistory.addMessage('model', result.text, result.usage);
 
+            // Removed complex JSON background queue. We now rely on conversational step-by-step.
+            if (message.architectMode) {
+                this.postMessageToWebview({
+                    command: 'streamChunk',
+                    text: `\n\n> 🏢 **Architect Mode:** Please review and click **Apply** on the files above. Reply with **"Next"** to continue building the project.`,
+                    done: true
+                });
+            }
+
         } catch (error: any) {
             this.currentStreamAbortController = null;
             this.postMessageToWebview({
@@ -304,7 +416,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     /**
      * Builds the system instruction with multi-file and context directives.
      */
-    private buildSystemInstruction(config: AgentConfig | null): string {
+    private buildSystemInstruction(config: AgentConfig | null, workspaceRoot?: string, isAgentMode: boolean = false, isArchitectMode: boolean = false): string {
         let systemInstruction = config?.systemInstructions || 
             'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks.';
         
@@ -332,20 +444,48 @@ If you MUST provide a complete file rewrite, format it like this without the sea
 // full code here
 \`\`\`
 
-You also have the ability to run Terminal commands. If you need the user to create files, delete files, or install dependencies, provide the commands in a bash/powershell block:
-\`\`\`bash
-npm install <package>
-\`\`\`
+You have the ability to run Terminal commands to test your code, debug, or install dependencies.
+If you need to execute a command, output ONLY ONE command inside a special block like this:
 
-Always provide clear, concise, and actionable responses.`;
+<run_command>
+npm run test
+</run_command>
+
+IMPORTANT: Stop generating immediately after a <run_command>.`;
+
+        if (isArchitectMode) {
+            systemInstruction += `\n\n[ARCHITECT MODE ACTIVE]: You are building a large project or feature. 
+CRITICAL RULE: If the user requests a framework that uses CLI tools (e.g., Django, React, Vue, Angular, Next.js), ALWAYS use <run_command> to generate the boilerplate scaffold FIRST. Do NOT write boilerplate files manually.
+After running commands or if making custom files, DO NOT generate all files at once. Generate a MAXIMUM of 1 or 2 files per turn. Output their complete code in markdown blocks so the user can apply them. Then STOP and ask the user to reply "Next" to continue. Maintain perfect context of what you have generated.`;
+        }
+
+        if (isAgentMode) {
+            systemInstruction += `\n[AGENT MODE ACTIVE]: The user has authorized you to run commands autonomously. The system will auto-execute your <run_command> blocks and immediately feed the output back to you. Use this to iteratively debug, run tests, and fix code without waiting for user approval.`;
+        } else {
+            systemInstruction += `\nIMPORTANT: The user must manually approve your command. You will receive the output in the next turn if they run it.`;
+        }
         
+        systemInstruction += `\nAlways provide clear, concise, and actionable responses.`;
+        
+        // Add Project-specific rules
+        if (workspaceRoot) {
+            const agentRulesPath = path.join(workspaceRoot, '.agentrules');
+            const cursorRulesPath = path.join(workspaceRoot, '.cursorrules');
+            
+            if (fs.existsSync(agentRulesPath)) {
+                systemInstruction += `\n\n### PROJECT RULES ###\nYou MUST strictly follow these project rules defined by the user:\n${fs.readFileSync(agentRulesPath, 'utf8')}\n`;
+            } else if (fs.existsSync(cursorRulesPath)) {
+                systemInstruction += `\n\n### PROJECT RULES ###\nYou MUST strictly follow these project rules defined by the user:\n${fs.readFileSync(cursorRulesPath, 'utf8')}\n`;
+            }
+        }
+
         return systemInstruction;
     }
 
     /**
      * Builds the final user prompt with context injection (@search, @file, @workspace, active file).
      */
-    private async buildPrompt(text: string, includeActiveFile: boolean, includeWebSearch: boolean, workspaceRoot?: string): Promise<string> {
+    private async buildPrompt(text: string, includeActiveFile: boolean, includeWebSearch: boolean, includeWorkspace: boolean, workspaceRoot?: string): Promise<string> {
         let finalPrompt = text;
         let contextParts: string[] = [];
 
@@ -448,8 +588,8 @@ Always provide clear, concise, and actionable responses.`;
             finalPrompt = finalPrompt.replace(/@workspace/gi, '').trim();
         }
 
-        // Handle RAG Semantic Search (@rag or implicit)
-        const wantsRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
+        // Handle RAG Semantic Search (@rag, UI toggle, or implicit)
+        const wantsRag = includeWorkspace || text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
         
         if (wantsRag && this.ragEngine) {
             try {
@@ -470,6 +610,42 @@ Always provide clear, concise, and actionable responses.`;
                 console.error("RAG search failed", err);
             }
             finalPrompt = finalPrompt.replace(/@rag|@smart/gi, '').trim();
+        }
+
+        // LSP Symbol Resolution for True Codebase Context
+        if (workspaceRoot && text.length > 5) {
+            try {
+                // Extract potential PascalCase, camelCase, or snake_case symbols
+                const symbolRegex = /[A-Z][a-z0-9]+[A-Z][a-z0-9]+|[A-Z][a-z0-9]+|[a-z0-9]+_[a-z0-9_]+/g;
+                const matches = text.match(symbolRegex) || [];
+                const potentialSymbols = Array.from(new Set(matches))
+                    .filter(s => s.length > 4 && !['javascript', 'typescript', 'python', 'java'].includes(s.toLowerCase()));
+
+                if (potentialSymbols.length > 0) {
+                    for (const sym of potentialSymbols) {
+                        try {
+                            const symbols: vscode.SymbolInformation[] | undefined = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', sym);
+                            if (symbols && symbols.length > 0) {
+                                const topSymbols = symbols.slice(0, 2);
+                                for (const s of topSymbols) {
+                                    if (s.location.uri.fsPath.startsWith(workspaceRoot)) {
+                                        const relPath = path.relative(workspaceRoot, s.location.uri.fsPath);
+                                        if (!contextParts.some(p => p.includes(relPath))) {
+                                            const content = fs.readFileSync(s.location.uri.fsPath, 'utf8');
+                                            const lines = content.split('\n');
+                                            const startLine = Math.max(0, s.location.range.start.line - 10);
+                                            const endLine = Math.min(lines.length, s.location.range.end.line + 30);
+                                            const snippet = lines.slice(startLine, endLine).join('\n');
+                                            
+                                            contextParts.push(`AST Symbol Context for \`${sym}\` in ${relPath}:\n\`\`\`\n// ...\n${snippet}\n// ...\n\`\`\``);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { /* ignore LSP failures */ }
+                    }
+                }
+            } catch { /* ignore regex errors */ }
         }
 
         // Auto-include active file if no context is provided
@@ -619,14 +795,16 @@ Always provide clear, concise, and actionable responses.`;
                 if (fs.existsSync(fullPath)) {
                     const document = await vscode.workspace.openTextDocument(fileUri);
                     fileText = document.getText();
+                    this.conversationHistory.addFileBackupToLatestMessage(fullPath, fileText);
                 } else {
+                    this.conversationHistory.addFileBackupToLatestMessage(fullPath, null);
                     edit.createFile(fileUri, { ignoreIfExists: true });
                 }
                 
                 for (const content of contents) {
                     // Check if the AI used Search/Replace blocks
                     if (content.includes('<<<<<<< SEARCH') && content.includes('>>>>>>> REPLACE')) {
-                        const blockRegex = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+                        const blockRegex = /<<<<<<<\s*SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
                         let match;
                         let blocksFound = false;
                         
@@ -634,59 +812,18 @@ Always provide clear, concise, and actionable responses.`;
                             blocksFound = true;
                             const searchStr = match[1];
                             const replaceStr = match[2];
+                            const { applyRobustSearchReplace } = require('../operations/diffPatcher');
+                            const patchResult = applyRobustSearchReplace(fileText, searchStr, replaceStr);
                             
-                            // Tier 1: Exact Match
-                            if (fileText.includes(searchStr)) {
-                                fileText = fileText.replace(searchStr, replaceStr);
+                            if (patchResult.success) {
+                                fileText = patchResult.result;
                             } else {
-                                // Tier 2: Normalized Line Endings (CRLF vs LF)
-                                const normSearch = searchStr.replace(/\r\n/g, '\n');
-                                const normFile = fileText.replace(/\r\n/g, '\n');
-                                if (normFile.includes(normSearch)) {
-                                    fileText = normFile.replace(normSearch, replaceStr.replace(/\r\n/g, '\n'));
-                                } else {
-                                    // Tier 3: Trimmed Match
-                                    const looseSearch = searchStr.trim();
-                                    if (fileText.includes(looseSearch)) {
-                                        fileText = fileText.replace(looseSearch, replaceStr.trim());
-                                    } else {
-                                        // Tier 4: Line-anchored match (ignore indentation)
-                                        const lines = searchStr.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-                                        if (lines.length > 0) {
-                                            const firstLine = lines[0];
-                                            const lastLine = lines[lines.length - 1];
-                                            const fileLines = fileText.split('\n');
-                                            let startIdx = -1;
-                                            let endIdx = -1;
-                                            for (let i = 0; i < fileLines.length; i++) {
-                                                if (fileLines[i].trim() === firstLine) {
-                                                    startIdx = i;
-                                                    break;
-                                                }
-                                            }
-                                            if (startIdx !== -1) {
-                                                for (let i = startIdx; i < fileLines.length; i++) {
-                                                    if (fileLines[i].trim() === lastLine) {
-                                                        endIdx = i;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx) {
-                                                const pre = fileLines.slice(0, startIdx).join('\n');
-                                                const post = fileLines.slice(endIdx + 1).join('\n');
-                                                fileText = pre + (pre ? '\n' : '') + replaceStr + (post ? '\n' : '') + post;
-                                            } else {
-                                                throw new Error(`Could not find the specified search block in ${filepath}. Please try again.`);
-                                            }
-                                        } else {
-                                            throw new Error(`Empty search block in ${filepath}.`);
-                                        }
-                                    }
-                                }
+                                throw new Error(`Could not find the specified search block in ${filepath}. Ensure the code exactly matches the file context.`);
                             }
                         }
-                        if (!blocksFound) fileText = content;
+                        if (!blocksFound) {
+                            throw new Error(`Malformed Search/Replace block in ${filepath}. Check if the block format is exactly <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE`);
+                        }
                     } else {
                         // Full file replacement
                         fileText = content;

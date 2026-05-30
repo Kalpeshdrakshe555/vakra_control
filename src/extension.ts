@@ -334,6 +334,86 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Ctrl+K Inline Edit
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ultra-light-ai.inlineEdit', async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                vscode.window.showErrorMessage("Open a file to use Inline Edit.");
+                return;
+            }
+
+            const selection = editor.selection;
+            if (selection.isEmpty) {
+                vscode.window.showInformationMessage("Please select the code you want to edit first.");
+                return;
+            }
+
+            const prompt = await vscode.window.showInputBox({
+                placeHolder: 'e.g. "make this async", "refactor to use map"',
+                prompt: 'Ultra Light AI: Inline Edit (Ctrl+K)'
+            });
+
+            if (!prompt) return;
+            
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: "Ultra Light AI",
+                cancellable: false
+            }, async (progress) => {
+                progress.report({ message: "Generating inline edit..." });
+                
+                try {
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+                    const wsRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
+                    
+                    const currentKeys = getGeminiApiKeys(wsRoot, context.extensionUri.fsPath);
+                    const currentModel = getGeminiModel(wsRoot);
+                    const currentTimeout = getGeminiTimeout(wsRoot);
+                    const activeGeminiClient = new GeminiCloudClient(currentKeys, currentModel, currentTimeout);
+                    
+                    const selectedText = editor.document.getText(selection);
+                    
+                    const fullPrompt = `You are a strict inline code editor. The user wants to apply the following edit instruction to the provided code block.
+Instruction: ${prompt}
+
+Code Block:
+\`\`\`
+${selectedText}
+\`\`\`
+
+IMPORTANT: Return ONLY the raw modified code block. Do not include markdown code block syntax (like \`\`\`), do not include explanations, do not include before/after text. Just the exact replacement code that can be dropped directly over the selected text. Preserve relative indentation.`;
+
+                    const response = await activeGeminiClient.complete(fullPrompt);
+                    let replacementText = response.text.trim();
+                    
+                    if (replacementText.startsWith('\`\`\`')) {
+                        const lines = replacementText.split('\n');
+                        if (lines.length >= 2) {
+                            lines.shift(); 
+                            if (lines[lines.length - 1].startsWith('\`\`\`')) {
+                                lines.pop(); 
+                            }
+                            replacementText = lines.join('\n');
+                        }
+                    }
+                    
+                    const success = await editor.edit(editBuilder => {
+                        editBuilder.replace(selection, replacementText);
+                    });
+                    
+                    if (success) {
+                        vscode.window.showInformationMessage('✨ Inline edit applied. (Press Ctrl+Z to undo if incorrect).');
+                    } else {
+                        vscode.window.showErrorMessage('Failed to apply inline edit.');
+                    }
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(`Inline edit failed: ${err.message || err}`);
+                }
+            });
+        })
+    );
+
     // Command: Inline Chat (explain selection in notification)
     context.subscriptions.push(
         vscode.commands.registerCommand('ultra-light-ai.inlineChat', async () => {
@@ -366,6 +446,46 @@ export function activate(context: vscode.ExtensionContext) {
                     ? path.basename(vscode.window.activeTextEditor.document.fileName)
                     : 'none'
             });
+        })
+    );
+
+    // Command: Fix Terminal Error
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ultra-light-ai.fixTerminalError', async () => {
+            const terminal = vscode.window.activeTerminal;
+            if (!terminal) {
+                vscode.window.showErrorMessage('No active terminal found.');
+                return;
+            }
+            
+            try {
+                // Hack to copy terminal content natively
+                await vscode.commands.executeCommand('workbench.action.terminal.selectAll');
+                await vscode.commands.executeCommand('workbench.action.terminal.copySelection');
+                await vscode.commands.executeCommand('workbench.action.terminal.clearSelection');
+                
+                // Small delay to let the async clipboard write happen
+                await new Promise(resolve => setTimeout(resolve, 300));
+                
+                const clipboardText = await vscode.env.clipboard.readText();
+                if (clipboardText) {
+                    await vscode.commands.executeCommand('ultra-light-ai-sidebar.focus');
+                    
+                    const lines = clipboardText.split('\n');
+                    const lastLines = lines.slice(-60).join('\n').trim();
+                    
+                    const prompt = `I got an error in my terminal. Please help me fix it:\n\n\`\`\`\n${lastLines}\n\`\`\``;
+                    
+                    sidebarProvider.postMessageToWebview({
+                        command: 'injectChatAndSend',
+                        text: prompt
+                    });
+                } else {
+                    vscode.window.showErrorMessage('Could not read terminal output.');
+                }
+            } catch (err) {
+                vscode.window.showErrorMessage('Failed to capture terminal output.');
+            }
         })
     );
 

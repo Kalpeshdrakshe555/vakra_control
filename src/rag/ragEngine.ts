@@ -22,7 +22,7 @@ export class RagEngine {
         try {
             const files = await vscode.workspace.findFiles(
                 '**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}',
-                '**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock,**/build/**'
+                '{**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock,**/build/**}'
             );
 
             this.chunks = [];

@@ -1,18 +1,19 @@
 <div align="center">
-  <h1>🚀 Ultra Light AI (Copilot Alternative)</h1>
-  <p><strong>A blazingly fast, context-aware, offline-capable AI Coding Assistant for VS Code.</strong></p>
+  <h1>🚀 Ultra Light AI (The Ultimate Agentic Coding Assistant)</h1>
+  <p><strong>A blazingly fast, context-aware, fully autonomous offline-capable AI Assistant for VS Code.</strong></p>
+  <p><em>Experience "Cursor-level" power natively inside standard VS Code.</em></p>
 </div>
 
-> **⚠️ STATUS: STABLE BETA**  
-> We've just completed a massive squashing of 18 critical and high-severity bugs! The extension is now highly stable, but we still welcome feedback to take this to the next level.
+> **⚠️ STATUS: STABLE & FEATURE-COMPLETE**  
+> We've just completed a massive architectural upgrade! Ultra Light AI is now a **fully autonomous Agentic tool** featuring native LSP codebase context, inline ghost text, Composer diff previews, and Devin-style autonomous execution loops!
 
 ---
 
 ## 🌟 Overview
 
-Ultra Light AI is a Copilot-style AI assistant extension designed from the ground up to be ultra-lightweight and highly performant. Built entirely in Vanilla TypeScript (zero heavy frameworks) with a sub-100MB memory footprint, it acts as a 10x pair-programmer right inside your IDE. 
+Ultra Light AI is a powerful coding assistant extension designed from the ground up to be ultra-lightweight and highly performant. Built entirely in Vanilla TypeScript (zero heavy frameworks) with a sub-100MB memory footprint, it acts as an autonomous 10x pair-programmer right inside your IDE. 
 
-The goal is to evolve this into a "Cursor-level" AI experience, with full RAG-based codebase understanding, surgical diff-patching, and automated terminal execution.
+We've bridged the gap between VS Code and premium AI IDEs like Cursor by introducing 7 industry-leading features directly into your environment!
 
 ---
 
@@ -29,42 +30,66 @@ Just click the ⚙️ Gear Icon, select **Local Provider**, enter your model nam
 
 ---
 
-## ✨ Key Features (Current)
+## 🚀🔥 7 New "Cursor-Killer" Agentic Features
 
-- **🧠 Semantic RAG Context (@rag):** The AI uses a built-in BM25 Search Engine to instantly search your workspace for exact function definitions and semantic context without blowing up your token budget!
-- **⚡ Search & Replace Patching:** Instead of rewriting whole files, the AI intelligently outputs targeted `<<<<<<< SEARCH` and `>>>>>>> REPLACE` blocks to surgically fix bugs and update code, minimizing data loss.
-- **📁 Drag & Drop Context:** Easily drag and drop files directly into the chat interface to instantly inject their contents into the AI's context window.
-- **🔄 Online & Offline Model Support:** Switch seamlessly between Cloud models (Gemini 1.5 Pro, Flash, Gemma) and Local Offline Models.
-- **🕊️ Bird's Eye View (@workspace):** Automatically scans your workspace directory structure to understand the project architecture. (Optimized to strictly ignore `node_modules` and `dist`!).
-- **🌐 Deep Web Scraping (@search):** Type `@search <query>` to give the AI real-time internet access. Unlike basic extensions that only read search snippets, Ultra Light AI fetches and reads the full HTML of the top web resources, preserving code blocks for maximum accuracy. From latest IPL scores to untouched official documentation!
-- **🔙 Safe Rollbacks:** Native VS Code `WorkspaceEdit` integration allows you to press `Ctrl+Z` to safely revert any AI-generated code changes across multiple files. Chat history can also be rewound.
-- **🛡️ Secure Terminal Sandboxing:** The AI can execute terminal commands for you, but will ALWAYS prompt you for explicit permission with a VS Code Warning Dialog before running anything.
+We've heavily upgraded the core engine. You now have access to:
+
+### 1. ⌨️ Ctrl+K (Inline Edit)
+Highlight any code, press `Ctrl+K` (`Cmd+K` on Mac), and type a quick instruction (e.g., *"Make this async"*). The AI will surgically replace the selected text in real-time, right in your editor. No need to open the sidebar!
+
+### 2. 🤖 Agent Mode (Autonomous Execution Loops)
+Toggle **"🤖 Agent Mode"** in the chat footer to unleash a Devin-style autonomous agent! When the AI needs to run tests or debug, it will generate a terminal command. The extension will automatically execute it in the background and feed the stdout/stderr directly back to the AI. The AI will autonomously loop, debug, and fix your code until the task is complete!
+
+### 3. 👁️ Composer / Multi-File Unified Diff Preview
+Before applying any AI code changes, click the **"👁️ Preview"** button. The extension will generate a temporary file and open VS Code's native Split-Screen Diff View, allowing you to review exactly what the AI changed before injecting it into your live files!
+
+### 4. 🧠 True Codebase Context (Native AST/LSP Integration)
+Basic text search is dead. Ultra Light AI now hooks directly into VS Code's Language Server Protocol (`executeWorkspaceSymbolProvider`). When you type a class or function name in your prompt, the AI natively locates its definition across your entire workspace and extracts the exact surrounding code—providing pixel-perfect codebase awareness without blowing up your token budget!
+
+### 5. 🚨 Terminal Error Auto-Catch
+Did your compilation or tests fail? No need to copy-paste the error! Run the command **`Ultra Light AI: Fix Terminal Error`** (via Command Palette or Terminal Context Menu). The extension will instantly capture the last 60 lines of your active terminal and send it to the AI for debugging.
+
+### 6. 📜 Project-Specific Rules (`.agentrules`)
+Create a `.agentrules` (or `.cursorrules`) file in the root of your workspace. Define your architectural guidelines (e.g., *"Always use TailwindCSS, never use classes"*). The AI will silently ingest these rules before every generation to ensure absolute consistency.
+
+### 7. 👻 Ghost Text Autocomplete (FIM)
+Experience Copilot-style inline ghost text as you type. Pause for a split second, and the AI will predict your next lines of code based on the surrounding context.
+
+---
+
+## ✨ Classic Features
+
+- **🧠 Semantic RAG Context (@rag):** Built-in BM25 Search Engine for fast offline codebase retrieval.
+- **⚡ Search & Replace Patching:** Intelligent `<<<<<<< SEARCH` and `>>>>>>> REPLACE` blocks to surgically patch files instead of completely overwriting them. 
+- **📁 Drag & Drop Context:** Drop files directly into the chat interface to inject them into the AI's brain.
+- **🔄 Universal Model Support:** Switch between Cloud (Gemini 1.5 Pro, Flash, Gemma) and Offline (Ollama) with one click.
+- **🌐 Deep Web Scraping (@search):** Type `@search <query>` to give the AI real-time internet access. It reads full HTML pages and preserves code blocks for accurate, up-to-date documentation scraping!
+- **🔙 Safe Git-Style Chat Rollbacks:** Click "Rewind" in the chat history, and the system won't just delete the message—it will automatically revert any physical files that the AI modified during that turn!
 
 ---
 
 ## ⚙️ Configuration & The `.agent-config.json` File
 
-To keep your settings portable and workspace-specific, Ultra Light AI uses a local configuration file instead of burying settings deep in VS Code preferences.
-
-When you configure your API Keys, Tokens, or Model via the **⚙️ Gear Icon** in the chat interface, the extension automatically creates a hidden `.agent-config.json` file in your project's root directory.
+To keep your settings portable, Ultra Light AI uses a local configuration file. 
+When you configure your API Keys, Tokens, or Model via the **⚙️ Gear Icon**, the extension creates a hidden `.agent-config.json` file in your project's root directory.
 
 > **💡 Note to Users:** 
-> - Your API Keys are stored in this `.agent-config.json` file. 
-> - **We highly recommend adding `.agent-config.json` to your `.gitignore`** so you don't accidentally commit your keys to GitHub!
-> - The extension will always prioritize the `.agent-config.json` file over `.env` files. If you are testing or debugging, remember that this file dictates your active API keys.
+> - Your API Keys are stored here. 
+> - **Please add `.agent-config.json` to your `.gitignore`** so you don't commit your keys!
+> - This file overrides any global `.env` settings.
 
 ---
 
-## 🛠️ How to Use
+## 🛠️ Getting Started
 
-1. **Open the AI Sidebar:** Press `Ctrl+Shift+A` (or `Cmd+Shift+A` on Mac) to open the chat interface. *(Note: You can drag the icon from the Activity Bar to your Secondary Sidebar on the right for a better layout!)*
+1. **Open the AI Sidebar:** Press `Ctrl+Shift+A` to open the chat interface. *(Pro Tip: Drag the icon to your Secondary Sidebar on the right for a better layout!)*
 2. **Add Context:** 
-   - Type `@rag` to trigger a semantic search over your codebase.
-   - Type `@file path/to/file` or simply **drag and drop** a file into the chat.
-   - Keep the "Include Active File" checkbox ticked to automatically send the currently open file.
-3. **Write a Prompt:** Ask the AI to fix a bug, refactor a function, or explain a concept.
-4. **Apply Changes:** If the AI generates a code block or a Search/Replace patch, click the **Apply** button to automatically inject the code into your active editor. You can also **Reject** the code block natively!
-5. **Switch Models:** Use the dropdown in the chat UI to switch between models. 
+   - Type `@rag` for semantic codebase search.
+   - Type `@file path/to/file` or **drag and drop** a file.
+   - Mention a function name directly (e.g. `AuthService`) to trigger the native LSP Symbol lookup.
+3. **Write a Prompt:** Ask the AI to build a feature, fix a bug, or write tests.
+4. **Agent Mode:** Tick the **🤖 Agent Mode** checkbox to allow the AI to autonomously run terminal commands and debug itself.
+5. **Preview & Apply:** Click **👁️ Preview** to review changes in a Diff View, then click **Apply** to inject them!
 
 ---
 
@@ -74,37 +99,32 @@ Ultra Light AI avoids heavy dependencies (no React, no Vue) in favor of pure DOM
 
 ### ⚙️ Technologies Used
 - **VS Code Extension API** (`vscode`)
-- **Vanilla TypeScript** (Backend & Orchestration)
+- **Vanilla TypeScript** (Backend)
 - **Vanilla HTML/JS + Tailwind CSS via CDN** (Webview UI)
-- **Marked.js** (Markdown parsing & syntax rendering)
+- **Marked.js** (Markdown rendering)
 - **esbuild** (Bundling)
 
-### 📂 File Structure Explanation
-
-- **`src/extension.ts`**: The entry point of the extension. Initializes the State Machine, Cloud/Local clients, registers commands, and mounts the `SidebarProvider`.
-- **`src/webview/sidebarProvider.ts`**: **The Brain.** Orchestrates communication between the Webview UI and the VS Code IDE. Handles prompt building, RAG semantic search execution, applying WorkspaceEdits (Diff Patching), and Terminal sandboxing.
-- **`src/rag/ragEngine.ts`**: Custom-built BM25 search engine that chunks and indexes your codebase for lightning-fast, offline context retrieval.
-- **`src/webview/ui.html`**: The frontend chat interface. Handles Tailwind rendering, Drag & Drop event listeners, streaming Markdown parsing, and inline Action buttons.
-- **`src/config.ts`**: Manages user preferences, reads `.env` variables, and auto-generates the `.agent-config.json` file.
-- **`src/state/conversationHistory.ts`**: Manages the multi-turn memory of the AI. Ensures history stays strictly within exact token limits (calculated at characters / 3) and handles persistence.
-- **`src/router/realClients.ts`**: The API integration layer. Manages streaming server-sent events (SSE) for Cloud endpoints and Offline Local Clients (Ollama).
+### 📂 Core Files
+- **`src/extension.ts`**: The entry point. Handles `Ctrl+K`, Terminal Error Catching, and State Machine orchestration.
+- **`src/webview/sidebarProvider.ts`**: **The Brain.** Orchestrates Prompt building, RAG execution, LSP symbol resolution, and Composer Diff Previews.
+- **`src/operations/diffPatcher.ts`**: Contains our ultra-resilient 5-tier Search & Replace algorithm that prevents file corruption.
+- **`src/state/conversationHistory.ts`**: Manages multi-turn memory and handles physical file-reversion during chat rollbacks.
 
 ---
 
 ## 🤝 Contributing
 
-This is a community-driven, ultra-lightweight project! We recently squashed 18 major architectural bugs to stabilize the core loop, making it a perfect time to contribute new features.
+We just upgraded the extension to full Agentic Status! If you want to help push it further:
 
-**How you can help:**
-1. **Find Bugs:** Use the extension daily. If the AI breaks a file or the UI glitches, open an issue!
-2. **Suggest Improvements:** Have an idea for a better UI or prompt engineering strategy? Let us know.
-3. **Submit PRs:** Whether it's adding a new Local API provider (like LMStudio) or optimizing the Search/Replace regex, PRs are deeply appreciated.
+1. **Find Bugs:** Open an issue if the AI hallucinates or breaks a file.
+2. **Suggest Improvements:** Ideas for better UI or prompt engineering are always welcome.
+3. **Submit PRs:** Want to add Claude 3.5 Sonnet support or optimize the LSP resolver? PRs are deeply appreciated.
 
 ### Developer Setup
 1. Clone the repo.
 2. Run `npm install`.
 3. Press `F5` in VS Code to open the Extension Development Host.
-4. Run `npm run watch` to hot-reload your TypeScript changes.
+4. Run `npm run compile` or `npm run watch` to compile TypeScript changes.
 
 ---
-*Happy Coding! Let's build the fastest AI assistant together.* 🚀
+*Happy Coding! Let's build the ultimate AI assistant together.* 🚀

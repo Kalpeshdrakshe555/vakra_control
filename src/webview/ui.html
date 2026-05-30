@@ -189,8 +189,15 @@
                 <label class="flex items-center gap-1 cursor-pointer hover:text-cyber-neonCyan transition-colors" title="Include current active file context">
                     <input type="checkbox" id="include-active-file" class="accent-cyber-neonCyan">
                     <span>@active</span>
+                <label class="flex items-center gap-1 cursor-pointer hover:text-green-400 transition-colors" title="Scan entire workspace for context (RAG)">
+                    <input type="checkbox" id="include-workspace" class="accent-green-500">
+                    <span>@workspace</span>
                 </label>
-                <button id="reset-state-btn" class="hover:text-cyber-neonPink transition-colors cursor-pointer uppercase tracking-wider text-[8px] bg-slate-900/50 hover:bg-slate-900 border border-cyber-border/40 hover:border-cyber-neonPink/40 px-1.5 py-0.5 rounded">
+                <label class="flex items-center gap-1 cursor-pointer hover:text-yellow-400 transition-colors" title="Architect Mode: Spawns multiple agents for large tasks">
+                    <input type="checkbox" id="architect-mode-toggle" class="accent-yellow-500">
+                    <span class="font-bold text-yellow-400">🏢 Architect</span>
+                </label>
+                <button id="reset-state-btn" class="hover:text-cyber-neonPink transition-colors cursor-pointer uppercase tracking-wider text-[8px] bg-slate-900/50 hover:bg-slate-900 border border-cyber-border/40 hover:border-cyber-neonPink/40 px-1.5 py-0.5 rounded ml-1">
                     Reset State
                 </button>
             </div>
@@ -636,12 +643,17 @@
             showThinking();
             document.getElementById('stop-container').classList.remove('hidden');
 
+            const isArchitectMode = document.getElementById('architect-mode-toggle')?.checked || false;
+
             vscode.postMessage({
                 command: 'sendChatStream',
                 text: text,
                 timestamp: timestamp,
                 includeActiveFile: document.getElementById('include-active-file').checked,
-                includeWebSearch: document.getElementById('include-web-search').checked
+                includeWebSearch: document.getElementById('include-web-search').checked,
+                includeWorkspace: document.getElementById('include-workspace').checked,
+                agentMode: false,
+                architectMode: isArchitectMode
             });
         }
 
@@ -727,14 +739,17 @@
                 </button>`;
             }
             
-            const textP = document.createElement('div');
-            textP.className = 'text-xs select-text whitespace-pre-wrap leading-relaxed markdown-body';
-            textP.innerHTML = marked.parse(text);
+            let displayString = text;
+            displayString = displayString.replace(/<think>[\s\S]*?<\/think>/gi, '');
             
-            bubbleDiv.appendChild(textP);
+            const textDiv = document.createElement('div');
+            textDiv.className = 'text-xs select-text whitespace-pre-wrap leading-relaxed markdown-body';
+            textDiv.innerHTML = marked.parse(displayString);
+            
+            bubbleDiv.appendChild(textDiv);
             
             // Add Copy Code buttons to rendered markdown blocks
-            addCopyButtonsToCodeBlocks(textP);
+            addCopyButtonsToCodeBlocks(textDiv);
 
             const files = extractFiles(text);
             if (files && files.length > 0) {
@@ -919,7 +934,20 @@
             }
 
             currentStreamText += text;
-            currentStreamTextDiv.innerHTML = marked.parse(currentStreamText);
+            
+            let displayString = currentStreamText;
+            displayString = displayString.replace(/<think>[\s\S]*?<\/think>/gi, '');
+            const openThinkMatch = displayString.match(/<think>[\s\S]*$/i);
+            if (openThinkMatch) {
+                displayString = displayString.replace(/<think>[\s\S]*$/i, '<em class="text-slate-500 animate-pulse text-[10px]">&gt; Analyzing...</em>\n');
+            }
+            
+            // Format run_command for display
+            displayString = displayString.replace(/<run_command>\s*([\s\S]*?)\s*<\/run_command>/gi, (match, cmd) => {
+                 return `\n\n> **🛠️ Terminal Command:** \`${cmd.trim()}\`\n*(Execution options available below)*\n\n`;
+            });
+            
+            currentStreamTextDiv.innerHTML = marked.parse(displayString);
             
             // Add copy buttons in real-time as blocks are rendered (DELETED, done at end)
             
@@ -946,16 +974,26 @@
                         rejectBtn.className = 'bg-slate-700/80 hover:bg-red-600/90 text-slate-300 hover:text-white text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer flex items-center justify-center gap-1';
                         rejectBtn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg> Reject`;
 
+                        const previewBtn = document.createElement('button');
+                        previewBtn.className = 'bg-slate-700/80 hover:bg-slate-600 text-slate-200 text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer flex items-center justify-center gap-1';
+                        previewBtn.innerHTML = `👁️ Preview`;
+
                         btn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'applyWorkspaceEdits', files: [file] });
                             btn.innerHTML = `✔️ Applied ${file.filepath}`;
                             btn.classList.replace('bg-cyan-600/90', 'bg-green-600/90');
                             rejectBtn.classList.add('hidden');
+                            previewBtn.classList.add('hidden');
                             setTimeout(() => {
                                btn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath}`;
                                btn.classList.replace('bg-green-600/90', 'bg-cyan-600/90');
                                rejectBtn.classList.remove('hidden');
+                               previewBtn.classList.remove('hidden');
                             }, 2500);
+                        });
+
+                        previewBtn.addEventListener('click', () => {
+                            vscode.postMessage({ command: 'previewDiff', file: file });
                         });
 
                         rejectBtn.addEventListener('click', () => {
@@ -966,23 +1004,60 @@
                         });
 
                         btnContainer.appendChild(btn);
+                        btnContainer.appendChild(previewBtn);
                         btnContainer.appendChild(rejectBtn);
                         actionContainerDiv.appendChild(btnContainer);
                     });
 
                     if (files.length > 1) {
                         const allBtn = document.createElement('button');
-                        allBtn.className = 'bg-slate-700/80 hover:bg-slate-600 text-slate-200 text-[9px] font-bold py-1 px-2 rounded transition-all cursor-pointer text-center mt-1';
-                        allBtn.innerText = 'Apply All Files';
+                        allBtn.className = 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white text-[11px] font-bold py-1.5 px-2 rounded transition-all cursor-pointer text-center mt-2 shadow-md w-full';
+                        allBtn.innerText = '✨ APPLY COMPOSER CHANGES (ALL)';
                         allBtn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
+                            allBtn.innerText = '✔️ ALL APPLIED';
+                            allBtn.classList.add('opacity-50');
                         });
                         actionContainerDiv.appendChild(allBtn);
                     }
                     
                     currentStreamBubbleDiv.appendChild(actionContainerDiv);
                 }
-                
+
+                // Extract and render terminal commands
+                const cmdRegex = /<run_command>\s*([\s\S]*?)\s*<\/run_command>/gi;
+                let cmdMatch;
+                const commands = [];
+                while ((cmdMatch = cmdRegex.exec(currentStreamText)) !== null) {
+                    commands.push(cmdMatch[1].trim());
+                }
+
+                if (commands.length > 0) {
+                    const actionContainerDiv = document.createElement('div');
+                    actionContainerDiv.className = 'flex flex-col gap-1.5 pt-3 border-t border-cyber-border/45 mt-2';
+                    commands.forEach(cmd => {
+                        const btnContainer = document.createElement('div');
+                        btnContainer.className = 'flex gap-2 w-full';
+                        
+                        const btn = document.createElement('button');
+                        btn.innerHTML = `▶️ Execute Command: <span class="font-mono">${cmd.substring(0,30)}${cmd.length>30?'...':''}</span>`;
+                        btn.className = "apply-diff-btn flex-1 bg-gradient-to-r from-purple-600/80 to-pink-600/80 hover:from-purple-500 hover:to-pink-500 text-white text-[10px] font-bold py-1.5 px-3 rounded uppercase tracking-wider transition-all cursor-pointer shadow-[0_0_8px_rgba(255,0,255,0.2)]";
+                        
+                        btn.addEventListener('click', () => {
+                            vscode.postMessage({ command: 'executeCommand', cmd: cmd, autoReply: false });
+                            btn.innerHTML = '⏳ Executing...';
+                            btn.disabled = true;
+                            btn.classList.add('opacity-50', 'cursor-not-allowed');
+                        });
+                        
+                        btnContainer.appendChild(btn);
+                        actionContainerDiv.appendChild(btnContainer);
+                        
+                        // Commands are manual only, no auto-execution loops
+                    });
+                    currentStreamBubbleDiv.appendChild(actionContainerDiv);
+                }
+
                 if (usage) {
                     const usageDiv = document.createElement('div');
                     usageDiv.className = 'text-[9px] text-slate-500 font-mono pt-1.5 border-t border-cyber-border/20 flex justify-between gap-1';
@@ -1098,6 +1173,9 @@
                 chatInput.focus();
                 chatInput.style.height = 'auto';
                 chatInput.style.height = (chatInput.scrollHeight) + 'px';
+            } else if (message.command === 'injectChatAndSend') {
+                chatInput.value = message.text;
+                submitChat();
             } else if (message.command === 'showSessions') {
                 historyList.innerHTML = '';
                 if (message.sessions.length === 0) {

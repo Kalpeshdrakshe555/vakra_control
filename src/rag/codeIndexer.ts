@@ -99,11 +99,13 @@ function chunkCodeFile(filepath: string, content: string): CodeChunk[] {
 /**
  * Strategy for generic files (JSON, Markdown, CSS) - simple line-based chunking
  */
-function chunkGenericFile(filepath: string, content: string, linesPerChunk: number = 100): CodeChunk[] {
+function chunkGenericFile(filepath: string, content: string, linesPerChunk: number = 100, overlap: number = 20): CodeChunk[] {
     const lines = content.split('\n');
     const chunks: CodeChunk[] = [];
     
-    for (let i = 0; i < lines.length; i += linesPerChunk) {
+    if (lines.length === 0) return chunks;
+
+    for (let i = 0; i < lines.length; i += (linesPerChunk - overlap)) {
         const blockLines = lines.slice(i, i + linesPerChunk);
         const blockContent = blockLines.join('\n');
         chunks.push({
@@ -112,10 +114,11 @@ function chunkGenericFile(filepath: string, content: string, linesPerChunk: numb
             startLine: i,
             endLine: i + blockLines.length,
             type: 'generic',
-            name: `block_${Math.floor(i/linesPerChunk) + 1}`,
+            name: `block_${Math.floor(i/(linesPerChunk-overlap)) + 1}`,
             content: blockContent,
             tokens: tokenizeCode(`${filepath} ${blockContent}`)
         });
+        if (i + linesPerChunk >= lines.length) break;
     }
     
     return chunks;
