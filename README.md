@@ -80,16 +80,40 @@ When you configure your API Keys, Tokens, or Model via the **⚙️ Gear Icon**,
 
 ---
 
-## 🛠️ Getting Started
+## 🛠️ Step-by-Step Setup Guide (Beginner Friendly)
 
-1. **Open the AI Sidebar:** Press `Ctrl+Shift+A` to open the chat interface. *(Pro Tip: Drag the icon to your Secondary Sidebar on the right for a better layout!)*
-2. **Add Context:** 
-   - Type `@rag` for semantic codebase search.
-   - Type `@file path/to/file` or **drag and drop** a file.
-   - Mention a function name directly (e.g. `AuthService`) to trigger the native LSP Symbol lookup.
-3. **Write a Prompt:** Ask the AI to build a feature, fix a bug, or write tests.
-4. **Agent Mode:** Tick the **🤖 Agent Mode** checkbox to allow the AI to autonomously run terminal commands and debug itself.
-5. **Preview & Apply:** Click **👁️ Preview** to review changes in a Diff View, then click **Apply** to inject them!
+Setting up Ultra Light AI is extremely easy, whether you want to use the cloud (Gemini) or a free local model (Ollama).
+
+### Option A: Quick Start (Cloud AI)
+1. **Get an API Key:** Go to [Google AI Studio](https://aistudio.google.com/) and get a free Gemini API key.
+2. **Open the Extension:** After installing the extension, press `Ctrl+Shift+A` (or click the robot icon) to open the AI Sidebar.
+3. **Configure the Key:** 
+   - Click the **⚙️ Gear Icon** in the top right of the chat panel.
+   - Select **Cloud (Gemini)** as the AI Provider.
+   - Paste your API key into the input box.
+   - Click **Save Configuration**.
+4. **Reload:** Press `F5` or `Ctrl+Shift+P` -> `Developer: Reload Window`. You're ready to code!
+
+### Option B: 100% Free & Private (Local Ollama)
+1. **Install Ollama:** Download and install [Ollama](https://ollama.com/) on your PC.
+2. **Download a Model:** Open your terminal and run `ollama run qwen2.5-coder:1.5b` (or any other model like `llama3`). Wait for it to download.
+3. **Configure the Extension:**
+   - Click the **⚙️ Gear Icon** in the chat panel.
+   - Select **Local Offline (Ollama / LM Studio)** as the AI Provider.
+   - Set the Local API Endpoint to `http://127.0.0.1:11434`.
+   - In the Active Model dropdown, choose **Custom Model...** and type the exact name of the model you downloaded (e.g., `qwen2.5-coder:1.5b`).
+   - Click **Save Configuration** and reload VS Code.
+
+---
+
+## 🎯 How to Use (Features Guide)
+
+1. **Add Context Automatically:** 
+   - Check the **`@workspace`** box in the UI to let the AI search your entire codebase (RAG).
+   - Check the **`@active`** box to automatically send your currently open file.
+   - Just type a class or function name (e.g. `AuthService`) and the AI will auto-locate it using VS Code's AST!
+2. **Step-by-Step Architect:** Tick the **`🏢 Architect`** box when asking for a large project (like "Build a Django App"). The AI will guide you step-by-step, providing terminal commands and code blocks one by one for flawless context memory.
+3. **Preview & Apply:** Click **👁️ Preview** to review changes in a Diff View, then click **Apply** to inject them!
 
 ---
 
@@ -97,12 +121,17 @@ When you configure your API Keys, Tokens, or Model via the **⚙️ Gear Icon**,
 
 Ultra Light AI avoids heavy dependencies (no React, no Vue) in favor of pure DOM manipulation and native VS Code APIs. 
 
-### ⚙️ Technologies Used
-- **VS Code Extension API** (`vscode`)
-- **Vanilla TypeScript** (Backend)
-- **Vanilla HTML/JS + Tailwind CSS via CDN** (Webview UI)
-- **Marked.js** (Markdown rendering)
-- **esbuild** (Bundling)
+## 💻 Technologies & Tools Used
+
+To maintain its blazing-fast performance and ultra-lightweight memory footprint (<100MB), this extension relies purely on native solutions and avoids heavy frontend frameworks.
+
+* **TypeScript (Backend & Logic)**: Strongly typed backend ensuring zero runtime errors in production.
+* **VS Code Extension API (`vscode`)**: Deep native integration for AST parsing (LSP), file operations, and editor manipulation.
+* **Vanilla HTML5 / JavaScript (Frontend)**: The Webview UI is written in pure JS to guarantee instant load times and zero framework overhead.
+* **Tailwind CSS (via CDN)**: Used for crafting the hyper-premium, Cyberpunk-themed UI with glassmorphism and glowing hover effects.
+* **Marked.js & DOMPurify**: Safely parses and renders Markdown and code blocks from the AI's response.
+* **esbuild**: A lightning-fast bundler used to package the extension.
+* **BM25 Algorithm (Custom implementation)**: Used for local, offline semantic code search (RAG) without needing external vector databases.
 
 ### 📂 Core Files
 - **`src/extension.ts`**: The entry point. Handles `Ctrl+K`, Terminal Error Catching, and State Machine orchestration.

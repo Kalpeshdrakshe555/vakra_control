@@ -424,14 +424,20 @@ export class LocalOllamaClient implements IEngine {
             const reader = body.getReader();
             const decoder = new TextDecoder();
             
+            let buffer = '';
+            
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n').filter(l => l.trim() !== '');
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                
+                // The last element might be an incomplete line
+                buffer = lines.pop() || '';
                 
                 for (const line of lines) {
+                    if (line.trim() === '') continue;
                     try {
                         if (isOllama) {
                             const data = JSON.parse(line);
@@ -442,7 +448,7 @@ export class LocalOllamaClient implements IEngine {
                         } else {
                             if (line.startsWith('data: ')) {
                                 const dataStr = line.slice(6);
-                                if (dataStr === '[DONE]') continue;
+                                if (dataStr.trim() === '[DONE]') continue;
                                 const data = JSON.parse(dataStr);
                                 const content = data.choices?.[0]?.delta?.content || '';
                                 if (content) {
@@ -451,9 +457,24 @@ export class LocalOllamaClient implements IEngine {
                                 }
                             }
                         }
-                    } catch { /* skip */ }
+                    } catch (e) { 
+                        console.error("Local stream parse error", e, "Line:", line);
+                    }
                 }
             }
+            // Parse anything left in buffer
+            if (buffer.trim() !== '') {
+                try {
+                     if (isOllama) {
+                         const data = JSON.parse(buffer);
+                         if (data.message?.content) {
+                             fullText += data.message.content;
+                             onChunk({ text: data.message.content, done: false });
+                         }
+                     }
+                } catch (e) { console.error("Local stream buffer parse error", e); }
+            }
+            
             onChunk({ text: '', done: true });
             return { text: fullText };
         } else {
