@@ -210,7 +210,7 @@ export function ensureAgentConfig(workspaceRoot: string): void {
                 }
             },
             activeProvider: "cloud",
-            contextLimits: { maxTokens: 8000, historyLength: 10 },
+            contextLimits: { maxTokens: 8192, historyLength: 10 },
             systemInstructions: "You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks."
         };
         try {

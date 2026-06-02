@@ -251,7 +251,7 @@ export class GeminiCloudClient implements IEngine {
                 temperature: 0.7,
                 topP: 0.95,
                 topK: 40,
-                maxOutputTokens: this.maxTokens
+                maxOutputTokens: 8192  // BUG-05 FIX: Always allow full responses; user's maxTokens controls INPUT context only
             }
         };
 

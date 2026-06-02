@@ -1,0 +1,12 @@
+1. humare project me humara ai blindly terminal execute kr raha hai jo user ko kuch bhi dikh nahi raha konsi command execute konsi
+    hume is problem ko solve krna padega user ko dikhna chahiye ai konsi command run kr raha hai aur user fir command agar galat ho 
+    terminal me to khud use sahi kr paye ya fir humara ai direct command execute kr ke direct error prompt box me aa raha hai hume 
+    is problem ko solve krna padega user ko terminal pe command execute hoti dikhe user use command ko edit bhi kr paye 
+2. shyad humara ai kuch gadbad kr raha hai jo kuch projects keliye fail ho raha hai ai ko hum piche ka context denge taaki vo complete 
+    project ke baare me jaan sake aur hume tokens manage krne keliye rag and other things sahi se setup krne padenge taaki humara 
+    system galti na kare 
+3. aur ak baat settings me humne jo set kiya hai tokens ka vo bas warning dikha raha hai sahi se kaam nahi kr raha hume ise verify krna 
+    padega
+4. humara system user documents and other settings ki json files direct user ke working directory me save kr rahi hai hume iska kuch krna padega
+    hume smart save lagana padega ya to ye system bol ke kisi specific folder me save ho ya fir 
+    

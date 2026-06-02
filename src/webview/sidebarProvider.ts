@@ -63,7 +63,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         localEndpoint: config?.providers?.local?.endpoint || 'http://127.0.0.1:11434',
                         timeoutSeconds: config?.providers?.cloud?.timeoutSeconds || 60,
                         systemInstructions: config?.systemInstructions || 'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks. Provide the complete code file content so it can be directly applied.',
-                        maxTokens: config?.contextLimits?.maxTokens || 8000,
+                        maxTokens: config?.contextLimits?.maxTokens || 8192,
                         historyLength: config?.contextLimits?.historyLength || 2,
                         enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
                         enableHoverExplanations: vsConfig.get('enableHoverExplanations', false)
@@ -144,40 +144,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     });
                 }
             } else if (message.command === 'executeCommand') {
-                const { exec } = require('child_process');
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
-                if (!workspaceRoot) {
-                    vscode.window.showErrorMessage('No workspace open to run commands.');
-                    return;
-                }
-                
-                vscode.window.showInformationMessage(`Running: ${message.cmd}`);
-                
-                exec(message.cmd, { cwd: workspaceRoot, timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
-                    let output = '';
-                    if (error) {
-                        output += `Exit Code/Error: ${error.message}\n`;
-                    }
-                    if (stderr) {
-                        output += `STDERR:\n${stderr}\n`;
-                    }
-                    if (stdout) {
-                        output += `STDOUT:\n${stdout}\n`;
-                    }
-                    
-                    if (!output.trim()) output = "Command executed successfully with no output.";
-                    
-                    if (output.length > 2500) {
-                        output = output.substring(0, 2500) + '\n...[output truncated due to length]';
-                    }
-
-                    const autoReply = `[Terminal Output for \`${message.cmd}\`]\n\`\`\`\n${output}\n\`\`\`\nPlease review this output and continue your task.`;
-                    
-                    this.postMessageToWebview({
-                        command: message.autoReply ? 'injectChatAndSend' : 'injectChat',
-                        text: autoReply
-                    });
-                });
+                // BUG-17 FIX: Route through the safe handleRunInTerminal which has sandboxing + confirmation modal
+                this.handleRunInTerminal(message.cmd);
             } else if (message.command === 'deleteChat') {
                 if (message.timestamp) {
                     const success = this.conversationHistory.deleteMessageByTimestamp(message.timestamp);
@@ -282,7 +250,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const model = getGeminiModel(workspaceRoot);
             const timeout = getGeminiTimeout(workspaceRoot);
             const config = getAgentConfig(workspaceRoot);
-            const maxTokens = config?.contextLimits?.maxTokens || 8000;
+            const maxTokens = config?.contextLimits?.maxTokens || 8192;
             
             let client;
             if (config?.activeProvider === 'local') {
@@ -297,10 +265,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             // Note: message isn't passed here as this method is called via fallback, but let's assume agentMode is false for now
             // if we need it we can update the signature later.
             const systemInstruction = this.buildSystemInstruction(config, workspaceRoot, false);
-            let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, workspaceRoot);
+            let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, false, workspaceRoot);
 
-            // Add user message to history
-            this.conversationHistory.addMessage('user', finalPrompt);
+            // Add ONLY the user's raw message to history (BUG-03 FIX)
+            this.conversationHistory.addMessage('user', text);
 
             // Trim history to fit token budget
             this.conversationHistory.trimToTokenBudget(maxTokens);
@@ -348,22 +316,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const config = getAgentConfig(workspaceRoot);
 
             let client;
-            const maxTokens = config?.contextLimits?.maxTokens || 8000;
+            const maxTokens = config?.contextLimits?.maxTokens || 8192;
             if (config?.activeProvider === 'local') {
                 const { LocalOllamaClient } = require('../router/realClients');
                 const endpoint = config.providers?.local?.endpoint || 'http://127.0.0.1:11434';
                 const localModel = config.providers?.local?.model || 'llama3';
                 client = new LocalOllamaClient(localModel, endpoint);
             } else {
-                client = new GeminiCloudClient(keys, model, timeout, maxTokens);
+                client = new GeminiCloudClient(keys, model, timeout);
             }
             
             const systemInstruction = this.buildSystemInstruction(config, workspaceRoot, message.agentMode, message.architectMode);
-            let finalPrompt = await this.buildPrompt(message.text, message.includeActiveFile, message.includeWebSearch, message.includeWorkspace, workspaceRoot);
+            let finalPrompt = await this.buildPrompt(message.text, false, message.includeWebSearch || false, false, workspaceRoot);
 
-            // Add user message to history
-            this.conversationHistory.addMessage('user', finalPrompt, undefined, message.timestamp);
-            this.conversationHistory.trimToTokenBudget(config?.contextLimits?.maxTokens || 8000);
+            // Add ONLY the user's raw message to history to prevent infinite context scaling
+            this.conversationHistory.addMessage('user', message.text, undefined, message.timestamp);
+            this.conversationHistory.trimToTokenBudget(config?.contextLimits?.maxTokens || 8192);
 
             const history = this.conversationHistory.getHistory(
                 config?.contextLimits?.historyLength || 20
@@ -444,28 +412,24 @@ If you MUST provide a complete file rewrite, format it like this without the sea
 // full code here
 \`\`\`
 
-You have the ability to run Terminal commands to test your code, debug, or install dependencies.
-If you need to execute a command, output ONLY ONE command inside a special block like this:
+You have the ability to suggest Terminal commands to test your code, debug, or install dependencies.
+If you need to execute a command, provide it in a standard \`\`\`bash block.`;
 
-<run_command>
-npm run test
-</run_command>
-
-IMPORTANT: Stop generating immediately after a <run_command>.`;
+            systemInstruction += `\nIf the user provides a short 2-3 line request for a new feature or project, first analyze the context, create a step-by-step plan, and then execute it. 
+If the user provides a detailed plan with steps, acknowledge it and systematically execute their exact steps without deviating.
+When suggesting terminal commands, ALWAYS wrap them in \`\`\`bash code blocks so the user can execute them.`;
 
         if (isArchitectMode) {
             systemInstruction += `\n\n[ARCHITECT MODE ACTIVE]: You are building a large project or feature. 
-CRITICAL RULE: If the user requests a framework that uses CLI tools (e.g., Django, React, Vue, Angular, Next.js), ALWAYS use <run_command> to generate the boilerplate scaffold FIRST. Do NOT write boilerplate files manually.
-After running commands or if making custom files, DO NOT generate all files at once. Generate a MAXIMUM of 1 or 2 files per turn. Output their complete code in markdown blocks so the user can apply them. Then STOP and ask the user to reply "Next" to continue. Maintain perfect context of what you have generated.`;
+CRITICAL RULE 1: If the user asks you to build a NEW project using a framework (React, Next.js, Django, Vue, Vite, etc.), you MUST FIRST ONLY provide the exact CLI terminal commands to scaffold the project (e.g., \`django-admin startproject\`, \`npx create-next-app\`) using standard \`\`\`bash blocks. DO NOT provide ANY code files or file modifications in this first response.
+CRITICAL RULE 2: STOP GENERATING immediately after providing the scaffolding commands. Wait for the user to run them and reply.
+CRITICAL RULE 3: Once the scaffold is ready, carefully read the context. Do not make arbitrary changes. Break down your coding steps and provide ONLY 1 or 2 file modifications per response. Ask the user for confirmation to continue.
+Do NOT attempt to write the entire codebase at once.`;
         }
 
         if (isAgentMode) {
-            systemInstruction += `\n[AGENT MODE ACTIVE]: The user has authorized you to run commands autonomously. The system will auto-execute your <run_command> blocks and immediately feed the output back to you. Use this to iteratively debug, run tests, and fix code without waiting for user approval.`;
-        } else {
-            systemInstruction += `\nIMPORTANT: The user must manually approve your command. You will receive the output in the next turn if they run it.`;
+            systemInstruction += `\n[AGENT MODE ACTIVE]: You can suggest bash commands to install packages or run tests. The user will review and run them. Provide step-by-step instructions.`;
         }
-        
-        systemInstruction += `\nAlways provide clear, concise, and actionable responses.`;
         
         // Add Project-specific rules
         if (workspaceRoot) {
@@ -561,7 +525,7 @@ After running commands or if making custom files, DO NOT generate all files at o
         }
 
         // Handle @workspace directive — include project structure + key files
-        const wantsWorkspace = text.toLowerCase().includes('@workspace') || 
+        const wantsWorkspace = includeWorkspace || text.toLowerCase().includes('@workspace') || 
                                text.toLowerCase().includes('bird eye view') || 
                                text.toLowerCase().includes("bird's eye view") ||
                                text.toLowerCase().includes('project structure');
@@ -573,10 +537,7 @@ After running commands or if making custom files, DO NOT generate all files at o
                         '**/*',
                         '{**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock}'
                     );
-                    const fileList = files.map(f => {
-                        const rel = path.relative(workspaceRoot, f.fsPath);
-                        return rel;
-                    }).sort();
+                    const fileList = files.map(f => path.relative(workspaceRoot, f.fsPath)).sort();
                     
                     contextParts.push(`Workspace Structure (${fileList.length} files):\n${fileList.join('\n')}`);
                     this.postMessageToWebview({
@@ -588,8 +549,13 @@ After running commands or if making custom files, DO NOT generate all files at o
             finalPrompt = finalPrompt.replace(/@workspace/gi, '').trim();
         }
 
-        // Handle RAG Semantic Search (@rag, UI toggle, or implicit)
-        const wantsRag = includeWorkspace || text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
+        // Automatic Intelligent Context Routing
+        const isGreeting = /^(hi|hello|hey|thanks|ok|yes|no|good morning|sup)\b/i.test(text.trim());
+        
+        // Handle RAG Semantic Search
+        // Only auto-trigger RAG when prompt references code OR in agent/architect mode
+        const hasCodeKeywords = /\b(function|class|import|error|bug|fix|create|build|setup|install|component|model|view|route|api|endpoint|file|module)\b/i.test(text);
+        const wantsRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart') || (hasCodeKeywords && text.length > 20 && !isGreeting);
         
         if (wantsRag && this.ragEngine) {
             try {
@@ -598,7 +564,8 @@ After running commands or if making custom files, DO NOT generate all files at o
                     text: `🧠 Semantic Search: Analyzing codebase...`
                 });
                 
-                const ragResults = await this.ragEngine.search(text, 5);
+                // Optimization for smaller models: Limit RAG results to top 3 to avoid overwhelming context
+                const ragResults = await this.ragEngine.search(text, 3);
                 if (ragResults.length > 0) {
                     contextParts.push(`--- Relevant Semantic Codebase Context ---\n${ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n')}`);
                     this.postMessageToWebview({
@@ -648,10 +615,10 @@ After running commands or if making custom files, DO NOT generate all files at o
             } catch { /* ignore regex errors */ }
         }
 
-        // Auto-include active file if no context is provided
-        let autoIncludeActive = includeActiveFile;
-        if (!hasFileMatch && !wantsWorkspace && !wantsRag && !text.toLowerCase().includes('@active') && !text.toLowerCase().includes('@current')) {
-            autoIncludeActive = true;
+        // Always auto-include active file unless it's a simple greeting or explicitly told not to
+        let autoIncludeActive = true;
+        if (isGreeting || text.toLowerCase().includes('ignore active file')) {
+            autoIncludeActive = false;
         }
 
         // Include active file context if requested or auto-detected
@@ -660,39 +627,67 @@ After running commands or if making custom files, DO NOT generate all files at o
             if (editor) {
                 const doc = editor.document;
                 const fileName = path.basename(doc.fileName);
-                const selection = editor.selection;
+                const langId = doc.languageId;
                 
-                if (!selection.isEmpty) {
-                    // Include just the selection
-                    const selectedText = doc.getText(selection);
-                    contextParts.push(`Selected code from ${fileName} (${doc.languageId}):\n\`\`\`${doc.languageId}\n${selectedText}\n\`\`\``);
-                } else {
-                    // Include the full file (truncated if too large)
-                    let content = doc.getText();
-                    if (content.length > 15000) {
-                        content = content.substring(0, 15000) + '\n\n... (truncated)';
+                // BUG-14 FIX: Skip non-code files to avoid wasting token budget
+                const skipLanguages = ['plaintext', 'log', 'binary', 'json', 'xml', 'csv', 'svg', 'markdown'];
+                const skipExtensions = ['.lock', '.min.js', '.min.css', '.map', '.env'];
+                const ext = path.extname(doc.fileName).toLowerCase();
+                const isCodeFile = !skipLanguages.includes(langId) && !skipExtensions.some(e => ext === e);
+                
+                if (isCodeFile) {
+                    const selection = editor.selection;
+                    
+                    if (!selection.isEmpty) {
+                        // Include just the selection
+                        const selectedText = doc.getText(selection);
+                        contextParts.push(`Selected code from ${fileName} (${langId}):\n\`\`\`${langId}\n${selectedText}\n\`\`\``);
+                    } else {
+                        // Include the full file (truncated if too large)
+                        let content = doc.getText();
+                        if (content.length > 15000) {
+                            content = content.substring(0, 15000) + '\n\n... (truncated)';
+                        }
+                        contextParts.push(`Active file context: ${fileName} (${langId}):\n\`\`\`${langId}\n${content}\n\`\`\``);
                     }
-                    contextParts.push(`Active file context: ${fileName} (${doc.languageId}):\n\`\`\`${doc.languageId}\n${content}\n\`\`\``);
                 }
                 finalPrompt = finalPrompt.replace(/@active|@current/gi, '').trim();
             }
         }
-
-        // Assemble final prompt with context
-        if (contextParts.length > 0) {
-            finalPrompt = `${finalPrompt}\n\n--- Context ---\n${contextParts.join('\n\n')}`;
-        }
-
-        const config = getAgentConfig(workspaceRoot);
-        const maxTokens = config?.contextLimits?.maxTokens || 8000;
-        const maxChars = maxTokens * 3;
+        const promptConfig = getAgentConfig(workspaceRoot);
+        const maxTokens = promptConfig?.contextLimits?.maxTokens || 8192;
         
-        if (finalPrompt.length > maxChars) {
-            finalPrompt = finalPrompt.substring(0, maxChars) + "\n\n... (context truncated due to token limits)";
-            this.postMessageToWebview({
-                command: 'statusUpdate',
-                text: `⚠️ Context truncated to stay under ${maxTokens} tokens limit.`
-            });
+        // Assemble final prompt with context
+        // Optimization for smaller models: Place Context BEFORE the User Request
+        // Smaller models (3B-7B) suffer from 'lost in the middle' and attend strongest to the end of the prompt.
+        if (contextParts.length > 0) {
+            const maxContextChars = Math.max(1000, (maxTokens * 3) - (finalPrompt.length + 500));
+            
+            let currentChars = 0;
+            const validParts: string[] = [];
+            
+            // Prioritize from end to start (Active File > AST > RAG > Workspace)
+            for (let i = contextParts.length - 1; i >= 0; i--) {
+                const part = contextParts[i];
+                if (currentChars + part.length <= maxContextChars) {
+                    validParts.unshift(part); // Maintain original order
+                    currentChars += part.length;
+                } else if (currentChars === 0) {
+                    // If even the very first (most important) part is too large, safely truncate it
+                    validParts.unshift(part.substring(0, maxContextChars) + "\n\n... (context truncated due to token limits)");
+                    currentChars += maxContextChars;
+                } else {
+                    // We hit the limit, omit the remaining less important context
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `⚠️ Minor background context was omitted to strictly stay under ${maxTokens} tokens limit while preserving accuracy.`
+                    });
+                    break;
+                }
+            }
+            
+            let contextString = validParts.join('\n\n');
+            finalPrompt = `--- Context ---\n${contextString}\n\n--- User Request ---\n${finalPrompt}`;
         }
 
         return finalPrompt;
@@ -918,7 +913,9 @@ After running commands or if making custom files, DO NOT generate all files at o
             terminal = vscode.window.createTerminal('Ultra Light AI');
         }
         terminal.show();
-        terminal.sendText(command);
+        // Set addNewLine to false so the user can edit the command before hitting enter
+        terminal.sendText(command, false);
+        vscode.window.showInformationMessage('Command placed in terminal. Edit it if needed, then press Enter.');
     }
 
     /**

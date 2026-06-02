@@ -186,17 +186,11 @@
                     <input type="checkbox" id="include-web-search" class="accent-cyber-neonPink">
                     <span>@web</span>
                 </label>
-                <label class="flex items-center gap-1 cursor-pointer hover:text-cyber-neonCyan transition-colors" title="Include current active file context">
-                    <input type="checkbox" id="include-active-file" class="accent-cyber-neonCyan">
-                    <span>@active</span>
-                <label class="flex items-center gap-1 cursor-pointer hover:text-green-400 transition-colors" title="Scan entire workspace for context (RAG)">
-                    <input type="checkbox" id="include-workspace" class="accent-green-500">
-                    <span>@workspace</span>
-                </label>
-                <label class="flex items-center gap-1 cursor-pointer hover:text-yellow-400 transition-colors" title="Architect Mode: Spawns multiple agents for large tasks">
-                    <input type="checkbox" id="architect-mode-toggle" class="accent-yellow-500">
-                    <span class="font-bold text-yellow-400">🏢 Architect</span>
-                </label>
+                <select id="mode-select" class="bg-cyber-panel border border-cyber-border rounded text-[10px] text-slate-300 outline-none p-1 cursor-pointer ml-1">
+                    <option value="chat">💬 Chat Mode</option>
+                    <option value="agent">🤖 Agent Mode</option>
+                    <option value="architect">🏢 Architect Mode</option>
+                </select>
                 <button id="reset-state-btn" class="hover:text-cyber-neonPink transition-colors cursor-pointer uppercase tracking-wider text-[8px] bg-slate-900/50 hover:bg-slate-900 border border-cyber-border/40 hover:border-cyber-neonPink/40 px-1.5 py-0.5 rounded ml-1">
                     Reset State
                 </button>
@@ -268,6 +262,9 @@
                 <div class="space-y-1">
                     <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">Max Tokens</label>
                     <input type="number" id="setting-maxTokens" min="1000" max="1000000" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
+                    <p id="token-warning" class="text-[9px] text-yellow-400/90 mt-1.5 hidden leading-tight font-mono">
+                        ⚠️ Setting below 5000 limits RAG & active file context, heavily reducing AI accuracy for complex tasks.
+                    </p>
                 </div>
                 <div class="space-y-1">
                     <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">History Length</label>
@@ -466,8 +463,10 @@
             document.getElementById('setting-local-endpoint').value = config.localEndpoint || 'http://127.0.0.1:11434';
             document.getElementById('setting-timeout').value = config.timeoutSeconds || 60;
             document.getElementById('setting-instructions').value = config.systemInstructions || '';
-            document.getElementById('setting-maxTokens').value = config.maxTokens || 8000;
+            document.getElementById('setting-maxTokens').value = config.maxTokens || 8192;
             document.getElementById('setting-historyLength').value = config.historyLength || 2;
+            
+            checkTokenWarning();
             document.getElementById('setting-enableInline').checked = config.enableInlineCompletions === true;
             document.getElementById('setting-enableHover').checked = config.enableHoverExplanations === true;
 
@@ -492,6 +491,20 @@
 
             document.getElementById('active-model-badge').innerText = config.model || 'gemma-4-31b-it';
         }
+
+        function checkTokenWarning() {
+            const tokenInput = document.getElementById('setting-maxTokens');
+            const tokenWarning = document.getElementById('token-warning');
+            if (tokenInput && tokenWarning) {
+                if (parseInt(tokenInput.value, 10) < 5000) {
+                    tokenWarning.classList.remove('hidden');
+                } else {
+                    tokenWarning.classList.add('hidden');
+                }
+            }
+        }
+        
+        document.getElementById('setting-maxTokens').addEventListener('input', checkTokenWarning);
 
         // Notify extension that webview script is ready to receive configuration
         vscode.postMessage({ command: 'ready' });
@@ -577,18 +590,25 @@
                 const textData = e.dataTransfer.getData('text/plain');
                 if (textData) {
                     const lines = textData.split('\n');
+                    let isPath = false;
                     lines.forEach(line => {
                         let pathStr = line.trim();
-                        if (pathStr && (pathStr.includes('/') || pathStr.includes('\\'))) {
+                        if (pathStr && (pathStr.includes('/') || pathStr.includes('\\') || pathStr.startsWith('file:'))) {
                             if (pathStr.startsWith('file:///')) {
                                 pathStr = decodeURIComponent(pathStr.substring(8));
                             } else if (pathStr.startsWith('file://')) {
                                 pathStr = decodeURIComponent(pathStr.substring(7));
                             }
                             chatInput.value += ` @file "${pathStr}" `;
+                            isPath = true;
                             addedFiles = true;
                         }
                     });
+                    
+                    if (!isPath) {
+                        chatInput.value += (chatInput.value.trim() ? " " : "") + textData;
+                        addedFiles = true;
+                    }
                 }
             }
 
@@ -643,16 +663,16 @@
             showThinking();
             document.getElementById('stop-container').classList.remove('hidden');
 
-            const isArchitectMode = document.getElementById('architect-mode-toggle')?.checked || false;
+            const mode = document.getElementById('mode-select')?.value || 'chat';
+            const isAgentMode = (mode === 'agent');
+            const isArchitectMode = (mode === 'architect');
 
             vscode.postMessage({
                 command: 'sendChatStream',
                 text: text,
                 timestamp: timestamp,
-                includeActiveFile: document.getElementById('include-active-file').checked,
-                includeWebSearch: document.getElementById('include-web-search').checked,
-                includeWorkspace: document.getElementById('include-workspace').checked,
-                agentMode: false,
+                includeWebSearch: document.getElementById('include-web-search')?.checked || false,
+                agentMode: isAgentMode,
                 architectMode: isArchitectMode
             });
         }
@@ -855,43 +875,93 @@
                         isTerminal = true;
                     }
                 }
+                
+                // Fallback: If no language is specified, but it looks like a command block
+                if (!isTerminal) {
+                    const code = codeElement ? codeElement.innerText.trim() : pre.innerText.trim();
+                    const commandWords = ['npm ', 'npx ', 'yarn ', 'pnpm ', 'python ', 'python3 ', 'pip ', 'django-admin ', 'manage.py ', 'git ', 'docker ', 'cd ', 'ls ', 'dir ', 'mkdir '];
+                    if (code.split('\n').length < 10) {
+                        for (const word of commandWords) {
+                            if (code.startsWith(word) || code.includes('\n' + word)) {
+                                isTerminal = true;
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 const actionsContainer = document.createElement('div');
                 actionsContainer.className = 'absolute top-2 right-2 flex gap-1 z-10';
 
                 if (isTerminal) {
-                    const terminalActions = document.createElement('div');
-                    terminalActions.className = 'flex gap-1';
-
-                    const runBtn = document.createElement('button');
-                    runBtn.className = 'bg-pink-900/80 hover:bg-pink-600 text-pink-100 border border-pink-700/50 hover:border-pink-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
-                    runBtn.innerHTML = '▶ RUN';
+                    const code = codeElement ? codeElement.innerText.trim() : pre.innerText.trim();
+                    const commands = code.split('\n').filter(l => l.trim() && !l.startsWith('#'));
                     
-                    const rejectCmdBtn = document.createElement('button');
-                    rejectCmdBtn.className = 'bg-slate-700/80 hover:bg-red-600/90 text-slate-300 hover:text-white border border-slate-600 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
-                    rejectCmdBtn.innerHTML = '❌ REJECT';
+                    if (commands.length > 1) {
+                        // BUG-09 FIX: Multi-line commands get individual step buttons
+                        const stepsContainer = document.createElement('div');
+                        stepsContainer.className = 'flex flex-col gap-1 mt-1 mb-1 w-full';
+                        stepsContainer.style.position = 'relative';
+                        
+                        commands.forEach((cmd, idx) => {
+                            const stepBtn = document.createElement('button');
+                            stepBtn.className = 'bg-pink-900/60 hover:bg-pink-600 text-pink-100 border border-pink-700/40 hover:border-pink-500 rounded px-2 py-1 text-[9px] font-mono opacity-80 hover:opacity-100 transition-all cursor-pointer shadow-sm text-left w-full truncate';
+                            stepBtn.innerHTML = `▶ Step ${idx + 1}: <span class="text-pink-200">${cmd.length > 50 ? cmd.substring(0,50)+'...' : cmd}</span>`;
+                            stepBtn.addEventListener('click', () => {
+                                vscode.postMessage({ command: 'runInTerminal', text: cmd.trim() });
+                                stepBtn.innerHTML = `✅ Step ${idx + 1}: Sent to terminal`;
+                                stepBtn.classList.replace('bg-pink-900/60', 'bg-green-700/60');
+                                stepBtn.disabled = true;
+                            });
+                            stepsContainer.appendChild(stepBtn);
+                        });
+                        
+                        // Add "Run All" button
+                        const runAllBtn = document.createElement('button');
+                        runAllBtn.className = 'bg-gradient-to-r from-pink-700/80 to-purple-700/80 hover:from-pink-600 hover:to-purple-600 text-white border border-pink-600/50 rounded px-2 py-1 text-[9px] font-bold font-mono tracking-wider cursor-pointer shadow-sm text-center w-full mt-0.5';
+                        runAllBtn.innerHTML = '⚡ RUN ALL STEPS';
+                        runAllBtn.addEventListener('click', () => {
+                            vscode.postMessage({ command: 'runInTerminal', text: code });
+                            runAllBtn.innerHTML = '✅ ALL SENT';
+                            runAllBtn.classList.add('opacity-50');
+                        });
+                        stepsContainer.appendChild(runAllBtn);
+                        
+                        pre.parentNode.insertBefore(stepsContainer, pre.nextSibling);
+                    } else {
+                        // Single command: show simple RUN/REJECT buttons
+                        const terminalActions = document.createElement('div');
+                        terminalActions.className = 'flex gap-1';
 
-                    runBtn.addEventListener('click', () => {
-                        const code = codeElement ? codeElement.innerText : pre.innerText;
-                        vscode.postMessage({ command: 'runInTerminal', text: code.trim() });
-                        runBtn.innerHTML = 'STARTED!';
-                        runBtn.classList.replace('bg-pink-900/80', 'bg-green-600/90');
-                        rejectCmdBtn.classList.add('hidden');
-                        setTimeout(() => { 
-                            runBtn.innerHTML = '▶ RUN'; 
-                            runBtn.classList.replace('bg-green-600/90', 'bg-pink-900/80');
-                            rejectCmdBtn.classList.remove('hidden');
-                        }, 2000);
-                    });
+                        const runBtn = document.createElement('button');
+                        runBtn.className = 'bg-pink-900/80 hover:bg-pink-600 text-pink-100 border border-pink-700/50 hover:border-pink-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
+                        runBtn.innerHTML = '▶ RUN';
+                        
+                        const rejectCmdBtn = document.createElement('button');
+                        rejectCmdBtn.className = 'bg-slate-700/80 hover:bg-red-600/90 text-slate-300 hover:text-white border border-slate-600 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
+                        rejectCmdBtn.innerHTML = '❌ REJECT';
 
-                    rejectCmdBtn.addEventListener('click', () => {
-                        pre.style.opacity = '0.5';
-                        terminalActions.innerHTML = '<span class="text-[9px] font-mono text-red-400 border border-red-500/30 bg-red-900/20 px-2 rounded">COMMAND REJECTED</span>';
-                    });
-                    
-                    terminalActions.appendChild(runBtn);
-                    terminalActions.appendChild(rejectCmdBtn);
-                    actionsContainer.appendChild(terminalActions);
+                        runBtn.addEventListener('click', () => {
+                            vscode.postMessage({ command: 'runInTerminal', text: code });
+                            runBtn.innerHTML = 'STARTED!';
+                            runBtn.classList.replace('bg-pink-900/80', 'bg-green-600/90');
+                            rejectCmdBtn.classList.add('hidden');
+                            setTimeout(() => { 
+                                runBtn.innerHTML = '▶ RUN'; 
+                                runBtn.classList.replace('bg-green-600/90', 'bg-pink-900/80');
+                                rejectCmdBtn.classList.remove('hidden');
+                            }, 2000);
+                        });
+
+                        rejectCmdBtn.addEventListener('click', () => {
+                            pre.style.opacity = '0.5';
+                            terminalActions.innerHTML = '<span class="text-[9px] font-mono text-red-400 border border-red-500/30 bg-red-900/20 px-2 rounded">COMMAND REJECTED</span>';
+                        });
+                        
+                        terminalActions.appendChild(runBtn);
+                        terminalActions.appendChild(rejectCmdBtn);
+                        actionsContainer.appendChild(terminalActions);
+                    }
                 }
 
                 const copyBtn = document.createElement('button');
@@ -941,12 +1011,7 @@
             if (openThinkMatch) {
                 displayString = displayString.replace(/<think>[\s\S]*$/i, '<em class="text-slate-500 animate-pulse text-[10px]">&gt; Analyzing...</em>\n');
             }
-            
-            // Format run_command for display
-            displayString = displayString.replace(/<run_command>\s*([\s\S]*?)\s*<\/run_command>/gi, (match, cmd) => {
-                 return `\n\n> **🛠️ Terminal Command:** \`${cmd.trim()}\`\n*(Execution options available below)*\n\n`;
-            });
-            
+            // Removed run_command logic; standard bash blocks are used instead
             currentStreamTextDiv.innerHTML = marked.parse(displayString);
             
             // Add copy buttons in real-time as blocks are rendered (DELETED, done at end)
@@ -1024,39 +1089,7 @@
                     currentStreamBubbleDiv.appendChild(actionContainerDiv);
                 }
 
-                // Extract and render terminal commands
-                const cmdRegex = /<run_command>\s*([\s\S]*?)\s*<\/run_command>/gi;
-                let cmdMatch;
-                const commands = [];
-                while ((cmdMatch = cmdRegex.exec(currentStreamText)) !== null) {
-                    commands.push(cmdMatch[1].trim());
-                }
-
-                if (commands.length > 0) {
-                    const actionContainerDiv = document.createElement('div');
-                    actionContainerDiv.className = 'flex flex-col gap-1.5 pt-3 border-t border-cyber-border/45 mt-2';
-                    commands.forEach(cmd => {
-                        const btnContainer = document.createElement('div');
-                        btnContainer.className = 'flex gap-2 w-full';
-                        
-                        const btn = document.createElement('button');
-                        btn.innerHTML = `▶️ Execute Command: <span class="font-mono">${cmd.substring(0,30)}${cmd.length>30?'...':''}</span>`;
-                        btn.className = "apply-diff-btn flex-1 bg-gradient-to-r from-purple-600/80 to-pink-600/80 hover:from-purple-500 hover:to-pink-500 text-white text-[10px] font-bold py-1.5 px-3 rounded uppercase tracking-wider transition-all cursor-pointer shadow-[0_0_8px_rgba(255,0,255,0.2)]";
-                        
-                        btn.addEventListener('click', () => {
-                            vscode.postMessage({ command: 'executeCommand', cmd: cmd, autoReply: false });
-                            btn.innerHTML = '⏳ Executing...';
-                            btn.disabled = true;
-                            btn.classList.add('opacity-50', 'cursor-not-allowed');
-                        });
-                        
-                        btnContainer.appendChild(btn);
-                        actionContainerDiv.appendChild(btnContainer);
-                        
-                        // Commands are manual only, no auto-execution loops
-                    });
-                    currentStreamBubbleDiv.appendChild(actionContainerDiv);
-                }
+                // Commands are now handled via standard bash markdown blocks (handled by addCopyButtonsToCodeBlocks)
 
                 if (usage) {
                     const usageDiv = document.createElement('div');
