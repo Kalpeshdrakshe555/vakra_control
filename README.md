@@ -13,7 +13,7 @@
 
 Ultra Light AI is a powerful coding assistant extension designed from the ground up to be ultra-lightweight and highly performant. Built entirely in Vanilla TypeScript (zero heavy frameworks) with a sub-100MB memory footprint, it acts as an autonomous 10x pair-programmer right inside your IDE. 
 
-We've bridged the gap between VS Code and premium AI IDEs like Cursor by introducing 7 industry-leading features directly into your environment!
+We've bridged the gap between VS Code and premium AI IDEs like Cursor by introducing a revolutionary **Dual-Brain Architecture** and 7 industry-leading features directly into your environment!
 
 ---
 
@@ -30,29 +30,37 @@ Just click the ⚙️ Gear Icon, select **Local Provider**, enter your model nam
 
 ---
 
-## 🚀🔥 7 New "Cursor-Killer" Agentic Features
+## 🚀🔥 9 New "Cursor-Killer" Agentic Features
 
 We've heavily upgraded the core engine. You now have access to:
 
-### 1. ⌨️ Ctrl+K (Inline Edit)
-Highlight any code, press `Ctrl+K` (`Cmd+K` on Mac), and type a quick instruction (e.g., *"Make this async"*). The AI will surgically replace the selected text in real-time, right in your editor. No need to open the sidebar!
+### 1. 🧠 Dual-Brain Architecture (Advanced Mode)
+Toggle **"🚀 Advanced (Dual-Brain)"** mode to activate our revolutionary "Scout & Sniper" pattern. 
+- **Brain 2 (The Scout):** A fast, lightweight model (e.g., Llama 3.1 8B on Groq) intercepts your prompt, silently explores your workspace, reads `ARCHITECTURE.md`, uses BM25 semantic search, and gathers the exact files needed.
+- **Brain 1 (The Executor):** A heavy-duty reasoning model (e.g., Gemini Pro) receives the pre-fetched context from the Scout and writes 100% accurate, un-hallucinated code.
 
-### 2. 🤖 Agent Mode (Autonomous Execution Loops)
-Toggle **"🤖 Agent Mode"** in the chat footer to unleash a Devin-style autonomous agent! When the AI needs to run tests or debug, it will generate a terminal command. The extension will automatically execute it in the background and feed the stdout/stderr directly back to the AI. The AI will autonomously loop, debug, and fix your code until the task is complete!
+### 2. 📝 Background AST Indexing (Zero Maintenance)
+Forget about manually managing context! When you save files in VS Code, the extension tracks your edits. After 30 seconds of inactivity, the **Support Scout** spins up in the background and automatically writes/updates an `ARCHITECTURE.md` file in your project root. Your system learns and remembers your project structure silently.
 
-### 3. 👁️ Composer / Multi-File Unified Diff Preview
+### 3. ⌨️ Ctrl+K (Inline Edit)
+Highlight any code, press `Ctrl+K` (Windows/Linux) or `Cmd+K` (Mac), and type a quick instruction (e.g., *"Make this async"*). The AI will surgically replace the selected text in real-time, right in your editor. No need to open the sidebar!
+
+### 4. 🏢 Architect Mode (Scaffolding Agent)
+Tick **"🏢 Architect"** when asking for a large project (like "Build a Django App"). The AI will switch to "Scaffolding Mode," providing only CLI terminal commands to set up the project. Once you run them, it will guide you step-by-step, generating code files one by one to avoid overwhelming your token limit.
+
+### 5. 👁️ Composer / Multi-File Unified Diff Preview
 Before applying any AI code changes, click the **"👁️ Preview"** button. The extension will generate a temporary file and open VS Code's native Split-Screen Diff View, allowing you to review exactly what the AI changed before injecting it into your live files!
 
-### 4. 🧠 True Codebase Context (Native AST/LSP Integration)
+### 6. 🧠 True Codebase Context (Native AST/LSP Integration)
 Basic text search is dead. Ultra Light AI now hooks directly into VS Code's Language Server Protocol (`executeWorkspaceSymbolProvider`). When you type a class or function name in your prompt, the AI natively locates its definition across your entire workspace and extracts the exact surrounding code—providing pixel-perfect codebase awareness without blowing up your token budget!
 
-### 5. 🚨 Terminal Error Auto-Catch
+### 7. 🚨 Terminal Error Auto-Catch
 Did your compilation or tests fail? No need to copy-paste the error! Run the command **`Ultra Light AI: Fix Terminal Error`** (via Command Palette or Terminal Context Menu). The extension will instantly capture the last 60 lines of your active terminal and send it to the AI for debugging.
 
-### 6. 📜 Project-Specific Rules (`.agentrules`)
+### 8. 📜 Project-Specific Rules (`.agentrules`)
 Create a `.agentrules` (or `.cursorrules`) file in the root of your workspace. Define your architectural guidelines (e.g., *"Always use TailwindCSS, never use classes"*). The AI will silently ingest these rules before every generation to ensure absolute consistency.
 
-### 7. 👻 Ghost Text Autocomplete (FIM)
+### 9. 👻 Ghost Text Autocomplete (FIM)
 Experience Copilot-style inline ghost text as you type. Pause for a split second, and the AI will predict your next lines of code based on the surrounding context.
 
 ---
@@ -80,29 +88,51 @@ When you configure your API Keys, Tokens, or Model via the **⚙️ Gear Icon**,
 
 ---
 
-## 🛠️ Step-by-Step Setup Guide (Beginner Friendly)
+## 🛠️ Step-by-Step Setup Guide (Windows & Mac)
 
-Setting up Ultra Light AI is extremely easy, whether you want to use the cloud (Gemini) or a free local model (Ollama).
+Setting up Ultra Light AI is extremely easy. Whether you are on **Windows** or **macOS**, follow these steps to get started with Cloud APIs or 100% Local Offline models.
 
-### Option A: Quick Start (Cloud AI)
-1. **Get an API Key:** Go to [Google AI Studio](https://aistudio.google.com/) and get a free Gemini API key.
-2. **Open the Extension:** After installing the extension, press `Ctrl+Shift+A` (or click the robot icon) to open the AI Sidebar.
+### Option A: Quick Start (Free Cloud AI - Recommended for Low-End PCs)
+This is the best option if you have 8GB RAM or less, as it uses 0% of your PC's resources!
+1. **Get an API Key:** Go to Google AI Studio and get a free Gemini API key (or use Groq for fast Llama models).
+2. **Open the Extension:** After installing the extension, press `Ctrl+Shift+A` (Windows/Linux) or `Cmd+Shift+A` (Mac) to open the AI Sidebar.
 3. **Configure the Key:** 
    - Click the **⚙️ Gear Icon** in the top right of the chat panel.
-   - Select **Cloud (Gemini)** as the AI Provider.
+   - Under **Brain 1: Main Executor**, select **Cloud (Gemini / Groq / OpenAI)**.
+   - Enter your preferred model (e.g., `gemini-2.5-flash`).
    - Paste your API key into the input box.
-   - Click **Save Configuration**.
-4. **Reload:** Press `F5` or `Ctrl+Shift+P` -> `Developer: Reload Window`. You're ready to code!
+   - *(Optional)* Do the same for **Brain 2: Supporting Scout** to enable Advanced Mode.
+   - Click **Save Config**.
+4. **Reload:** Press `F5` or `Ctrl+Shift+P` (`Cmd+Shift+P` on Mac) -> type `Developer: Reload Window`. You're ready to code!
 
-### Option B: 100% Free & Private (Local Ollama)
-1. **Install Ollama:** Download and install [Ollama](https://ollama.com/) on your PC.
-2. **Download a Model:** Open your terminal and run `ollama run qwen2.5-coder:1.5b` (or any other model like `llama3`). Wait for it to download.
+### Option B: 100% Free & Private (Local Ollama - Recommended for 16GB+ RAM)
+1. **Install Ollama:** 
+   - **Windows:** Download the `.exe` installer from ollama.com and run it.
+   - **Mac:** Download the macOS `.zip` from ollama.com or run `brew install ollama` via terminal.
+2. **Download a Model:** Open your terminal (Command Prompt/PowerShell on Windows, or Terminal on Mac) and run:
+   - For fast coding: `ollama run qwen2.5-coder:3b`
+   - For deep reasoning: `ollama run qwen2.5-coder:7b`
+   Wait for it to download. Make sure the Ollama app is running in the background (check your system tray on Windows, or menu bar on Mac).
 3. **Configure the Extension:**
    - Click the **⚙️ Gear Icon** in the chat panel.
-   - Select **Local Offline (Ollama / LM Studio)** as the AI Provider.
+   - Select **Local Offline (Ollama / LM Studio)** for your preferred Brain.
    - Set the Local API Endpoint to `http://127.0.0.1:11434`.
-   - In the Active Model dropdown, choose **Custom Model...** and type the exact name of the model you downloaded (e.g., `qwen2.5-coder:1.5b`).
-   - Click **Save Configuration** and reload VS Code.
+   - Type the exact name of the model you downloaded (e.g., `qwen2.5-coder:3b`).
+   - Click **Save Config** and reload VS Code.
+
+---
+
+## 🧠 Model Selection Guide (Set Your Expectations)
+
+Your AI's intelligence depends entirely on the model you choose. **Agentic features (like Architect Mode or multi-file edits) require high reasoning capabilities.**
+
+| Model Tier | Best For | Hardware Needed | Recommended Models | Expectations |
+| :--- | :--- | :--- | :--- | :--- |
+| **Cloud APIs** (Free/Paid) | Full apps, complex debugging, Architect Mode | Any PC (0% usage) | `gemini-2.5-flash`, `llama-3.3-70b` (Groq) | **Perfect.** Follows complex instructions flawlessly, huge memory, rarely hallucinates. |
+| **Large Local** (7B-14B) | File refactoring, bug fixing, local logic | 16GB+ RAM / Mac M-Series | `qwen2.5-coder:7b`, `llama-3.1-8b` | **Great.** Handles most tasks well. Might slightly struggle with massive multi-file Architect tasks. |
+| **Small Local** (1.5B-3B) | Autocomplete, simple snippets, short questions | 8GB RAM (Low-end PC) | `qwen2.5-coder:3b`, `qwen2.5-coder:1.5b` | **Basic.** *Do NOT expect these to build full apps or follow strict agentic rules.* Good for fast edits, but will hallucinate or forget instructions if given too much context. |
+
+> **💡 Pro-Tip for Low-End PCs (8GB RAM):** Do *not* try to run local models for heavy agentic tasks. Use the free **Gemini API** or **Groq API** (Cloud) to turn your laptop into an AI supercomputer without freezing your RAM!
 
 ---
 

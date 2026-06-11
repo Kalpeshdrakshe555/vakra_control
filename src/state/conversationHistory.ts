@@ -181,39 +181,45 @@ export class ConversationHistory {
         const session = this.activeSession;
         if (!session) return false;
         
+        // Find the index of the user message we want to roll back TO (exclusive)
+        // We want to undo everything FROM this message onwards
         const index = session.messages.findIndex(m => m.timestamp === timestamp);
         if (index !== -1) {
-            // Restore files from all messages that are being deleted
-            const deletedMessages = session.messages.slice(index + 1);
+            const deletedMessages = session.messages.slice(index);
             
-            // Revert files in reverse chronological order
-            for (let i = deletedMessages.length - 1; i >= 0; i--) {
-                const backups = deletedMessages[i].fileBackups;
-                if (backups && backups.length > 0) {
-                    for (const backup of backups) {
-                        try {
-                            if (backup.content === null) {
-                                // File didn't exist, delete it
-                                if (fs.existsSync(backup.filepath)) {
-                                    fs.unlinkSync(backup.filepath);
-                                }
-                            } else {
-                                // Restore original content
-                                fs.writeFileSync(backup.filepath, backup.content, 'utf8');
-                            }
-                        } catch (e) {
-                            console.error(`Failed to restore backup for ${backup.filepath}`);
-                        }
-                    }
-                }
-            }
             
-            session.messages = session.messages.slice(0, index + 1);
+            // Trim history up to (but not including) the rolled-back message
+            session.messages = session.messages.slice(0, index);
             session.updatedAt = Date.now();
             this.saveToFile();
             return true;
         }
         return false;
+    }
+
+    public compressHistoryWithSummary(summary: string, keepRecentTurns: number): void {
+        const session = this.activeSession;
+        if (!session || session.messages.length <= keepRecentTurns * 2) return;
+        
+        const messagesToKeep = session.messages.slice(-(keepRecentTurns * 2));
+        
+        session.messages = [
+            {
+                role: 'user',
+                text: 'Here is a summary of our earlier conversation:',
+                timestamp: Date.now() - 1000
+            },
+            {
+                role: 'model',
+                text: summary,
+                timestamp: Date.now() - 500,
+                fileBackups: []
+            },
+            ...messagesToKeep
+        ];
+        
+        session.updatedAt = Date.now();
+        this.saveToFile();
     }
 
     public addFileBackupToLatestMessage(filepath: string, content: string | null): void {

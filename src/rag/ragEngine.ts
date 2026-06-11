@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { BM25, TokenizedChunk, tokenizeCode } from './bm25';
-import { chunkFile, CodeChunk } from './codeIndexer';
+import { BM25 } from './bm25';
+import { chunkCodeFile, CodeChunk } from './codeIndexer';
 
 export class RagEngine {
     private workspaceRoot: string;
@@ -26,7 +26,6 @@ export class RagEngine {
             );
 
             this.chunks = [];
-            const tokenizedChunks: TokenizedChunk[] = [];
 
             for (const file of files) {
                 try {
@@ -34,15 +33,10 @@ export class RagEngine {
                     // Skip huge files
                     if (content.length > 100000) continue;
 
-                    const fileChunks = chunkFile(path.relative(this.workspaceRoot, file.fsPath), content);
+                    const fileChunks = chunkCodeFile(path.relative(this.workspaceRoot, file.fsPath), content);
                     
                     for (const chunk of fileChunks) {
                         this.chunks.push(chunk);
-                        tokenizedChunks.push({
-                            id: chunk.id,
-                            tokens: chunk.tokens,
-                            contentLength: chunk.content.length
-                        });
                     }
                 } catch (e) {
                     // console.warn(`Failed to index file ${file.fsPath}`, e);
@@ -50,7 +44,9 @@ export class RagEngine {
             }
 
             this.bm25 = new BM25();
-            this.bm25.addChunks(tokenizedChunks);
+            for (const chunk of this.chunks) {
+                this.bm25.addDocument(chunk.id, chunk.content);
+            }
             this.indexReady = true;
             
             console.log(`[RAG] Index built successfully: ${files.length} files, ${this.chunks.length} chunks.`);
@@ -67,12 +63,16 @@ export class RagEngine {
             return [];
         }
 
-        const queryTokens = tokenizeCode(query);
+        const queryTokens = this.bm25.tokenize(query);
         if (queryTokens.length === 0) return [];
 
-        const results = this.bm25.search(queryTokens, topK);
+        const scoredChunks = this.chunks.map(chunk => ({
+            chunk,
+            score: this.bm25.getScore(queryTokens, chunk.id)
+        })).filter(result => result.score > 0);
         
-        return results.map(r => this.chunks.find(c => c.id === r.id)).filter(Boolean) as CodeChunk[];
+        scoredChunks.sort((a, b) => b.score - a.score);
+        return scoredChunks.slice(0, topK).map(result => result.chunk);
     }
     
     /**
@@ -90,18 +90,14 @@ export class RagEngine {
             const content = await fs.promises.readFile(filePath, 'utf8');
             if (content.length > 100000) return;
             
-            const newChunks = chunkFile(relativePath, content);
+            const newChunks = chunkCodeFile(relativePath, content);
             this.chunks.push(...newChunks);
             
             // Rebuild BM25 index (can be optimized later for real incremental updates)
-            const tokenizedChunks: TokenizedChunk[] = this.chunks.map(chunk => ({
-                id: chunk.id,
-                tokens: chunk.tokens,
-                contentLength: chunk.content.length
-            }));
-            
             this.bm25 = new BM25();
-            this.bm25.addChunks(tokenizedChunks);
+            for (const chunk of this.chunks) {
+                this.bm25.addDocument(chunk.id, chunk.content);
+            }
         } catch (e) {
             // Ignore missing files or unreadable files
         }

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import * as os from 'os';
 
 /**
  * Loads a .env file from the specified path and returns parsed key-value pairs.
@@ -36,7 +37,7 @@ function loadEnvFile(envPath: string): Record<string, string> {
 }
 
 /**
- * Loads the agent configuration object from the workspace if it exists.
+ * Loads the agent configuration object from the workspace.
  */
 export function getAgentConfig(workspaceRoot?: string): AgentConfig | null {
     if (!workspaceRoot) {
@@ -45,18 +46,30 @@ export function getAgentConfig(workspaceRoot?: string): AgentConfig | null {
             workspaceRoot = workspaceFolders[0].uri.fsPath;
         }
     }
+    
+    // 1. Load Global Config (Secure, cross-project, prevents GitHub leaks)
+    const globalConfigPath = path.join(os.homedir(), '.ultra-light-ai', 'config.json');
+    let config: AgentConfig | null = null;
+    
+    if (fs.existsSync(globalConfigPath)) {
+        try {
+            config = JSON.parse(fs.readFileSync(globalConfigPath, 'utf8')) as AgentConfig;
+        } catch (error) { console.error('Failed to parse global config:', error); }
+    }
+
+    // 2. Load Workspace Override (if user manually created one for a specific project)
     if (workspaceRoot) {
-        const configPath = path.join(workspaceRoot, '.agent-config.json');
-        if (fs.existsSync(configPath)) {
+        const localConfigPath = path.join(workspaceRoot, '.vscode', 'ultra-light-ai.json');
+        const legacyConfigPath = path.join(workspaceRoot, '.agent-config.json');
+        const workspacePath = fs.existsSync(localConfigPath) ? localConfigPath : (fs.existsSync(legacyConfigPath) ? legacyConfigPath : null);
+        if (workspacePath) {
             try {
-                const content = fs.readFileSync(configPath, 'utf8');
-                return JSON.parse(content) as AgentConfig;
-            } catch (error) {
-                console.error('Failed to parse .agent-config.json:', error);
-            }
+                const workspaceConfig = JSON.parse(fs.readFileSync(workspacePath, 'utf8')) as AgentConfig;
+                config = config ? { ...config, ...workspaceConfig } : workspaceConfig;
+            } catch (error) { console.error('Failed to parse workspace config:', error); }
         }
     }
-    return null;
+    return config;
 }
 
 /**
@@ -184,47 +197,64 @@ export const CONFIG = {
     CIRCUIT_BREAKER_DURATION_MS: 15 * 60 * 1000,
 } as const;
 
+export interface BrainConfig {
+    providerType: 'cloud' | 'local';
+    model: string;
+    apiKey: string;
+    endpoint: string;
+}
+
 export interface AgentConfig {
-    providers: {
-        cloud: { model: string; apiKey: string; rpmLimit: number; timeoutSeconds?: number };
+    // Legacy fields for backward compatibility
+    providers?: {
+        cloud?: { model: string; apiKey: string; rpmLimit: number; timeoutSeconds?: number };
         local?: { model: string; endpoint: string };
     };
-    activeProvider: 'cloud' | 'local';
-    contextLimits: { maxTokens: number; historyLength: number };
+    activeProvider?: 'cloud' | 'local';
+
+    // New Dual-Brain Architecture
+    mainBrain?: BrainConfig;
+    supportBrain?: BrainConfig;
+    advancedModeEnabled?: boolean;
+
+    contextLimits: { 
+        maxTokens?: number; 
+        maxOutputTokens?: number; 
+        maxContextTokens?: number; 
+        historyLength: number 
+    };
     systemInstructions: string;
 }
 
 /**
- * Generates an .agent-config.json file at the root of the workspace if it doesn't exist.
+ * Generates an .agent-config.json file at the workspace if it doesn't exist.
  */
 export function ensureAgentConfig(workspaceRoot: string): void {
-    const configPath = path.join(workspaceRoot, '.agent-config.json');
+    // Create it globally to protect API keys from GitHub and share across projects
+    const globalDir = path.join(os.homedir(), '.ultra-light-ai');
+    if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true });
+    const configPath = path.join(globalDir, 'config.json');
+
     if (!fs.existsSync(configPath)) {
         const defaultConfig: AgentConfig = {
-            providers: {
-                cloud: { 
-                    model: "gemma-4-31b-it", 
-                    apiKey: "", 
-                    rpmLimit: 15,
-                    timeoutSeconds: 60
-                }
+            mainBrain: {
+                providerType: "cloud",
+                model: "gemini-1.5-pro",
+                apiKey: "",
+                endpoint: "https://generativelanguage.googleapis.com/v1beta/models/"
             },
-            activeProvider: "cloud",
+            supportBrain: {
+                providerType: "cloud",
+                model: "llama-3.1-8b-instant",
+                apiKey: "",
+                endpoint: "https://api.groq.com/openai"
+            },
+            advancedModeEnabled: false, // Default to normal mode until user configures supportBrain
             contextLimits: { maxTokens: 8192, historyLength: 10 },
             systemInstructions: "You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks."
         };
         try {
             fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), 'utf8');
-            
-            // Auto-add to .gitignore
-            const gitignorePath = path.join(workspaceRoot, '.gitignore');
-            let gitignoreContent = '';
-            if (fs.existsSync(gitignorePath)) {
-                gitignoreContent = fs.readFileSync(gitignorePath, 'utf8');
-            }
-            if (!gitignoreContent.includes('.agent-config.json')) {
-                fs.appendFileSync(gitignorePath, '\n# Ultra Light AI\n.agent-config.json\n.chat-history.json\n');
-            }
         } catch (error) {
             console.error('Failed to generate agent configuration file:', error);
         }

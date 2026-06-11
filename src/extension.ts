@@ -12,9 +12,11 @@ import { AiCodeActionProvider, registerCodeActionCommands } from './providers/co
 import { AiHoverProvider } from './providers/hoverProvider';
 import { ensureAgentConfig, getGeminiApiKeys, getGeminiModel, getGeminiTimeout } from './config';
 import { RagEngine } from './rag/ragEngine';
+import { BackgroundIndexer } from './indexer/backgroundIndexer';
 
 // Global reference for the RAG engine
 export let globalRagEngine: RagEngine | null = null;
+export let globalBackgroundIndexer: BackgroundIndexer | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Ultra Light AI');
@@ -41,22 +43,34 @@ export function activate(context: vscode.ExtensionContext) {
     // Instantiate Real API Client
     const geminiClient = new GeminiCloudClient(keys, model, timeout);
 
-    // Instantiate Dummy/Mock API Client
-    const dummyCloud = new DummyCloudClient();
-
-    // Instantiate default fallback engine router & operator
+    // Instantiate default fallback engine router
     const defaultRouter = new EngineRouter([geminiClient], stateMachine);
-    const defaultOperator = new SequentialOperator(stateMachine, defaultRouter);
 
     // Initialize RAG Engine
     globalRagEngine = new RagEngine(workspaceRoot);
-    globalRagEngine.buildIndex();
+    
+    // BUG FIX: Run in background with a slight delay to prevent Extension Host from hanging on large projects
+    setTimeout(() => {
+        globalRagEngine?.buildIndex().catch(err => outputChannel.appendLine(`RAG Indexing Error: ${err}`));
+    }, 5000); 
 
     // Setup file watcher for RAG
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
     watcher.onDidChange(uri => globalRagEngine?.updateFile(uri.fsPath));
     watcher.onDidCreate(uri => globalRagEngine?.updateFile(uri.fsPath));
     watcher.onDidDelete(uri => globalRagEngine?.updateFile(uri.fsPath));
+
+    // Initialize Background AST Indexer
+    globalBackgroundIndexer = new BackgroundIndexer(workspaceRoot);
+    globalBackgroundIndexer.initialize();
+    
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument((document) => {
+            if (document.uri.scheme === 'file') {
+                globalBackgroundIndexer?.onFileChanged(document.uri.fsPath);
+            }
+        })
+    );
 
     // ──────────────────────────────────────────────────────────────────────
     // STATUS BAR ITEM
@@ -71,105 +85,7 @@ export function activate(context: vscode.ExtensionContext) {
     // ──────────────────────────────────────────────────────────────────────
     // SIDEBAR PROVIDER
     // ──────────────────────────────────────────────────────────────────────
-    const sidebarProvider = new SidebarProvider(context.extensionUri, async (config) => {
-        outputChannel.appendLine(`Start requested from Webview UI: ${JSON.stringify(config)}`);
-
-        sidebarProvider.postMessageToWebview({
-            command: 'statusUpdate',
-            text: 'PROCESSING...'
-        });
-
-        let activeEngines: IEngine[] = [];
-        if (config.model === 'demo-cascade') {
-            activeEngines = [dummyCloud];
-        } else {
-            const currentKeys = getGeminiApiKeys(workspaceRoot, context.extensionUri.fsPath);
-            const currentModel = getGeminiModel(workspaceRoot);
-            const currentTimeout = getGeminiTimeout(workspaceRoot);
-            activeEngines = [new GeminiCloudClient(currentKeys, currentModel, currentTimeout)];
-        }
-
-        const activeRouter = new EngineRouter(activeEngines, stateMachine);
-        const activeOperator = new SequentialOperator(stateMachine, activeRouter, globalRagEngine);
-
-        try {
-            const state = stateMachine.readState();
-            if (config.mode === 'single-file-edit') {
-                const activeEditor = vscode.window.activeTextEditor;
-                if (!activeEditor) {
-                    throw new Error('No active file open in the editor. Open a file first.');
-                }
-                state.fileQueue = [activeEditor.document.uri.fsPath];
-                state.currentFileIndex = 0;
-                stateMachine.writeState(state);
-                outputChannel.appendLine(`Single File Edit Mode: Added ${activeEditor.document.uri.fsPath} to queue.`);
-            } else {
-                if (!state.fileQueue || state.fileQueue.length === 0 || state.currentFileIndex >= state.fileQueue.length) {
-                    outputChannel.appendLine('Scanning workspace for files to add to the queue...');
-                    const files = await vscode.workspace.findFiles(
-                        '**/*',
-                        '{**/node_modules/**,**/dist/**,**/.git/**,**/.vscode/**,**/.ai_state.json,**/package-lock.json,**/package.json,**/tsconfig.json,**/esbuild.js,**/out/**}'
-                    );
-                    
-                    if (files.length === 0) {
-                        throw new Error('No files found in the workspace to process.');
-                    }
-                    
-                    state.fileQueue = files.map(f => f.fsPath);
-                    state.currentFileIndex = 0;
-                    stateMachine.writeState(state);
-                    outputChannel.appendLine(`Populated file queue with ${files.length} files.`);
-                }
-            }
-
-            await activeOperator.runQueue(workspaceRoot, config.searchMode, (file, usage) => {
-                const fileName = path.basename(file);
-                outputChannel.appendLine(`Refactored ${fileName}. Tokens: prompt=${usage?.promptTokens || 0}, completion=${usage?.completionTokens || 0}, total=${usage?.totalTokens || 0}`);
-                sidebarProvider.postMessageToWebview({
-                    command: 'tokenUsage',
-                    file: fileName,
-                    usage: usage
-                });
-            });
-            
-            sidebarProvider.postMessageToWebview({
-                command: 'statusUpdate',
-                text: 'IDLE - Processing completed successfully.'
-            });
-            statusBarItem.text = '$(sparkle) Ultra Light AI';
-            vscode.window.showInformationMessage('Ultra Light AI processing completed successfully.');
-        } catch (error: any) {
-            outputChannel.appendLine(`Queue processing failed: ${error?.message || error}`);
-            
-            sidebarProvider.postMessageToWebview({
-                command: 'statusUpdate',
-                text: `ERROR: ${error?.message || error}`
-            });
-            statusBarItem.text = '$(error) Ultra Light AI';
-            vscode.window.showErrorMessage(`Ultra Light AI processing failed: ${error?.message || error}`);
-        }
-    }, async () => {
-        // Reset action callback
-        try {
-            const state = stateMachine.readState();
-            state.currentFileIndex = 0;
-            state.fileQueue = [];
-            state.status = 'IDLE';
-            state.activeEngine = '';
-            state.circuitBreakers = {};
-            stateMachine.writeState(state);
-
-            outputChannel.appendLine('State machine and circuit breakers reset.');
-            sidebarProvider.postMessageToWebview({
-                command: 'statusUpdate',
-                text: 'IDLE - State reset successfully.'
-            });
-            statusBarItem.text = '$(sparkle) Ultra Light AI';
-            vscode.window.showInformationMessage('Ultra Light AI state and circuit breakers reset.');
-        } catch (error: any) {
-            outputChannel.appendLine(`Failed to reset state: ${error?.message || error}`);
-        }
-    }, globalRagEngine);
+    const sidebarProvider = new SidebarProvider(context.extensionUri, workspaceRoot, globalRagEngine);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('ultra-light-ai-sidebar', sidebarProvider)
@@ -219,66 +135,7 @@ export function activate(context: vscode.ExtensionContext) {
     // COMMANDS
     // ──────────────────────────────────────────────────────────────────────
     
-    // Command: Start Processing (file queue)
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ultra-light-ai.startProcessing', async () => {
-            outputChannel.appendLine('Command "ultra-light-ai.startProcessing" executed from Command Palette.');
-            try {
-                sidebarProvider.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: 'PROCESSING...'
-                });
-                statusBarItem.text = '$(loading~spin) Processing...';
-
-                const state = stateMachine.readState();
-                if (!state.fileQueue || state.fileQueue.length === 0 || state.currentFileIndex >= state.fileQueue.length) {
-                    const files = await vscode.workspace.findFiles(
-                        '**/*',
-                        '**/node_modules/**,**/dist/**,**/.git/**,**/.vscode/**,**/.ai_state.json,**/package-lock.json,**/package.json,**/tsconfig.json,**/esbuild.js,**/out/**'
-                    );
-                    if (files.length > 0) {
-                        state.fileQueue = files.map(f => f.fsPath);
-                        state.currentFileIndex = 0;
-                        stateMachine.writeState(state);
-                    } else {
-                        throw new Error('No files found in the workspace to process.');
-                    }
-                }
-
-                const currentKeys = getGeminiApiKeys(workspaceRoot, context.extensionUri.fsPath);
-                const currentModel = getGeminiModel(workspaceRoot);
-                const currentTimeout = getGeminiTimeout(workspaceRoot);
-                const activeGeminiClient = new GeminiCloudClient(currentKeys, currentModel, currentTimeout);
-                const cmdRouter = new EngineRouter([activeGeminiClient], stateMachine);
-                const cmdOperator = new SequentialOperator(stateMachine, cmdRouter);
-
-                await cmdOperator.runQueue(workspaceRoot, undefined, (file, usage) => {
-                    const fileName = path.basename(file);
-                    outputChannel.appendLine(`Refactored ${fileName}. Tokens: prompt=${usage?.promptTokens || 0}, completion=${usage?.completionTokens || 0}, total=${usage?.totalTokens || 0}`);
-                    sidebarProvider.postMessageToWebview({
-                        command: 'tokenUsage',
-                        file: fileName,
-                        usage: usage
-                    });
-                });
-                
-                sidebarProvider.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: 'IDLE - Processing completed successfully.'
-                });
-                statusBarItem.text = '$(sparkle) Ultra Light AI';
-                vscode.window.showInformationMessage('Ultra Light AI processing completed successfully.');
-            } catch (error: any) {
-                outputChannel.appendLine(`Queue processing failed: ${error?.message || error}`);
-                sidebarProvider.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `ERROR: ${error?.message || error}`
-                });
-                statusBarItem.text = '$(error) Ultra Light AI';
-                vscode.window.showErrorMessage(`Ultra Light AI processing failed: ${error?.message || error}`);
-            }
-        })
-    );
+    // Command: Start Processing (file queue) removed as part of cleanup
 
     // Command: Open Sidebar
     context.subscriptions.push(
@@ -290,7 +147,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: New Chat
     context.subscriptions.push(
         vscode.commands.registerCommand('ultra-light-ai.newChat', async () => {
-            sidebarProvider.postMessageToWebview({ command: 'chatCleared' });
+            sidebarProvider.clearChat();
         })
     );
 

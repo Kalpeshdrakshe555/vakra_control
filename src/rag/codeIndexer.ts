@@ -1,125 +1,66 @@
-import * as path from 'path';
-import { tokenizeCode } from './bm25';
-
 export interface CodeChunk {
     id: string;
     filepath: string;
     startLine: number;
     endLine: number;
-    type: 'function' | 'class' | 'imports' | 'block' | 'generic';
+    type: 'class' | 'function' | 'imports' | 'block';
     name: string;
     content: string;
-    tokens: string[];
 }
 
-/**
- * Parses a file and breaks it into semantic chunks using Regex.
- * This provides zero-dependency AST-like chunking.
- */
-export function chunkFile(filepath: string, content: string): CodeChunk[] {
-    const ext = path.extname(filepath).toLowerCase();
-    
-    if (['.ts', '.js', '.jsx', '.tsx', '.py'].includes(ext)) {
-        return chunkCodeFile(filepath, content);
-    } else {
-        return chunkGenericFile(filepath, content);
-    }
-}
-
-/**
- * Strategy for code files (TS/JS/Python) to extract functions and classes.
- */
-function chunkCodeFile(filepath: string, content: string): CodeChunk[] {
-    const lines = content.split('\n');
+export function chunkCodeFile(filepath: string, content: string): CodeChunk[] {
     const chunks: CodeChunk[] = [];
+    const lines = content.split('\n');
     
-    // Regex to detect function and class boundaries
-    const blockRegex = /^(\s*)(?:export\s+)?(?:async\s+)?(?:function|class|interface|type)\s+([a-zA-Z0-9_]+)/;
-    const arrowFnRegex = /^(\s*)(?:export\s+)?(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s+)?\(/;
+    // Regex for standard function/class boundaries
+    const boundaryRegex = /^(\s*)(export\s+)?(default\s+)?(async\s+)?(function|class)\s+([a-zA-Z0-9_]+)/;
+    const arrowRegex = /^(\s*)(export\s+)?(const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(async\s+)?(\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/;
 
-    let currentChunkType: CodeChunk['type'] = 'imports';
-    let currentChunkName = 'imports';
-    let currentChunkStart = 0;
-    let currentChunkIndent = -1;
+    let currentChunk: CodeChunk | null = null;
+    let importsChunk: CodeChunk = {
+        id: `${filepath}#imports`, filepath, startLine: 0, endLine: 0, type: 'imports', name: 'imports', content: ''
+    };
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+        const match = lines[i].match(boundaryRegex) || lines[i].match(arrowRegex);
         
-        const match = blockRegex.exec(line) || arrowFnRegex.exec(line);
         if (match) {
-            const indent = match[1].length;
-            const name = match[2];
+            const type = match[5] === 'class' ? 'class' : 'function';
+            const name = match[6] || match[4] || 'anonymous';
             
-            // If we are at the root level, start a new chunk
-            if (indent === 0) {
-                // Save previous chunk
-                if (i > currentChunkStart) {
-                    const blockContent = lines.slice(currentChunkStart, i).join('\n').trim();
-                    if (blockContent.length > 10) {
-                        chunks.push({
-                            id: `${filepath}#L${currentChunkStart}-${i - 1}`,
-                            filepath,
-                            startLine: currentChunkStart,
-                            endLine: i - 1,
-                            type: currentChunkType,
-                            name: currentChunkName,
-                            content: blockContent,
-                            tokens: tokenizeCode(`${filepath} ${currentChunkName} ${blockContent}`)
-                        });
-                    }
-                }
-
-                currentChunkStart = i;
-                currentChunkName = name;
-                currentChunkType = line.includes('class') || line.includes('interface') ? 'class' : 'function';
+            if (currentChunk) {
+                currentChunk.endLine = i - 1;
+                currentChunk.content = lines.slice(currentChunk.startLine, currentChunk.endLine + 1).join('\n');
+                chunks.push(currentChunk);
+            } else {
+                importsChunk.endLine = Math.max(0, i - 1);
+                importsChunk.content = lines.slice(0, i).join('\n');
+                if (importsChunk.content.trim()) chunks.push(importsChunk);
             }
+            
+            currentChunk = {
+                id: `${filepath}#${name}`, filepath, startLine: i, endLine: lines.length - 1, type, name, content: ''
+            };
         }
     }
-
-    // Save final chunk
-    if (lines.length > currentChunkStart) {
-        const blockContent = lines.slice(currentChunkStart).join('\n').trim();
-        if (blockContent.length > 10) {
+    
+    if (currentChunk) {
+        currentChunk.content = lines.slice(currentChunk.startLine).join('\n');
+        chunks.push(currentChunk);
+    } else if (chunks.length === 0) {
+        // Fallback for files without clear functions (like CSS, JSON or pure scripts)
+        for (let i = 0; i < lines.length; i += 60) {
+            const end = Math.min(i + 59, lines.length - 1);
             chunks.push({
-                id: `${filepath}#L${currentChunkStart}-${lines.length}`,
+                id: `${filepath}#L${i}-${end}`,
                 filepath,
-                startLine: currentChunkStart,
-                endLine: lines.length,
-                type: currentChunkType,
-                name: currentChunkName,
-                content: blockContent,
-                tokens: tokenizeCode(`${filepath} ${currentChunkName} ${blockContent}`)
+                startLine: i,
+                endLine: end,
+                type: 'block',
+                name: `Lines ${i}-${end}`,
+                content: lines.slice(i, end + 1).join('\n')
             });
         }
     }
-
-    return chunks;
-}
-
-/**
- * Strategy for generic files (JSON, Markdown, CSS) - simple line-based chunking
- */
-function chunkGenericFile(filepath: string, content: string, linesPerChunk: number = 100, overlap: number = 20): CodeChunk[] {
-    const lines = content.split('\n');
-    const chunks: CodeChunk[] = [];
-    
-    if (lines.length === 0) return chunks;
-
-    for (let i = 0; i < lines.length; i += (linesPerChunk - overlap)) {
-        const blockLines = lines.slice(i, i + linesPerChunk);
-        const blockContent = blockLines.join('\n');
-        chunks.push({
-            id: `${filepath}#L${i}-${i + blockLines.length}`,
-            filepath,
-            startLine: i,
-            endLine: i + blockLines.length,
-            type: 'generic',
-            name: `block_${Math.floor(i/(linesPerChunk-overlap)) + 1}`,
-            content: blockContent,
-            tokens: tokenizeCode(`${filepath} ${blockContent}`)
-        });
-        if (i + linesPerChunk >= lines.length) break;
-    }
-    
     return chunks;
 }

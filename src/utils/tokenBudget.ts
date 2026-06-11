@@ -1,97 +1,69 @@
+export const CHARS_PER_TOKEN = 4;
+
+export function estimateTokens(text: string): number {
+    if (!text) return 0;
+    return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+export function truncateToTokens(text: string, maxTokens: number): string {
+    const maxChars = maxTokens * CHARS_PER_TOKEN;
+    if (text.length <= maxChars) return text;
+    
+    // Smart truncation: keep top 60% (imports, classes, signatures) 
+    // and bottom 40% (exports, recent functions)
+    const topChars = Math.floor(maxChars * 0.6);
+    const bottomChars = Math.floor(maxChars * 0.4);
+    
+    const top = text.substring(0, topChars);
+    const bottom = text.substring(text.length - bottomChars);
+    
+    return `${top}\n\n... [CONTENT TRUNCATED TO SAVE TOKEN BUDGET] ...\n\n${bottom}`;
+}
+
 export interface ContextSource {
     name: string;
     content: string;
-    priority: number;
+    priority: number; // 1 = lowest, 10 = highest
 }
 
-export interface BudgetAllocation {
+export interface AllocatedSource {
     name: string;
     content: string;
     tokens: number;
 }
 
-/**
- * Estimates the token count for a given text.
- * Heuristic: 1 token ≈ 4 characters.
- */
-export function estimateTokens(text: string): number {
-    if (!text) return 0;
-    return Math.ceil(text.length / 4);
-}
+export function allocateBudget(totalBudgetTokens: number, sources: ContextSource[]): AllocatedSource[] {
+    // Sort sources by priority descending (highest first)
+    const sorted = [...sources].sort((a, b) => b.priority - a.priority);
+    const result: AllocatedSource[] = [];
+    let remainingTokens = totalBudgetTokens;
 
-/**
- * Smartly truncates text to fit a token budget.
- * Keeps the first N lines and last M lines, omitting the middle.
- */
-export function truncateToTokens(text: string, maxTokens: number): string {
-    const totalTokens = estimateTokens(text);
-    if (totalTokens <= maxTokens) return text;
-
-    const lines = text.split('\n');
-    const avgTokensPerLine = totalTokens / lines.length;
-    
-    // Calculate how many lines we can keep
-    const linesToKeep = Math.floor(maxTokens / avgTokensPerLine);
-    
-    if (linesToKeep <= 5) {
-        // If budget is extremely small, just hard truncate characters
-        return text.substring(0, maxTokens * 4) + '\n... (truncated)';
-    }
-
-    // Allocate 60% budget to top, 40% to bottom
-    const topLinesCount = Math.floor(linesToKeep * 0.6);
-    const bottomLinesCount = linesToKeep - topLinesCount;
-
-    const topPart = lines.slice(0, topLinesCount).join('\n');
-    const bottomPart = lines.slice(lines.length - bottomLinesCount).join('\n');
-    const omittedCount = lines.length - linesToKeep;
-
-    return `${topPart}\n\n... (${omittedCount} lines omitted — ask for specific function if needed) ...\n\n${bottomPart}`;
-}
-
-/**
- * Allocates a token budget proportionally across multiple context sources based on their priority.
- */
-export function allocateBudget(totalBudgetTokens: number, sources: ContextSource[]): BudgetAllocation[] {
-    if (sources.length === 0) return [];
-
-    let remainingBudget = totalBudgetTokens;
-    const allocations: BudgetAllocation[] = [];
-    
-    // Sort sources by priority descending (highest priority first)
-    const sortedSources = [...sources].sort((a, b) => b.priority - a.priority);
-
-    for (const source of sortedSources) {
+    for (const source of sorted) {
+        if (remainingTokens <= 50) {
+            // Not enough budget left, skip remaining lower-priority context
+            break;
+        }
+        
         const sourceTokens = estimateTokens(source.content);
         
-        // If we can fit the whole source, allocate it
-        if (sourceTokens <= remainingBudget) {
-            allocations.push({
+        if (sourceTokens <= remainingTokens) {
+            result.push({
                 name: source.name,
                 content: source.content,
                 tokens: sourceTokens
             });
-            remainingBudget -= sourceTokens;
+            remainingTokens -= sourceTokens;
         } else {
-            // Otherwise, truncate it to the remaining budget
-            if (remainingBudget > 50) { // Only allocate if we have a meaningful chunk left
-                const truncatedContent = truncateToTokens(source.content, remainingBudget);
-                allocations.push({
-                    name: source.name,
-                    content: truncatedContent,
-                    tokens: remainingBudget
-                });
-            } else {
-                allocations.push({
-                    name: source.name,
-                    content: `... (omitted due to context limits) ...`,
-                    tokens: 10
-                });
-            }
-            remainingBudget = 0;
+            // Not enough budget for full file, smartly truncate it
+            const truncated = truncateToTokens(source.content, remainingTokens);
+            result.push({
+                name: source.name,
+                content: truncated,
+                tokens: remainingTokens
+            });
+            remainingTokens = 0; // Budget exhausted
         }
     }
 
-    // Restore original order
-    return sources.map(s => allocations.find(a => a.name === s.name)!);
+    return result;
 }

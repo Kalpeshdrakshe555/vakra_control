@@ -4,20 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ultra Light Agent Chat</title>
-    <!-- Tailwind CSS CDN -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
+                    fontFamily: {
+                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'Menlo', 'monospace'],
+                    },
                     colors: {
                         cyber: {
-                            bg: '#080c14',
-                            panel: '#0e1424',
-                            border: '#1f2e4d',
-                            neonCyan: '#00f0ff',
-                            neonPink: '#ff007f',
-                            neonPurple: '#9d4edd',
+                            bg: '#1C1C1E',          // Apple Dark Mode Bg
+                            panel: '#2C2C2E',       // Apple Panel
+                            border: '#3A3A3C',      // Subtle border
+                            neonCyan: '#0A84FF',    // Apple Blue
+                            neonPink: '#FF453A',    // Apple Red
+                            neonPurple: '#BF5AF2',  // Apple Purple
                         }
                     }
                 }
@@ -31,30 +35,35 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(6px); }
+            from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
         }
         .animate-fade-in {
-            animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            animation: fadeIn 0.3s cubic-bezier(0.25, 1, 0.5, 1) forwards;
         }
-        /* Custom scrollbar formatting for a premium sleek look */
+        /* Premium custom scrollbar */
         ::-webkit-scrollbar {
-            width: 4px;
-            height: 4px;
+            width: 6px;
+            height: 6px;
         }
         ::-webkit-scrollbar-track {
             background: transparent;
         }
         ::-webkit-scrollbar-thumb {
-            background: #152036;
-            border-radius: 9999px;
+            background: #2A3441;
+            border-radius: 10px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: #00f0ff;
+            background: #4B5563;
+            border: 2px solid transparent;
+            background-clip: padding-box;
         }
         .backdrop-blur-cyber {
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            background: rgba(11, 14, 20, 0.75);
         }
         /* Custom styling for markdown elements previously injected by JS */
         .markdown-body pre { background: #000; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0; border: 1px solid #1f2e4d; }
@@ -69,49 +78,90 @@
         .markdown-body think {
             display: block;
             font-size: 0.85em;
-            color: #8892b0;
-            border-left: 2px solid #8892b0;
-            padding-left: 0.5rem;
+            color: #8B949E;
+            border-left: 2px solid #8B949E;
+            padding-left: 0.75rem;
             margin-top: 0.5rem;
             margin-bottom: 0.5rem;
             font-style: italic;
-            background-color: rgba(136, 146, 176, 0.05);
+            background-color: rgba(139, 148, 158, 0.05);
+            border-radius: 0 4px 4px 0;
+        }
+        /* @Mention Popup — fully static CSS, no Tailwind */
+        #at-mention-popup {
+            display: none;
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            right: 0;
+            margin-bottom: 8px;
+            max-height: 220px;
+            background-color: #2C2C2E;
+            border: 1px solid #48484A;
+            border-radius: 12px;
+            overflow-y: auto;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            z-index: 100;
+            flex-direction: column;
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+        }
+        #at-mention-popup.visible {
+            display: flex;
+        }
+        .mention-item {
+            padding: 8px 14px;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            transition: background 0.15s;
+        }
+        .mention-item:last-child { border-bottom: none; }
+        .mention-item:hover { background-color: #3A3A3C; }
+        .mention-item-name {
+            font-weight: 600;
+            color: #F5F5F7;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mention-item-path {
+            color: #8E8E93;
+            font-size: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
     </style>
 </head>
-<body class="bg-cyber-bg text-slate-300 h-screen flex flex-col overflow-hidden font-sans relative">
+<body class="bg-cyber-bg text-slate-300 h-screen flex flex-col overflow-hidden font-sans relative antialiased selection:bg-cyber-neonPurple/30 selection:text-white">
     
-    <!-- Drag & Drop Overlay -->
-    <div id="drop-overlay" class="hidden absolute inset-0 bg-cyber-bg/95 z-50 flex items-center justify-center border-2 border-dashed border-cyber-neonCyan m-2 rounded-xl transition-all">
-        <div class="text-center flex flex-col items-center gap-4">
-            <svg class="w-12 h-12 text-cyber-neonCyan animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-            <p class="text-cyber-neonCyan font-mono text-lg tracking-wider font-bold">Drop Files to Add Context</p>
-            <p class="text-slate-400 text-xs">Files will be added as @file tags</p>
-        </div>
-    </div>
+    <!-- Drag & Drop Overlay Removed because it blocks UI and VS Code Webview blocks file paths -->
     
     <!-- Header -->
-    <header class="flex items-center justify-between px-4 py-3 border-b border-cyber-border/40 bg-cyber-bg/85 backdrop-blur-cyber z-10 shrink-0">
-        <div class="flex items-center gap-2">
-            <div class="flex items-center justify-center w-7 h-7 rounded-lg bg-gradient-to-br from-cyber-neonCyan via-cyber-neonPurple to-cyber-neonPink text-cyber-bg font-extrabold text-sm shadow-[0_0_10px_rgba(157,78,221,0.3)] animate-pulse">
-                ⚡
+    <header class="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-cyber-bg/70 backdrop-blur-cyber z-10 shrink-0 shadow-lg">
+        <div class="flex items-center gap-3">
+            <div class="flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-br from-cyber-neonCyan to-cyber-neonPurple text-white font-extrabold text-sm shadow-[0_0_15px_rgba(0,209,255,0.4)] animate-pulse">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
             </div>
             <div>
-                <h1 class="text-xs font-bold tracking-wider uppercase bg-gradient-to-r from-cyber-neonCyan via-cyber-neonPurple to-cyber-neonPink bg-clip-text text-transparent">
+                <h1 class="text-xs font-bold tracking-widest uppercase text-white drop-shadow-md">
                     Ultra Light Agent
                 </h1>
-                <p class="text-[8px] text-slate-500 font-mono tracking-widest leading-none">CONVERSATIONAL AI</p>
+                <p class="text-[9px] text-cyber-neonCyan font-mono tracking-widest leading-none mt-0.5 opacity-80">AI DEVELOPER</p>
             </div>
         </div>
-        <div class="flex items-center gap-1.5 shrink-0">
-            <button id="history-btn" class="p-1 hover:bg-slate-700/50 rounded-full text-slate-300 hover:text-cyan-400 transition-colors cursor-pointer" title="Chat History">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <div class="flex items-center gap-2 shrink-0">
+            <button id="history-btn" class="p-1.5 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded-lg text-slate-300 hover:text-white transition-all cursor-pointer shadow-sm" title="Chat History">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             </button>
-            <button id="settings-btn" class="p-1 hover:bg-slate-700/50 rounded-full text-slate-300 hover:text-cyan-400 transition-colors cursor-pointer" title="Settings">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z"></path>
+            <button id="settings-btn" class="p-1.5 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded-lg text-slate-300 hover:text-white transition-all cursor-pointer shadow-sm" title="Settings">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                 </svg>
             </button>
@@ -119,28 +169,29 @@
     </header>
 
     <!-- Chat Messages Viewport -->
-    <main id="chat-container" class="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 scroll-smooth bg-gradient-to-b from-cyber-bg to-cyber-panel/20">
+    <main id="chat-container" class="flex-1 overflow-y-auto p-4 space-y-5 min-h-0 scroll-smooth bg-cyber-bg">
         <!-- AI Welcome Message -->
-        <div class="flex justify-start w-full animate-fade-in">
-            <div class="max-w-[90%] bg-cyber-panel/60 border border-cyber-border/40 text-slate-300 rounded-2xl rounded-tl-none px-3.5 py-3 shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex flex-col gap-2">
-                <p class="text-xs select-text leading-relaxed">
-                    Hello! I'm your Conversational Agent, running fully sandboxed on your local environment. 
-                    I can generate code, apply patches, and refactor files safely.
+        <div class="flex justify-start w-full animate-fade-in mt-2">
+            <div class="max-w-[92%] bg-white/[0.02] border border-white/10 text-slate-300 rounded-2xl rounded-tl-sm px-4 py-3.5 shadow-xl relative overflow-hidden flex flex-col gap-3">
+                <div class="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-cyber-neonCyan via-cyber-neonPurple to-transparent"></div>
+                <p class="text-sm select-text leading-relaxed font-medium">
+                    Hello! I'm your Conversational Agent, running locally in your workspace. 
+                    I can write code, fix bugs, and scaffold full projects.
                 </p>
-                <p class="text-[10px] text-slate-500 font-mono">
-                    Type a prompt or try one of the actions below:
+                <p class="text-[10px] text-slate-400 font-mono">
+                    Type a prompt or try one of these actions:
                 </p>
                 
                 <!-- Quick Suggestion Chips -->
                 <div class="flex flex-wrap gap-2 mt-1">
-                    <button class="suggestion-chip px-2 py-1 bg-slate-800/60 hover:bg-slate-700/60 border border-cyber-border/40 hover:border-cyber-neonCyan/50 rounded-md text-[10px] text-slate-400 hover:text-slate-200 transition-all font-mono cursor-pointer" data-prompt="Refactor active file for performance">
-                        ⚡ Refactor Active File
+                    <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyber-neonCyan/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Refactor active file for performance">
+                        <span class="text-cyber-neonCyan">⚡</span> Refactor File
                     </button>
-                    <button class="suggestion-chip px-2 py-1 bg-slate-800/60 hover:bg-slate-700/60 border border-cyber-border/40 hover:border-cyber-neonPink/50 rounded-md text-[10px] text-slate-400 hover:text-slate-200 transition-all font-mono cursor-pointer" data-prompt="Explain active file architecture">
-                        🔍 Explain File
+                    <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyber-neonPink/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Explain active file architecture">
+                        <span class="text-cyber-neonPink">🔍</span> Explain Logic
                     </button>
-                    <button class="suggestion-chip px-2 py-1 bg-slate-800/60 hover:bg-slate-700/60 border border-cyber-border/40 hover:border-cyber-neonPurple/50 rounded-md text-[10px] text-slate-400 hover:text-slate-200 transition-all font-mono cursor-pointer" data-prompt="Write tests for active file">
-                        🧪 Write Unit Tests
+                    <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyber-neonPurple/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Write tests for active file">
+                        <span class="text-cyber-neonPurple">🧪</span> Generate Tests
                     </button>
                 </div>
             </div>
@@ -149,128 +200,161 @@
 
     <!-- Stop Generating Button Container -->
     <div id="stop-container" class="absolute bottom-[100px] left-1/2 transform -translate-x-1/2 z-50 hidden transition-all">
-        <button id="stop-btn" class="bg-cyber-panel/90 hover:bg-cyber-neonPink/20 text-slate-200 border border-cyber-neonPink/50 px-4 py-1.5 rounded-full text-[10px] font-mono tracking-wide shadow-[0_0_12px_rgba(255,0,127,0.3)] flex items-center gap-2 cursor-pointer backdrop-blur-sm">
+        <button id="stop-btn" class="bg-cyber-panel/90 hover:bg-cyber-border text-slate-200 border border-cyber-neonPink/50 px-4 py-1.5 rounded-full text-xs font-medium shadow-md flex items-center gap-2 cursor-pointer backdrop-blur-sm">
             <svg class="w-3.5 h-3.5 text-cyber-neonPink" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 002 0V8a1 1 0 00-1-1zm4 0a1 1 0 00-1 1v4a1 1 0 002 0V8a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg> Stop Generating
         </button>
     </div>
 
     <!-- Chat Input and Footer -->
-    <footer class="p-3 border-t border-cyber-border/40 bg-cyber-bg/95 backdrop-blur-cyber shrink-0">
-        <div class="relative flex items-end gap-2 bg-cyber-panel/85 border border-cyber-border/80 rounded-xl px-3 py-2 focus-within:border-cyber-neonCyan/80 focus-within:shadow-[0_0_12px_rgba(0,240,255,0.12)] transition-all duration-200">
+    <footer class="p-3 border-t border-white/5 bg-cyber-bg/70 backdrop-blur-cyber shrink-0 relative">
+        <!-- @ Mention Autocomplete Popup (fully static CSS — no Tailwind) -->
+        <div id="at-mention-popup">
+            <!-- Files injected here via JS -->
+        </div>
+        
+        <div class="relative flex items-end gap-2 bg-cyber-panel border border-white/10 rounded-2xl px-3 py-2.5 focus-within:border-cyber-neonCyan/50 focus-within:shadow-[0_0_15px_rgba(0,209,255,0.15)] focus-within:bg-[#1A212D] transition-all duration-300">
+            <button 
+                id="add-file-btn" 
+                class="flex items-center justify-center p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all cursor-pointer shrink-0" 
+                title="Attach Context (Type @ to search files)"
+                onclick="document.getElementById('chat-input').value += '@'; document.getElementById('chat-input').dispatchEvent(new Event('input')); document.getElementById('chat-input').focus();"
+            >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
+            </button>
             <textarea 
                 id="chat-input" 
                 rows="1" 
                 placeholder="Ask your agent or type prompt..." 
-                class="w-full bg-transparent text-slate-100 placeholder-slate-500 border-none outline-none resize-none text-xs leading-relaxed max-h-32 min-h-[1.5rem] py-1"
+                class="w-full bg-transparent text-slate-200 placeholder-slate-500 border-none outline-none resize-none text-sm leading-relaxed max-h-40 min-h-[1.5rem] py-0.5"
                 style="overflow-y: hidden;"
             ></textarea>
             
             <button 
                 id="send-btn" 
-                class="flex items-center justify-center p-1.5 rounded-lg bg-gradient-to-r from-cyber-neonCyan to-cyber-neonPurple text-cyber-bg hover:opacity-90 hover:shadow-[0_0_10px_rgba(0,240,255,0.3)] transition-all transform active:scale-95 cursor-pointer mb-0.5 shrink-0"
+                class="flex items-center justify-center p-2 rounded-xl bg-white/5 hover:bg-gradient-to-r hover:from-cyber-neonCyan hover:to-cyber-neonPurple text-slate-400 hover:text-white border border-white/10 hover:border-transparent hover:shadow-[0_0_15px_rgba(0,209,255,0.4)] transition-all duration-200 transform active:scale-95 cursor-pointer shrink-0"
             >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18"></path>
                 </svg>
             </button>
         </div>
         
         <!-- Status Bar -->
-        <div class="flex items-center justify-between mt-2 px-1 text-[9px] text-slate-500 font-mono">
-            <div class="flex items-center gap-1.5">
-                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
-                <span>Active Model: <span class="text-cyber-neonCyan" id="active-model-badge">gemma-4-31b-it</span></span>
+        <div class="flex items-center justify-between mt-2.5 px-1 text-[10px] text-slate-500 font-mono">
+            <div class="flex items-center gap-1.5 bg-black/20 px-2 py-0.5 rounded-full border border-white/5">
+                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></span>
+                <span class="tracking-wide">Model: <span class="text-cyber-neonCyan font-bold" id="active-model-badge">gemma-4-31b-it</span></span>
             </div>
             <div class="flex items-center gap-2">
-                <label class="flex items-center gap-1 cursor-pointer hover:text-cyber-neonPink transition-colors" title="Include Web Search Results">
-                    <input type="checkbox" id="include-web-search" class="accent-cyber-neonPink">
-                    <span>@web</span>
+                <label class="flex items-center gap-1 cursor-pointer hover:text-cyber-neonPink transition-colors bg-black/20 px-2 py-0.5 rounded-full border border-white/5" title="Include Web Search Results">
+                    <input type="checkbox" id="include-web-search" class="accent-cyber-neonPink w-3 h-3 cursor-pointer">
+                    <span class="tracking-wide">@web</span>
                 </label>
-                <select id="mode-select" class="bg-cyber-panel border border-cyber-border rounded text-[10px] text-slate-300 outline-none p-1 cursor-pointer ml-1">
-                    <option value="chat">💬 Chat Mode</option>
-                    <option value="agent">🤖 Agent Mode</option>
-                    <option value="architect">🏢 Architect Mode</option>
+                <select id="mode-select" class="bg-black/20 border border-white/5 rounded-full text-[10px] text-slate-300 outline-none px-2 py-0.5 cursor-pointer ml-1 hover:border-white/20 transition-colors appearance-none text-center">
+                    <option value="chat">💬 Normal Chat</option>
+                    <option value="architect">🏢 Architect</option>
+                    <option value="advanced">🚀 Advanced (Dual-Brain)</option>
                 </select>
-                <button id="reset-state-btn" class="hover:text-cyber-neonPink transition-colors cursor-pointer uppercase tracking-wider text-[8px] bg-slate-900/50 hover:bg-slate-900 border border-cyber-border/40 hover:border-cyber-neonPink/40 px-1.5 py-0.5 rounded ml-1">
-                    Reset State
+                <button id="reset-state-btn" class="hover:text-white transition-colors cursor-pointer uppercase tracking-widest text-[9px] bg-black/20 hover:bg-cyber-neonPink/20 border border-white/5 hover:border-cyber-neonPink/40 px-2 py-0.5 rounded-full ml-1 flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    Reset
                 </button>
             </div>
         </div>
     </footer>
 
     <!-- Settings View Overlay (Hidden by default) -->
-    <div id="settings-view" class="hidden absolute inset-0 bg-cyber-bg/98 backdrop-blur-cyber z-20 flex flex-col p-4 space-y-4 animate-fade-in overflow-y-auto">
-        <div class="flex items-center justify-between pb-2 border-b border-cyber-border/40 shrink-0">
+    <div id="settings-view" class="hidden absolute inset-0 bg-cyber-bg/95 backdrop-blur-cyber z-20 flex flex-col p-5 space-y-5 animate-fade-in overflow-y-auto">
+        <div class="flex items-center justify-between pb-3 border-b border-white/10 shrink-0">
             <div class="flex items-center gap-2">
                 <span class="text-cyber-neonCyan text-sm">⚙️</span>
-                <h2 class="text-xs font-bold tracking-wider uppercase bg-gradient-to-r from-cyber-neonCyan via-cyber-neonPurple to-cyber-neonPink bg-clip-text text-transparent">Agent Configuration</h2>
+                <h2 class="text-xs font-bold tracking-widest uppercase text-white drop-shadow-md">Agent Configuration</h2>
             </div>
-            <button id="close-settings-btn" class="text-slate-400 hover:text-slate-200 text-xs font-mono uppercase bg-slate-800/40 border border-cyber-border/40 px-2 py-0.5 rounded cursor-pointer">
+            <button id="close-settings-btn" class="text-slate-400 hover:text-white text-[10px] font-mono uppercase bg-white/5 hover:bg-white/10 border border-white/10 px-2.5 py-1 rounded-md cursor-pointer transition-all">
                 Close
             </button>
         </div>
 
         <form id="settings-form" class="space-y-4 text-xs flex-1">
             <!-- Provider Selection -->
-            <div class="space-y-1">
-                <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">AI Provider</label>
-                <select id="setting-provider" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200 cursor-pointer">
-                    <option value="cloud">Cloud (Gemini)</option>
-                    <option value="local">Local Offline (Ollama / LM Studio)</option>
-                </select>
+            <!-- Brain 1: Main Executor -->
+            <div class="p-3 bg-black/20 border border-cyber-neonCyan/20 rounded-xl space-y-3">
+                <h3 class="text-cyber-neonCyan text-[10px] uppercase font-bold tracking-widest border-b border-cyber-neonCyan/20 pb-1 mb-2">🧠 Brain 1: Main Executor</h3>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">AI Provider</label>
+                    <select id="main-provider" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 cursor-pointer shadow-sm">
+                        <option value="cloud" class="bg-cyber-panel text-white">Cloud (Gemini / Groq / Anthropic)</option>
+                        <option value="local" class="bg-cyber-panel text-white">Local Offline (Ollama / LM Studio)</option>
+                    </select>
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Model Name</label>
+                    <input type="text" id="main-model" placeholder="e.g. gemini-1.5-pro" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">API Key</label>
+                    <input type="password" id="main-apiKey" placeholder="sk-..." class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
+                <div class="space-y-1.5" id="main-endpoint-group">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Endpoint URL</label>
+                    <input type="text" id="main-endpoint" placeholder="https://api..." class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
             </div>
 
-            <!-- API Key -->
-            <div class="space-y-1" id="group-api-key">
-                <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">Gemini API Key</label>
-                <input type="password" id="setting-apiKey" placeholder="AIzaSy..." class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
+            <!-- Brain 2: Supporting Scout -->
+            <div class="p-3 bg-black/20 border border-cyber-neonPink/20 rounded-xl space-y-3 mt-4">
+                <h3 class="text-cyber-neonPink text-[10px] uppercase font-bold tracking-widest border-b border-cyber-neonPink/20 pb-1 mb-2">🕵️ Brain 2: Supporting Scout</h3>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">AI Provider</label>
+                    <select id="support-provider" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 cursor-pointer shadow-sm">
+                        <option value="cloud" class="bg-cyber-panel text-white">Cloud (Gemini / Groq / OpenAI)</option>
+                        <option value="local" class="bg-cyber-panel text-white">Local Offline (Ollama / LM Studio)</option>
+                    </select>
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Model Name</label>
+                    <input type="text" id="support-model" placeholder="e.g. llama-3.1-8b-instant" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">API Key</label>
+                    <input type="password" id="support-apiKey" placeholder="sk-..." class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
+                <div class="space-y-1.5" id="support-endpoint-group">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Endpoint URL</label>
+                    <input type="text" id="support-endpoint" placeholder="https://api..." class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
             </div>
 
-            <!-- Local Endpoint -->
-            <div class="space-y-1 hidden" id="group-local-endpoint">
-                <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">Local API Endpoint</label>
-                <input type="text" id="setting-local-endpoint" placeholder="http://127.0.0.1:11434" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
+            <!-- Timeout & Instructions -->
+            <div class="grid grid-cols-2 gap-3 mt-4">
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">API Timeout (Seconds)</label>
+                    <input type="number" id="setting-timeout" min="5" max="300" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
             </div>
-
-            <!-- Model Dropdown -->
-            <div class="space-y-1">
-                <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">Active Model</label>
-                <select id="setting-model-select" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200 cursor-pointer">
-                    <option value="gemma-4-31b-it">gemma-4-31b-it</option>
-                    <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-                    <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                    <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                    <option value="custom">Custom Model...</option>
-                </select>
-                <input type="text" id="setting-model-custom" placeholder="Enter custom model name..." class="hidden mt-1 w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
-            </div>
-
-            <!-- Timeout -->
-            <div class="space-y-1">
-                <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">API Timeout (Seconds)</label>
-                <input type="number" id="setting-timeout" min="5" max="300" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
-            </div>
-
-            <!-- System Instructions -->
-            <div class="space-y-1">
-                <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">System Instructions</label>
-                <textarea id="setting-instructions" rows="4" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200 resize-y leading-relaxed"></textarea>
+            <div class="space-y-1.5">
+                <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">System Instructions (Shared)</label>
+                <textarea id="setting-instructions" rows="3" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm resize-y leading-relaxed font-mono placeholder:text-slate-600"></textarea>
             </div>
 
             <!-- Context Limits -->
-            <div class="grid grid-cols-2 gap-3">
-                <div class="space-y-1">
-                    <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">Max Tokens</label>
-                    <input type="number" id="setting-maxTokens" min="1000" max="1000000" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
-                    <p id="token-warning" class="text-[9px] text-yellow-400/90 mt-1.5 hidden leading-tight font-mono">
-                        ⚠️ Setting below 5000 limits RAG & active file context, heavily reducing AI accuracy for complex tasks.
-                    </p>
+            <div class="grid grid-cols-3 gap-3">
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Output Tokens</label>
+                    <input type="number" id="setting-maxOutputTokens" min="100" max="100000" placeholder="e.g. 8192" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
                 </div>
-                <div class="space-y-1">
-                    <label class="block text-slate-400 font-mono tracking-wide text-[10px] uppercase">History Length</label>
-                    <input type="number" id="setting-historyLength" min="0" max="20" class="w-full bg-cyber-panel/80 border border-cyber-border hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan text-slate-100 rounded-lg px-3 py-2 outline-none font-mono transition-all duration-200">
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Context Tokens</label>
+                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 32000" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">History Length</label>
+                    <input type="number" id="setting-historyLength" min="2" max="50" placeholder="e.g. 10" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
                 </div>
             </div>
+            <p id="token-warning" class="text-[9px] text-yellow-400/90 mt-1.5 hidden leading-tight font-mono">
+                ⚠️ Setting below 5000 limits RAG & active file context, heavily reducing AI accuracy for complex tasks.
+            </p>
 
             <!-- Features -->
             <div class="space-y-2">
@@ -314,6 +398,18 @@
     <!-- Scripting -->
     <script>
         const vscode = acquireVsCodeApi();
+
+        // ── Utility: escape HTML special chars safely ──────────────────────
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         const chatInput = document.getElementById('chat-input');
         const sendBtn = document.getElementById('send-btn');
         const chatContainer = document.getElementById('chat-container');
@@ -396,27 +492,24 @@
             vscode.postMessage({ command: 'openConfig' });
         });
 
-        // Toggle custom model input textbox based on dropdown selection
-        selectModel.addEventListener('change', () => {
-            if (selectModel.value === 'custom') {
-                customModelInput.classList.remove('hidden');
-                customModelInput.focus();
+        // Toggle local endpoint inputs
+        const mainProvider = document.getElementById('main-provider');
+        const mainEndpointGroup = document.getElementById('main-endpoint-group');
+        mainProvider.addEventListener('change', (e) => {
+            if (e.target.value === 'local') {
+                mainEndpointGroup.classList.remove('hidden');
             } else {
-                customModelInput.classList.add('hidden');
+                mainEndpointGroup.classList.add('hidden');
             }
         });
 
-        document.getElementById('setting-provider').addEventListener('change', (e) => {
+        const supportProvider = document.getElementById('support-provider');
+        const supportEndpointGroup = document.getElementById('support-endpoint-group');
+        supportProvider.addEventListener('change', (e) => {
             if (e.target.value === 'local') {
-                document.getElementById('group-api-key').classList.add('hidden');
-                document.getElementById('group-local-endpoint').classList.remove('hidden');
-                selectModel.value = 'custom';
-                customModelInput.classList.remove('hidden');
-                customModelInput.placeholder = 'e.g. llama3 or mistral';
+                supportEndpointGroup.classList.remove('hidden');
             } else {
-                document.getElementById('group-api-key').classList.remove('hidden');
-                document.getElementById('group-local-endpoint').classList.add('hidden');
-                customModelInput.placeholder = 'Enter custom model name...';
+                supportEndpointGroup.classList.add('hidden');
             }
         });
 
@@ -424,76 +517,83 @@
         settingsForm.addEventListener('submit', (e) => {
             e.preventDefault();
 
-            const apiKey = document.getElementById('setting-apiKey').value.trim();
-            const provider = document.getElementById('setting-provider').value;
-            const localEndpoint = document.getElementById('setting-local-endpoint').value.trim();
-            const timeoutSeconds = parseInt(document.getElementById('setting-timeout').value, 10) || 60;
-            const systemInstructions = document.getElementById('setting-instructions').value.trim();
-            const maxTokens = parseInt(document.getElementById('setting-maxTokens').value, 10) || 8000;
-            const historyLength = parseInt(document.getElementById('setting-historyLength').value, 10) || 2;
-            const enableInlineCompletions = document.getElementById('setting-enableInline').checked;
-            const enableHoverExplanations = document.getElementById('setting-enableHover').checked;
+            const config = {
+                mainBrain: {
+                    providerType: document.getElementById('main-provider').value,
+                    model: document.getElementById('main-model').value.trim(),
+                    apiKey: document.getElementById('main-apiKey').value.trim(),
+                    endpoint: document.getElementById('main-endpoint').value.trim()
+                },
+                supportBrain: {
+                    providerType: document.getElementById('support-provider').value,
+                    model: document.getElementById('support-model').value.trim(),
+                    apiKey: document.getElementById('support-apiKey').value.trim(),
+                    endpoint: document.getElementById('support-endpoint').value.trim()
+                },
+                timeoutSeconds: parseInt(document.getElementById('setting-timeout').value, 10) || 60,
+                systemInstructions: document.getElementById('setting-instructions').value.trim(),
+                maxOutputTokens: parseInt(document.getElementById('setting-maxOutputTokens').value, 10) || 8192,
+                maxContextTokens: parseInt(document.getElementById('setting-maxContextTokens').value, 10) || 32000,
+                historyLength: parseInt(document.getElementById('setting-historyLength').value, 10) || 20,
+                enableInlineCompletions: document.getElementById('setting-enableInline').checked,
+                enableHoverExplanations: document.getElementById('setting-enableHover').checked
+            };
 
-            let model = selectModel.value;
-            if (model === 'custom') {
-                model = customModelInput.value.trim() || (provider === 'local' ? 'llama3' : 'gemma-4-31b-it');
-            }
-
-            vscode.postMessage({
-                command: 'saveSettings',
-                config: {
-                    provider,
-                    apiKey,
-                    localEndpoint,
-                    model,
-                    timeoutSeconds,
-                    systemInstructions,
-                    maxTokens,
-                    historyLength,
-                    enableInlineCompletions,
-                    enableHoverExplanations
-                }
-            });
+            vscode.postMessage({ command: 'saveSettings', config });
         });
 
         // Populate Form Fields when Settings are Loaded
         function populateSettings(config) {
-            document.getElementById('setting-provider').value = config.provider || 'cloud';
-            document.getElementById('setting-apiKey').value = config.apiKey || '';
-            document.getElementById('setting-local-endpoint').value = config.localEndpoint || 'http://127.0.0.1:11434';
-            document.getElementById('setting-timeout').value = config.timeoutSeconds || 60;
+            // Main Brain
+            if (config.mainBrain) {
+                document.getElementById('main-provider').value = config.mainBrain.providerType || 'cloud';
+                document.getElementById('main-model').value = config.mainBrain.model || '';
+                document.getElementById('main-apiKey').value = config.mainBrain.apiKey || '';
+                document.getElementById('main-endpoint').value = config.mainBrain.endpoint || '';
+                
+                if (config.mainBrain.providerType === 'local') {
+                    document.getElementById('main-endpoint-group').classList.remove('hidden');
+                } else {
+                    document.getElementById('main-endpoint-group').classList.add('hidden');
+                }
+            } else if (config.providers && config.activeProvider) {
+                // Fallback to legacy
+                document.getElementById('main-provider').value = config.activeProvider;
+                document.getElementById('main-model').value = config.providers[config.activeProvider]?.model || '';
+                document.getElementById('main-apiKey').value = config.providers.cloud?.apiKey || '';
+                document.getElementById('main-endpoint').value = config.providers.local?.endpoint || '';
+            }
+
+            // Support Brain
+            if (config.supportBrain) {
+                document.getElementById('support-provider').value = config.supportBrain.providerType || 'cloud';
+                document.getElementById('support-model').value = config.supportBrain.model || '';
+                document.getElementById('support-apiKey').value = config.supportBrain.apiKey || '';
+                document.getElementById('support-endpoint').value = config.supportBrain.endpoint || '';
+                
+                if (config.supportBrain.providerType === 'local') {
+                    document.getElementById('support-endpoint-group').classList.remove('hidden');
+                } else {
+                    document.getElementById('support-endpoint-group').classList.add('hidden');
+                }
+            }
+
+            // Shared Settings
+            document.getElementById('setting-timeout').value = config.providers?.cloud?.timeoutSeconds || config.timeoutSeconds || 60;
             document.getElementById('setting-instructions').value = config.systemInstructions || '';
-            document.getElementById('setting-maxTokens').value = config.maxTokens || 8192;
-            document.getElementById('setting-historyLength').value = config.historyLength || 2;
+            document.getElementById('setting-maxOutputTokens').value = config.contextLimits?.maxOutputTokens || config.maxTokens || 8192;
+            document.getElementById('setting-maxContextTokens').value = config.contextLimits?.maxContextTokens || 32000;
+            document.getElementById('setting-historyLength').value = config.contextLimits?.historyLength || config.historyLength || 20;
             
             checkTokenWarning();
             document.getElementById('setting-enableInline').checked = config.enableInlineCompletions === true;
             document.getElementById('setting-enableHover').checked = config.enableHoverExplanations === true;
 
-            if (config.provider === 'local') {
-                document.getElementById('group-api-key').classList.add('hidden');
-                document.getElementById('group-local-endpoint').classList.remove('hidden');
-            } else {
-                document.getElementById('group-api-key').classList.remove('hidden');
-                document.getElementById('group-local-endpoint').classList.add('hidden');
-            }
-
-            const knownModels = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemma-4-31b-it'];
-            if (knownModels.includes(config.model) && config.provider !== 'local') {
-                selectModel.value = config.model;
-                customModelInput.classList.add('hidden');
-                customModelInput.value = '';
-            } else {
-                selectModel.value = 'custom';
-                customModelInput.classList.remove('hidden');
-                customModelInput.value = config.model || '';
-            }
-
-            document.getElementById('active-model-badge').innerText = config.model || 'gemma-4-31b-it';
+            document.getElementById('active-model-badge').innerText = document.getElementById('main-model').value || 'gemma-4-31b-it';
         }
 
         function checkTokenWarning() {
-            const tokenInput = document.getElementById('setting-maxTokens');
+            const tokenInput = document.getElementById('setting-maxContextTokens');
             const tokenWarning = document.getElementById('token-warning');
             if (tokenInput && tokenWarning) {
                 if (parseInt(tokenInput.value, 10) < 5000) {
@@ -504,15 +604,27 @@
             }
         }
         
-        document.getElementById('setting-maxTokens').addEventListener('input', checkTokenWarning);
+        document.getElementById('setting-maxContextTokens').addEventListener('input', checkTokenWarning);
 
         // Notify extension that webview script is ready to receive configuration
         vscode.postMessage({ command: 'ready' });
 
-        // Auto-expand input textarea
+        // Auto-expand input textarea and detect @ mentions
         chatInput.addEventListener('input', () => {
             chatInput.style.height = 'auto';
             chatInput.style.height = (chatInput.scrollHeight) + 'px';
+
+            const text = chatInput.value;
+            const cursorStart = chatInput.selectionStart;
+            
+            // Check if user just typed `@`
+            const lastWord = text.substring(0, cursorStart).split(/\s+/).pop();
+            if (lastWord && lastWord.startsWith('@')) {
+                const query = lastWord.substring(1).toLowerCase();
+                vscode.postMessage({ command: 'requestWorkspaceFiles', query: query });
+            } else {
+                document.getElementById('at-mention-popup').classList.remove('visible');
+            }
         });
 
         // Submit via enter (Shift+Enter for new line)
@@ -524,25 +636,30 @@
         });
 
         // Drag & Drop Functionality for Context Injection
+        // NOTE: VS Code Webview sandbox blocks file.path. We ONLY handle:
+        //   1. text/uri-list  — dragging from VS Code Explorer
+        //   2. text/plain     — fallback for path strings
+        let dragDepth = 0; // counter to reliably detect enter/leave across child elements
+
         window.addEventListener('dragenter', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            dragDepth++;
             document.getElementById('drop-overlay').classList.remove('hidden');
         });
 
         window.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (e.dataTransfer) {
-                e.dataTransfer.dropEffect = 'copy';
-            }
-            document.getElementById('drop-overlay').classList.remove('hidden');
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
         });
         
         window.addEventListener('dragleave', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (e.clientX === 0 && e.clientY === 0) { // true if leaving window
+            dragDepth--;
+            if (dragDepth <= 0) {
+                dragDepth = 0;
                 document.getElementById('drop-overlay').classList.add('hidden');
             }
         });
@@ -550,73 +667,71 @@
         window.addEventListener('drop', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            dragDepth = 0;
             document.getElementById('drop-overlay').classList.add('hidden');
             
             let addedFiles = false;
             
-            // 1. Try URI List (Standard VS Code Explorer dragging)
+            // 1. Best method: text/uri-list (VS Code Explorer drag)
             const uriList = e.dataTransfer.getData('text/uri-list');
-            if (uriList) {
-                const lines = uriList.split('\n');
-                lines.forEach(line => {
+            if (uriList && uriList.trim()) {
+                uriList.split('\n').forEach(line => {
                     let pathStr = line.trim();
-                    if (pathStr && !pathStr.startsWith('#')) {
-                        if (pathStr.startsWith('file:///')) {
-                            pathStr = decodeURIComponent(pathStr.substring(8));
-                        } else if (pathStr.startsWith('file://')) {
-                            pathStr = decodeURIComponent(pathStr.substring(7));
-                        }
-                        chatInput.value += ` @file "${pathStr}" `;
-                        addedFiles = true;
+                    if (!pathStr || pathStr.startsWith('#')) return;
+                    // Decode file:// URI to a real path
+                    if (pathStr.startsWith('file:///')) {
+                        // Windows: file:///C:/foo -> C:/foo
+                        pathStr = decodeURIComponent(pathStr.substring(8)).replace(/\//g, '\\');
+                    } else if (pathStr.startsWith('file://')) {
+                        pathStr = decodeURIComponent(pathStr.substring(7));
                     }
+                    chatInput.value += ` @file "${pathStr}" `;
+                    addedFiles = true;
                 });
             }
             
-            // 2. Try OS files dropped
-            if (!addedFiles && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                for (let file of e.dataTransfer.files) {
-                    if (file.path) {
-                        chatInput.value += ` @file "${file.path}" `;
-                        addedFiles = true;
-                    } else if (file.name) {
-                        chatInput.value += ` @file "${file.name}" `;
-                        addedFiles = true;
-                    }
-                }
-            } 
-            
-            // 3. Fallback to text/plain
+            // 2. Fallback: text/plain containing a path
             if (!addedFiles) {
                 const textData = e.dataTransfer.getData('text/plain');
-                if (textData) {
+                if (textData && textData.trim()) {
                     const lines = textData.split('\n');
-                    let isPath = false;
+                    let hasPath = false;
                     lines.forEach(line => {
                         let pathStr = line.trim();
-                        if (pathStr && (pathStr.includes('/') || pathStr.includes('\\') || pathStr.startsWith('file:'))) {
-                            if (pathStr.startsWith('file:///')) {
-                                pathStr = decodeURIComponent(pathStr.substring(8));
-                            } else if (pathStr.startsWith('file://')) {
-                                pathStr = decodeURIComponent(pathStr.substring(7));
-                            }
+                        if (!pathStr) return;
+                        if (pathStr.startsWith('file:///')) {
+                            pathStr = decodeURIComponent(pathStr.substring(8)).replace(/\//g, '\\');
                             chatInput.value += ` @file "${pathStr}" `;
-                            isPath = true;
+                            hasPath = true;
+                            addedFiles = true;
+                        } else if (pathStr.startsWith('file://')) {
+                            pathStr = decodeURIComponent(pathStr.substring(7));
+                            chatInput.value += ` @file "${pathStr}" `;
+                            hasPath = true;
+                            addedFiles = true;
+                        } else if (/^[A-Za-z]:\\|^\//.test(pathStr) || pathStr.includes('\\') || pathStr.includes('/')) {
+                            // Looks like a file path
+                            chatInput.value += ` @file "${pathStr}" `;
+                            hasPath = true;
+                            addedFiles = true;
+                        } else {
+                            // Even if it doesn't strictly look like a path, if it came from VSCode Explorer drag, we append it.
+                            chatInput.value += ` @file "${pathStr}" `;
+                            hasPath = true;
                             addedFiles = true;
                         }
                     });
-                    
-                    if (!isPath) {
-                        chatInput.value += (chatInput.value.trim() ? " " : "") + textData;
-                        addedFiles = true;
-                    }
                 }
             }
 
-            // Fallback drop handled silently without debug dump
+            // 3. Inform user if OS-native file drop is blocked by sandbox
+            if (!addedFiles && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                chatInput.value += ` [Drag from VS Code Explorer, not OS file manager] `;
+                addedFiles = true;
+            }
 
             if (addedFiles) {
                 chatInput.focus();
-                // trigger auto resize
                 chatInput.style.height = 'auto';
                 chatInput.style.height = (chatInput.scrollHeight) + 'px';
             }
@@ -664,7 +779,7 @@
             document.getElementById('stop-container').classList.remove('hidden');
 
             const mode = document.getElementById('mode-select')?.value || 'chat';
-            const isAgentMode = (mode === 'agent');
+            const isAdvancedMode = (mode === 'advanced');
             const isArchitectMode = (mode === 'architect');
 
             vscode.postMessage({
@@ -672,7 +787,7 @@
                 text: text,
                 timestamp: timestamp,
                 includeWebSearch: document.getElementById('include-web-search')?.checked || false,
-                agentMode: isAgentMode,
+                advancedMode: isAdvancedMode,
                 architectMode: isArchitectMode
             });
         }
@@ -700,6 +815,7 @@
 
         function appendUserMessage(text, timestamp) {
             removeThinking();
+            const encodedText = encodeURIComponent(text);
             const msgDiv = document.createElement('div');
             msgDiv.className = 'flex justify-end w-full animate-fade-in group relative';
             msgDiv.innerHTML = `
@@ -710,6 +826,12 @@
                     </button>
                     <button onclick="deleteChat(${timestamp})" class="absolute -top-3 -right-3 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-red-500/20 hover:border-red-500/50 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Delete this message">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                    <button onclick="navigator.clipboard.writeText(decodeURIComponent('${encodedText}'))" class="absolute -top-3 right-5 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-cyan-500/20 hover:border-cyan-500/50 text-slate-400 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Copy prompt">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    </button>
+                    <button onclick="const ci = document.getElementById('chat-input'); ci.value = decodeURIComponent('${encodedText}'); ci.focus(); ci.style.height='auto'; ci.style.height=ci.scrollHeight+'px';" class="absolute -top-3 right-12 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-green-500/20 hover:border-green-500/50 text-slate-400 hover:text-green-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Edit prompt">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
                     </button>` : ''}
                 </div>
             `;
@@ -726,16 +848,28 @@
                 for (let i = 0; i < tokens.length; i++) {
                     const token = tokens[i];
                     
+                    // Detect filepath from headings/paragraphs like: **`src/views.py`**
                     if (token.type === 'paragraph' || token.type === 'heading') {
-                        const match = /(?:[\*#]*\s*`?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)`?\s*[\*#:]*[\s\n]*)/.exec(token.text);
+                        // H4 FIX: Strict regex — filepath MUST be wrapped in backticks
+                        const match = /\*{0,2}\s*`([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`\s*\*{0,2}/.exec(token.text);
                         if (match) {
                             currentFilepath = match[1];
                         }
                     } else if (token.type === 'code') {
-                        files.push({ 
-                            filepath: currentFilepath || `file_${files.length + 1}.txt`, 
-                            content: token.text 
-                        });
+                        // Skip terminal commands and data formats
+                        const lang = token.lang ? token.lang.toLowerCase() : '';
+                        if (['bash', 'sh', 'shell', 'cmd', 'powershell', 'bat', 'json', 'yaml', 'yml', 'toml', 'ini', 'env', 'txt', 'log'].includes(lang)) {
+                            currentFilepath = null;
+                            continue;
+                        }
+
+                        // Only create a file card if there is a detected filepath OR it is an explicit SEARCH block
+                        if (currentFilepath || token.text.includes('<<<<<<< SEARCH') || token.text.includes('// full code here')) {
+                            files.push({ 
+                                filepath: currentFilepath || `active_file_${files.length + 1}.txt`, 
+                                content: token.text 
+                            });
+                        }
                         currentFilepath = null;
                     }
                 }
@@ -791,13 +925,10 @@
                     btn.addEventListener('click', () => {
                         vscode.postMessage({ command: 'applyWorkspaceEdits', files: [file] });
                         btn.innerHTML = `✔️ Applied ${file.filepath}`;
-                        btn.classList.replace('bg-cyan-600/90', 'bg-green-600/90');
+                        btn.classList.remove('bg-cyan-600/90', 'hover:bg-cyan-500');
+                        btn.classList.add('bg-green-600/90');
+                        btn.disabled = true;
                         rejectBtn.classList.add('hidden');
-                        setTimeout(() => {
-                           btn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath}`;
-                           btn.classList.replace('bg-green-600/90', 'bg-cyan-600/90');
-                           rejectBtn.classList.remove('hidden');
-                        }, 2500);
                     });
 
                     rejectBtn.addEventListener('click', () => {
@@ -1011,6 +1142,7 @@
             if (openThinkMatch) {
                 displayString = displayString.replace(/<think>[\s\S]*$/i, '<em class="text-slate-500 animate-pulse text-[10px]">&gt; Analyzing...</em>\n');
             }
+            displayString = displayString.replace(/<\/think>/gi, ''); // Strip any stray closing tags
             // Removed run_command logic; standard bash blocks are used instead
             currentStreamTextDiv.innerHTML = marked.parse(displayString);
             
@@ -1022,39 +1154,38 @@
                 addCopyButtonsToCodeBlocks(currentStreamTextDiv);
                 document.getElementById('stop-container').classList.add('hidden');
                 
-                const files = extractFiles(currentStreamText);
+                // Strip <think> blocks before extracting code files so it doesn't leak into code
+                const cleanStreamText = currentStreamText.replace(/<think>[\s\S]*?<\/think>/gi, '');
+                const files = extractFiles(cleanStreamText);
                 if (files && files.length > 0) {
                     const actionContainerDiv = document.createElement('div');
                     actionContainerDiv.className = 'flex flex-col gap-1.5 pt-3 border-t border-cyber-border/45 mt-2';
                     
                     files.forEach(file => {
                         const btnContainer = document.createElement('div');
-                        btnContainer.className = 'flex gap-2 w-full';
+                        btnContainer.className = 'flex flex-wrap gap-2 w-full mt-1';
 
                         const btn = document.createElement('button');
-                        btn.className = 'apply-diff-btn flex-1 bg-cyan-600/90 hover:bg-cyan-500 text-white text-[10px] font-bold py-1 px-2 rounded shadow-[0_0_8px_rgba(0,255,255,0.3)] transition-all cursor-pointer flex items-center justify-center gap-1';
-                        btn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath}`;
+                        btn.className = 'apply-diff-btn flex-1 min-w-[120px] bg-cyber-neonCyan hover:bg-blue-500 text-white text-[11px] font-medium py-1.5 px-3 rounded-lg shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5';
+                        btn.innerHTML = `<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath.split(/[/\\]/).pop()}`;
                         
-                        const rejectBtn = document.createElement('button');
-                        rejectBtn.className = 'bg-slate-700/80 hover:bg-red-600/90 text-slate-300 hover:text-white text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer flex items-center justify-center gap-1';
-                        rejectBtn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg> Reject`;
-
                         const previewBtn = document.createElement('button');
-                        previewBtn.className = 'bg-slate-700/80 hover:bg-slate-600 text-slate-200 text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer flex items-center justify-center gap-1';
+                        previewBtn.className = 'bg-cyber-border hover:bg-slate-500 text-slate-200 text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm';
                         previewBtn.innerHTML = `👁️ Preview`;
+
+                        const rejectBtn = document.createElement('button');
+                        rejectBtn.className = 'bg-cyber-border hover:bg-cyber-neonPink text-slate-200 hover:text-white text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm';
+                        rejectBtn.innerHTML = `<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg> Reject`;
 
                         btn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'applyWorkspaceEdits', files: [file] });
-                            btn.innerHTML = `✔️ Applied ${file.filepath}`;
-                            btn.classList.replace('bg-cyan-600/90', 'bg-green-600/90');
+                            btn.innerHTML = `✔️ Applied`;
+                            btn.dataset.originalHtml = `<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath.split(/[/\\]/).pop()}`;
+                            btn.classList.remove('bg-cyber-neonCyan', 'hover:bg-blue-500');
+                            btn.classList.add('bg-green-600/90', 'processing-apply');
+                            btn.disabled = true;
                             rejectBtn.classList.add('hidden');
                             previewBtn.classList.add('hidden');
-                            setTimeout(() => {
-                               btn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath}`;
-                               btn.classList.replace('bg-green-600/90', 'bg-cyan-600/90');
-                               rejectBtn.classList.remove('hidden');
-                               previewBtn.classList.remove('hidden');
-                            }, 2500);
                         });
 
                         previewBtn.addEventListener('click', () => {
@@ -1076,8 +1207,8 @@
 
                     if (files.length > 1) {
                         const allBtn = document.createElement('button');
-                        allBtn.className = 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white text-[11px] font-bold py-1.5 px-2 rounded transition-all cursor-pointer text-center mt-2 shadow-md w-full';
-                        allBtn.innerText = '✨ APPLY COMPOSER CHANGES (ALL)';
+                        allBtn.className = 'bg-cyber-neonCyan hover:bg-blue-500 text-white text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer text-center mt-2 shadow-sm w-full';
+                        allBtn.innerText = '✨ APPLY ALL CHANGES';
                         allBtn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
                             allBtn.innerText = '✔️ ALL APPLIED';
@@ -1167,15 +1298,22 @@
                         let text = msg.text;
                         const contextIdx = text.indexOf('\n\n--- Context ---');
                         if (contextIdx !== -1) text = text.substring(0, contextIdx);
+                        const encodedText = encodeURIComponent(text);
                         
                         msgDiv.innerHTML = `
                             <div class="max-w-[85%] bg-gradient-to-br from-cyber-neonPurple/20 via-cyber-neonCyan/10 to-transparent border border-cyber-neonCyan/30 text-slate-100 rounded-2xl rounded-tr-none px-3.5 py-2.5 shadow-[0_4px_12px_rgba(0,240,255,0.05)] relative">
                                 <p class="text-xs select-text whitespace-pre-wrap leading-relaxed">${escapeHtml(text)}</p>
-                                ${msg.timestamp ? `<button onclick="rollbackChat(${msg.timestamp})" class="absolute -top-3 -left-3 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-cyber-neonPink/20 hover:border-cyber-neonPink/50 text-slate-400 hover:text-cyber-neonPink opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Rewind back to this prompt">
+                                ${msg.timestamp ? `<button onclick="rollbackChat(${msg.timestamp})" class="absolute -top-3 -left-3 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-cyber-neonPink/20 hover:border-cyber-neonPink/50 text-slate-400 hover:text-cyber-neonPink opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Rewind to this prompt & Revert files">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
                                 </button>
                                 <button onclick="deleteChat(${msg.timestamp})" class="absolute -top-3 -right-3 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-red-500/20 hover:border-red-500/50 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Delete this message">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                </button>
+                                <button onclick="navigator.clipboard.writeText(decodeURIComponent('${encodedText}'))" class="absolute -top-3 right-5 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-cyan-500/20 hover:border-cyan-500/50 text-slate-400 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Copy prompt">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                                </button>
+                                <button onclick="const ci = document.getElementById('chat-input'); ci.value = decodeURIComponent('${encodedText}'); ci.focus(); ci.style.height='auto'; ci.style.height=ci.scrollHeight+'px';" class="absolute -top-3 right-12 p-1.5 bg-cyber-panel border border-cyber-border rounded-full hover:bg-green-500/20 hover:border-green-500/50 text-slate-400 hover:text-green-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-lg z-10" title="Edit prompt">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
                                 </button>` : ''}
                             </div>
                         `;
@@ -1185,6 +1323,18 @@
                     }
                 });
                 scrollToBottom();
+            } else if (message.command === 'applyFailed') {
+                const processingBtns = document.querySelectorAll('.processing-apply');
+                processingBtns.forEach(btn => {
+                    btn.innerHTML = `⚠️ Failed`;
+                    btn.classList.remove('bg-green-600/90', 'processing-apply');
+                    btn.classList.add('bg-red-600', 'hover:bg-red-500');
+                    btn.disabled = false;
+                    const parent = btn.parentElement;
+                    if (parent) {
+                        Array.from(parent.children).forEach(c => c.classList.remove('hidden'));
+                    }
+                });
             } else if (message.command === 'loadSettings') {
                 populateSettings(message.config);
             } else if (message.command === 'settingsSaved') {
@@ -1209,6 +1359,47 @@
             } else if (message.command === 'injectChatAndSend') {
                 chatInput.value = message.text;
                 submitChat();
+            } else if (message.command === 'provideWorkspaceFiles') {
+                const popup = document.getElementById('at-mention-popup');
+                popup.innerHTML = ''; // Clear previous
+                
+                if (message.files && message.files.length > 0) {
+                    message.files.forEach(file => {
+                        const div = document.createElement('div');
+                        div.className = 'mention-item';
+                        
+                        const parts = file.split(/[/\\]/);
+                        const display = parts.length > 1 ? `${parts[parts.length-2]}/${parts[parts.length-1]}` : file;
+                        
+                        const nameEl = document.createElement('div');
+                        nameEl.className = 'mention-item-name';
+                        nameEl.textContent = display;
+
+                        const pathEl = document.createElement('div');
+                        pathEl.className = 'mention-item-path';
+                        pathEl.textContent = file;
+
+                        div.appendChild(nameEl);
+                        div.appendChild(pathEl);
+                        
+                        div.addEventListener('click', () => {
+                            const val = chatInput.value;
+                            const cursor = chatInput.selectionStart;
+                            
+                            const before = val.substring(0, cursor);
+                            let newBefore = before.replace(/@\S*$/, '');
+                            
+                            chatInput.value = newBefore + `@file "${file}" ` + val.substring(cursor);
+                            popup.classList.remove('visible');
+                            chatInput.focus();
+                            chatInput.dispatchEvent(new Event('input'));
+                        });
+                        popup.appendChild(div);
+                    });
+                    popup.classList.add('visible');
+                } else {
+                    popup.classList.remove('visible');
+                }
             } else if (message.command === 'showSessions') {
                 historyList.innerHTML = '';
                 if (message.sessions.length === 0) {

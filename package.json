@@ -30,11 +30,6 @@
   "contributes": {
     "commands": [
       {
-        "command": "ultra-light-ai.startProcessing",
-        "title": "Ultra Light AI: Start Processing File Queue",
-        "icon": "$(play)"
-      },
-      {
         "command": "ultra-light-ai.openSidebar",
         "title": "Ultra Light AI: Open Chat",
         "icon": "$(comment-discussion)"

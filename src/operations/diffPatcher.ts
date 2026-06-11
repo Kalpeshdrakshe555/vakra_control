@@ -13,7 +13,7 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
         }
 
         if (llmResponse.includes('<<<<<<< SEARCH') && llmResponse.includes('>>>>>>> REPLACE')) {
-            const blockRegex = /<<<<<<<\s*SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
+            const blockRegex = /<<<<<<<\s*SEARCH\r?\n?([\s\S]*?)\r?\n?=======\r?\n?([\s\S]*?)\r?\n?>>>>>>>\s*REPLACE/g;
             let match;
             let blocksFound = false;
             
@@ -44,6 +44,12 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
         let contentToWrite = llmResponse;
         if (match && match[1]) {
             contentToWrite = match[1];
+        }
+        
+        // Safety check for accidental file wipe via partial code snippet
+        if (fileText.length > 0 && contentToWrite.length < fileText.length * 0.5) {
+            console.warn(`Safety Abort: AI tried to overwrite ${filePath} with a code block < 50% of the original file size. Aborting overwrite.`);
+            return false;
         }
         
         fs.writeFileSync(filePath, contentToWrite, 'utf8');
@@ -149,7 +155,7 @@ export function applyRobustSearchReplace(fileText: string, searchStr: string, re
         return { success: true, result };
     }
 
-    // Tier 5: Fallback to First and Last line matching
+    // Tier 5: Fallback to First and Last line matching (with intermediate validation)
     if (searchLines.length > 1) {
         const firstLine = searchLines[0];
         const lastLine = searchLines[searchLines.length - 1];
@@ -172,10 +178,21 @@ export function applyRobustSearchReplace(fileText: string, searchStr: string, re
         }
         
         if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx && (endIdx - startIdx) < searchLines.length * 3) {
-            const pre = fileLines.slice(0, startIdx).join('\n');
-            const post = fileLines.slice(endIdx + 1).join('\n');
-            const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
-            return { success: true, result };
+            // H2 FIX: Validate that at least 40% of intermediate search lines also match
+            const fileLinesInRange = fileLines.slice(startIdx, endIdx + 1).map(l => l.trim()).filter(l => l.length > 0);
+            const intermediateSearchLines = searchLines.slice(1, -1);
+            let matchedCount = 0;
+            for (const sl of intermediateSearchLines) {
+                if (fileLinesInRange.includes(sl)) matchedCount++;
+            }
+            const matchRatio = intermediateSearchLines.length > 0 ? matchedCount / intermediateSearchLines.length : 1;
+            
+            if (matchRatio >= 0.4) {
+                const pre = fileLines.slice(0, startIdx).join('\n');
+                const post = fileLines.slice(endIdx + 1).join('\n');
+                const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
+                return { success: true, result };
+            }
         }
     }
 
