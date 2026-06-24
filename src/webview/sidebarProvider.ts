@@ -4,14 +4,32 @@ import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
 import { applyDiffToActiveFile, applyRobustSearchReplace } from '../operations/diffPatcher';
 import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, AgentConfig } from '../config';
+import { GameRunnerPanel } from './gameRunnerPanel';
 import { ConversationHistory } from '../state/conversationHistory';
-import { allocateBudget, ContextSource, estimateTokens, truncateToTokens } from '../utils/tokenBudget';
+import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
+import { skeletonizeFile } from '../utils/astSkeletonizer';
+import { extractBrandDNA, orchestrateAssets, DesignSemantics } from '../utils/designBrain';
+import { generateCacheKey, checkCache, saveCache } from '../utils/queryCache';
+import { ContextSelector } from '../utils/contextSelector';
+import { DependencyGraph } from '../utils/dependencyGraph';
+import { SettingsHandler } from './settingsHandler';
+import { PromptBuilder } from './promptBuilder';
+import { PromptClassifier } from '../utils/promptClassifier';
+import { DiffValidator } from '../operations/diffValidator';
+import { ProjectScanner } from '../indexer/projectScanner';
+import { TaskPlanner } from '../state/taskPlanner';
+import { FileVersioning } from '../operations/fileVersioning';
+import { TerminalCapture } from '../tools/terminalCapture';
+import { ErrorDiagnoser } from '../utils/errorDiagnoser';
+import { SessionMemory } from '../state/sessionMemory';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private conversationHistory: ConversationHistory;
     private currentStreamAbortController: AbortController | null = null;
     private currentSeqOp: any = null; // Store reference to cancel Architect queue
+    private _onStartCb?: any;
+    private _onResetCb?: any;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -41,6 +59,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         try {
             let htmlContent = fs.readFileSync(htmlPath, 'utf8');
             htmlContent = htmlContent.replace('gemma-4-31b-it', modelName);
+
+            // Inject local Tailwind CSS URI
+            const tailwindUri = webviewView.webview.asWebviewUri(
+                vscode.Uri.joinPath(this._extensionUri, 'dist', 'tailwind.css')
+            );
+            htmlContent = htmlContent.replace('{{TAILWIND_CSS_URI}}', tailwindUri.toString());
+            
+            // Inject local marked.js
+            const markedUri = webviewView.webview.asWebviewUri(
+                vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'marked', 'marked.min.js')
+            );
+            htmlContent = htmlContent.replace('{{MARKED_URI}}', markedUri.toString());
+
+            // Inject local highlight.js
+            const highlightJsUri = webviewView.webview.asWebviewUri(
+                vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js')
+            );
+            htmlContent = htmlContent.replace('{{HIGHLIGHT_JS_URI}}', highlightJsUri.toString());
+
+            // Inject local highlight.css
+            const highlightCssUri = webviewView.webview.asWebviewUri(
+                vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'atom-one-dark.min.css')
+            );
+            htmlContent = htmlContent.replace('{{HIGHLIGHT_CSS_URI}}', highlightCssUri.toString());
+
             webviewView.webview.html = htmlContent;
         } catch (error) {
             console.error('Failed to load Webview HTML:', error);
@@ -62,7 +105,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         timeoutSeconds: config?.providers?.cloud?.timeoutSeconds || 60,
                         systemInstructions: config?.systemInstructions || 'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks. Provide the complete code file content so it can be directly applied.',
                         maxOutputTokens: config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192,
-                        maxContextTokens: config?.contextLimits?.maxContextTokens || 32000,
+                        maxContextTokens: config?.contextLimits?.maxContextTokens || 7000,
                         historyLength: config?.contextLimits?.historyLength || 10,
                         enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
                         enableHoverExplanations: vsConfig.get('enableHoverExplanations', false)
@@ -76,6 +119,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         command: 'restoreHistory',
                         messages: messages
                     });
+                }
+                
+                // NEW: Trigger Cold Start Onboarding for new projects
+                if (workspaceRoot) {
+                    this.checkAndRunOnboarding(workspaceRoot);
                 }
             } else if (message.command === 'start') {
                 this._onStartCb(message.data);
@@ -102,6 +150,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 await this.handleApplyWorkspaceEdits(message);
             } else if (message.command === 'openConfig') {
                 this.handleOpenConfig();
+            } else if (message.command === 'playGame') {
+                const gamePath = path.join(this._workspaceRoot, 'index.html');
+                if (fs.existsSync(gamePath)) {
+                    GameRunnerPanel.createOrShow(this._extensionUri, gamePath, this._workspaceRoot);
+                } else {
+                    vscode.window.showErrorMessage('No index.html found in the workspace root to play! Please ask the AI to generate the game first.');
+                }
             } else if (message.command === 'newChat') {
                 this.conversationHistory.clear();
                 if (this._onResetCb) {
@@ -248,8 +303,103 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 await this.handlePreviewDiff(message.file);
             } else if (message.command === 'requestWorkspaceFiles') {
                 await this.handleRequestWorkspaceFiles(message.query);
+            } else if (message.command === 'clearCache') {
+                this.handleClearCache();
+            } else if (message.command === 'rollbackFile') {
+                const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+                if (workspaceRoot && message.filepath) {
+                    const content = FileVersioning.getLatestSnapshot(workspaceRoot, message.filepath);
+                    if (content) {
+                        require('fs').writeFileSync(message.filepath, content, 'utf8');
+                        vscode.window.showInformationMessage(`✅ Rolled back ${path.basename(message.filepath)} to previous state.`);
+                    } else {
+                        vscode.window.showErrorMessage(`❌ No snapshots found for ${path.basename(message.filepath)}`);
+                    }
+                }
+            } else if (message.command === 'runAndCapture') {
+                const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+                if (workspaceRoot && message.cmd) {
+                    vscode.window.showInformationMessage(`Running: ${message.cmd}`);
+                    TerminalCapture.runAndCapture(message.cmd, workspaceRoot).then(output => {
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `Terminal Execution Complete. AI has read the output.`
+                        });
+                        this.postMessageToWebview({
+                            command: 'injectChatAndSend',
+                            text: `I executed \`${message.cmd}\`. Please analyze the output and fix any errors.`
+                        });
+                    });
+                }
             }
         });
+    }
+
+    /**
+     * Returns the path to the dedicated AI metadata directory for the workspace, creating it if it doesn't exist.
+     * @param workspaceRoot The root path of the current workspace.
+     */
+    private getAiMetaDir(workspaceRoot: string): string {
+        const dir = path.join(workspaceRoot, '.ultra-light-ai');
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        return dir;
+    }
+    /**
+     * Detects if a project is new (No ARCHITECTURE.md and > 1 file)
+     * Runs a silent background scan to build context without blocking the UI.
+     */
+    private async checkAndRunOnboarding(workspaceRoot: string): Promise<void> {
+        try {
+            await ProjectScanner.scanProject(workspaceRoot);
+
+            const archPath = path.join(workspaceRoot, 'ARCHITECTURE.md');
+            const newArchPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
+            if (fs.existsSync(archPath) || fs.existsSync(newArchPath)) return; // Already onboarded!
+            // Check if folder actually has files (ignoring hidden files and node_modules)
+            const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
+            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+            
+            const filesInRoot = fs.readdirSync(workspaceRoot).filter(f => !f.startsWith('.') && !combinedIgnores.includes(f));
+            if (filesInRoot.length <= 1) return; // Too small or empty, skip onboarding
+
+            // 1. Show Loading UI
+            this.postMessageToWebview({ command: 'showOnboarding' });
+
+            // 2. Fetch lightweight file tree to save tokens (DO NOT read full files here)
+            const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
+            const vscodeFiles = await vscode.workspace.findFiles('**/*', excludePattern, 30);
+            const fileList = vscodeFiles.map(f => path.relative(workspaceRoot, f.fsPath));
+            
+            if (fileList.length === 0) {
+                this.postMessageToWebview({ command: 'onboardingFailed' });
+                return;
+            }
+
+            // 3. Use the Support Brain (Scout) to generate the file silently
+            const config = getAgentConfig(workspaceRoot);
+            const brain = config?.supportBrain?.model ? config.supportBrain : config?.mainBrain;
+            if (!brain || !brain.model) return;
+
+            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
+            let client;
+            if (brain.providerType === 'local') {
+                client = new LocalOllamaClient(brain.model, brain.endpoint || 'http://127.0.0.1:11434', brain.apiKey);
+            } else {
+                client = new GeminiCloudClient([brain.apiKey?.trim() || ''], brain.model, 60);
+            }
+
+            const prompt = `You are a project analyzer. I am passing a list of files from a new project. Generate a very brief 'ARCHITECTURE.md' file explaining the probable Tech Stack, Entry Points, and Structure based strictly on these file names.\nReturn ONLY the markdown content. No conversational text.\n\nFiles:\n${fileList.join('\n')}`;
+            
+            const res = await client.complete(prompt);
+            const cleanArch = res.text.replace(/```markdown/gi, '').replace(/```/g, '').trim();
+            
+            fs.writeFileSync(newArchPath, cleanArch, 'utf8');
+            this.postMessageToWebview({ command: 'onboardingComplete' });
+        } catch (error) {
+            this.postMessageToWebview({ command: 'onboardingFailed' });
+        }
     }
 
     private async handleRequestWorkspaceFiles(query: string = ''): Promise<void> {
@@ -260,7 +410,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
             // Use vscode findFiles to get max 20 files matching the query (if provided) or recent files
             const searchPattern = query ? `**/*${query}*` : '**/*';
-            const excludePattern = '{**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock}';
+            const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
+            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+            const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
             
             const files = await vscode.workspace.findFiles(searchPattern, excludePattern, 25);
             
@@ -284,11 +436,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
      * Tier 1: Exact Match, Tier 2: Normalized Match, Tier 3: Line-Anchor, Tier 4: Best-Effort UI
      */
     private async applyPatchWithTiers(fileText: string, searchStr: string, replaceStr: string, filepath: string, isPreview: boolean = false): Promise<{ success: boolean, text: string }> {
+        // BUG FIX: Prevent Markdown backtick corruption if LLM hallucinates them inside SEARCH/REPLACE blocks
+        if (!filepath.toLowerCase().endsWith('.md')) {
+            // Strip leading ```lang and trailing ``` from both search and replace blocks
+            searchStr = searchStr.replace(/^\s*```[a-zA-Z]*\r?\n/g, '').replace(/\r?\n```\s*$/g, '');
+            replaceStr = replaceStr.replace(/^\s*```[a-zA-Z]*\r?\n/g, '').replace(/\r?\n```\s*$/g, '');
+        }
+
         const patchResult = applyRobustSearchReplace(fileText, searchStr, replaceStr);
         
         // Tier 1: Exact Match / DiffPatcher
         if (patchResult.success) {
-            return { success: true, text: patchResult.result || patchResult.patched || fileText };
+            return { success: true, text: patchResult.result || (patchResult as any).patched || fileText };
         }
 
         // Tier 2: Normalized Match
@@ -315,17 +474,60 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        // Tier 4: Best-Effort + User Confirmation
+        // Job 1: SEARCH Block Healer (Micro-Task)
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders && workspaceFolders.length > 0) {
+                const config = require('../config').getAgentConfig(workspaceFolders[0].uri.fsPath);
+                if (config?.advancedModeEnabled && config?.supportBrain?.model) {
+                    const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
+                    let scoutClient;
+                    if (config.supportBrain.providerType === 'local') {
+                        scoutClient = new LocalOllamaClient(config.supportBrain.model || 'llama-3.1-8b-instant', config.supportBrain.endpoint || 'http://127.0.0.1:11434', config.supportBrain.apiKey);
+                    } else {
+                        const keyStr = config.supportBrain.apiKey?.trim() || '';
+                        if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.groq.com/openai', keyStr);
+                        else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.openai.com', keyStr);
+                        else scoutClient = new GeminiCloudClient([keyStr], config.supportBrain.model || 'gemini-1.5-flash', 60);
+                    }
+                    
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🩺 Scout Healer: Attempting to fix broken SEARCH block in ${path.basename(filepath)}...` });
+                    
+                    const healerPrompt = `The AI generated a SEARCH block to edit a file, but it doesn't match the file exactly.\n\nBroken SEARCH block:\n\`\`\`\n${searchStr}\n\`\`\`\n\nActual file content (first 200 lines):\n\`\`\`\n${fileText.split('\n').slice(0, 200).join('\n')}\n\`\`\`\n\nReturn ONLY the corrected SEARCH block that perfectly matches the actual file content. Do NOT include markdown fences, just the exact raw text lines that need to be replaced. Do not explain.`;
+                    
+                    const healerResponse = await scoutClient.complete(healerPrompt);
+                    const healedSearchStr = healerResponse.text.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
+                    
+                    const healedPatchResult = applyRobustSearchReplace(fileText, healedSearchStr, replaceStr);
+                    if (healedPatchResult.success) {
+                        return { success: true, text: healedPatchResult.result || (healedPatchResult as any).patched || fileText };
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Scout SEARCH Healer failed", e);
+        }
+
+        // Tier 4: Diff Validator Guard - No Silent Appends
+        const validation = DiffValidator.validatePatch(fileText, searchStr);
         if (isPreview) {
-            return { success: true, text: fileText + `\n\n/* ⚠️ AI APPENDED (Best Effort: Exact match failed) */\n${replaceStr}\n` };
+            if (validation.safe) {
+                return { success: true, text: fileText + `\n\n/* ⚠️ AI APPENDED */\n${replaceStr}\n` };
+            } else {
+                return { success: false, text: `/* 🚫 BLOCKED: ${validation.reason} */\n` + fileText };
+            }
         } else {
+            if (validation.safe) {
+                 return { success: true, text: fileText + `\n\n/* ⚠️ AI APPENDED */\n${replaceStr}\n` };
+            }
+
             const userChoice = await vscode.window.showWarningMessage(
-                `Could not find exact match in ${path.basename(filepath)}. Apply best-effort patch (append to file)?`,
-                'Accept', 'Reject'
+                `Diff Mismatch in ${path.basename(filepath)}: ${validation.reason} Score: ${validation.score}%. Force append to file?`,
+                'Force Append', 'Reject'
             );
             
-            if (userChoice === 'Accept') {
-                return { success: true, text: fileText + `\n\n/* ⚠️ AI APPENDED (Best Effort: Exact match failed) */\n${replaceStr}\n` };
+            if (userChoice === 'Force Append') {
+                return { success: true, text: fileText + `\n\n/* ⚠️ AI FORCED APPEND (Mismatch) */\n${replaceStr}\n` };
             }
         }
 
@@ -364,34 +566,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     }
                 }
                 
-                // Scout Regex Fallback for Preview
-                if (!blocksFound && (fileInfo.content.includes('<<<<<<<') || fileInfo.content.includes('======='))) {
-                    const config = require('../config').getAgentConfig(workspaceRoot);
-                    if (config?.advancedModeEnabled && config?.supportBrain?.model) {
-                        try {
-                            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-                            let scoutClient;
-                            if (config.supportBrain.providerType === 'local') {
-                                scoutClient = new LocalOllamaClient(config.supportBrain.model || 'llama-3.1-8b-instant', config.supportBrain.endpoint || 'http://127.0.0.1:11434', config.supportBrain.apiKey);
-                            } else {
-                                scoutClient = new GeminiCloudClient([config.supportBrain.apiKey?.trim() || ''], config.supportBrain.model || 'gemini-1.5-flash', 60);
-                            }
-                            const fixPrompt = `Extract SEARCH and REPLACE blocks. Return JSON array: [{"search":"...", "replace":"..."}].\n\n${fileInfo.content}`;
-                            const fixResponse = await scoutClient.complete(fixPrompt);
-                            const jsonStr = fixResponse.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-                            const parsedBlocks = JSON.parse(jsonStr);
-                            
-                            for (const b of parsedBlocks) {
-                                blocksFound = true;
-                                const patchResult = await this.applyPatchWithTiers(newContent, b.search, b.replace, fileInfo.filepath, true);
-                                if (patchResult.success) newContent = patchResult.text;
-                            }
-                        } catch (e) {
-                            console.error("Scout Preview fix failed", e);
-                        }
-                    }
-                }
-                
+                // Removed old Scout Regex Fallback -> Replaced by Job 1 SEARCH Healer above
                 if (!blocksFound) {
                     newContent = fileInfo.content;
                 }
@@ -431,7 +606,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const config = getAgentConfig(workspaceRoot);
             
             const maxOutputTokens = config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192;
-            const maxContextTokens = config?.contextLimits?.maxContextTokens || 32000;
+            const maxContextTokens = config?.contextLimits?.maxContextTokens || 7000;
 
             let client;
             const keyStr = keys[0]?.trim() || '';
@@ -455,7 +630,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             
             // Note: message isn't passed here as this method is called via fallback, but let's assume agentMode is false for now
             // if we need it we can update the signature later.
-            const systemInstruction = this.buildSystemInstruction(config, workspaceRoot, false);
+            const category = PromptClassifier.classifyPrompt(text);
+            const systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, false, category);
+            TokenAccountant.measureSystemPrompt(systemInstruction);
             let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, false, workspaceRoot);
 
             // Add ONLY the user's raw message to history (BUG-03 FIX)
@@ -466,23 +643,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             // Check if we need to summarize due to length or token budget BEFORE blind trimming
             if ((this.conversationHistory.length / 2 > historyLimit || this.conversationHistory.estimateTokens() > historyTokenLimit) 
-                && client && typeof client.complete === 'function' && this.conversationHistory.length >= 6) {
+                && this.conversationHistory.length >= 6) {
                 this.postMessageToWebview({
                     command: 'statusUpdate',
-                    text: `🧠 Memory optimizing: Summarizing older context to save tokens...`
+                    text: `🧠 Memory optimizing: Compressing older context to save tokens (Zero API cost)...`
                 });
                 try {
-                    const rawHistory = this.conversationHistory.getHistory(this.conversationHistory.length / 2);
-                    const olderMessages = rawHistory.slice(0, rawHistory.length - 4);
-                    
-                    const summaryPrompt = `Summarize the following chat history concisely. Focus on the main technical context, architectural decisions, and the user's ultimate goal. Return ONLY the summary.\n\n${JSON.stringify(olderMessages)}`;
-                    const summaryResult = await client.complete(summaryPrompt);
-                    
-                    if (summaryResult && summaryResult.text) {
-                        this.conversationHistory.compressHistoryWithSummary(summaryResult.text, 2);
-                        this.postMessageToWebview({ command: 'statusUpdate', text: `✅ Context summarized safely.` });
-                    }
-                } catch (err) { console.error('Summarization failed', err); }
+                    // Local compression without API call
+                    this.conversationHistory.localCompress(2);
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `✅ Context compressed locally.` });
+                } catch (err) { console.error('Compression failed', err); }
             }
 
             // Trim history token budget as a failsafe
@@ -496,6 +666,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             // Remove the last user message from history since we pass it separately
             const historyWithoutLast = history.slice(0, -1);
             
+            const cacheKey = workspaceRoot ? generateCacheKey(systemInstruction, historyWithoutLast, finalPrompt) : null;
+            if (cacheKey && workspaceRoot) {
+                const cachedResponse = checkCache(workspaceRoot, cacheKey);
+                if (cachedResponse) {
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `⚡ Cache Hit: Zero-cost instant response loaded!`
+                    });
+                    const cleanResponseText = cachedResponse.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
+                    this.conversationHistory.addMessage('model', cleanResponseText);
+                    this.postMessageToWebview({
+                        command: 'receiveChat',
+                        text: cachedResponse
+                    });
+                    return;
+                }
+            }
+
             this.postMessageToWebview({
                 command: 'statusUpdate',
                 text: `📚 Context Window: Sending previous ${historyWithoutLast.length} messages...`
@@ -506,6 +694,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 historyWithoutLast,
                 finalPrompt
             );
+
+            if (cacheKey && workspaceRoot && reply.text) {
+                saveCache(workspaceRoot, cacheKey, reply.text);
+            }
 
             // Strip <think> tags before saving to history
             const cleanResponseText = reply.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
@@ -540,10 +732,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             let supportClient = null;
             
             const maxOutputTokens = config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192;
-            const maxContextTokens = config?.contextLimits?.maxContextTokens || 32000;
+            const maxContextTokens = config?.contextLimits?.maxContextTokens || 7000;
 
             const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-            const { DualEngineRouter } = require('../router/dualEngineRouter');
 
             // Initialize Main Brain
             const mainBrain = config?.mainBrain;
@@ -574,38 +765,40 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     else mainClient = new GeminiCloudClient(keys, model, timeout);
                 }
             }
-
-            // Initialize Support Brain if Advanced Mode is enabled
-            if (message.advancedMode && config?.supportBrain) {
-                const supportBrain = config.supportBrain;
-                if (supportBrain.providerType === 'local') {
-                    supportClient = new LocalOllamaClient(supportBrain.model || 'llama-3.1-8b-instant', supportBrain.endpoint || 'http://127.0.0.1:11434', supportBrain.apiKey);
-                } else {
-                    const keyStr = supportBrain.apiKey?.trim() || '';
-                    if (keyStr.startsWith('gsk_')) {
-                        supportClient = new LocalOllamaClient(supportBrain.model, 'https://api.groq.com/openai', keyStr);
-                    } else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) {
-                        supportClient = new LocalOllamaClient(supportBrain.model, 'https://api.openai.com', keyStr);
-                    } else {
-                        supportClient = new GeminiCloudClient([keyStr], supportBrain.model || 'gemini-1.5-flash', timeout);
-                    }
-                }
-            }
-
-            const client = new DualEngineRouter(mainClient, supportClient, !!message.advancedMode);
             
-            // Auto-inject ARCHITECTURE.md if it exists (but NOT in Advanced Mode — Scout handles it)
+            const client = mainClient;
+
+            // Auto-inject ARCHITECTURE.md ALWAYS
             let architectureContext = '';
-            if (workspaceRoot && !message.advancedMode) {
-                const archPath = path.join(workspaceRoot, 'ARCHITECTURE.md');
+            if (workspaceRoot) {
+                const archPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
                 if (fs.existsSync(archPath)) {
                     architectureContext = `\n<project_architecture>\n${fs.readFileSync(archPath, 'utf8')}\n</project_architecture>\n`;
                 }
             }
 
             // Build system instruction
-            const systemInstruction = this.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode);
-            let finalPrompt = await this.buildPrompt(message.text, false, message.includeWebSearch || false, false, workspaceRoot);
+            const promptCategory = PromptClassifier.classifyPrompt(message.text);
+            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory);
+            
+            // Task Planner Injection
+            if (workspaceRoot) {
+                const isComplex = TaskPlanner.isComplexRequest(message.text);
+                const planState = TaskPlanner.readPlan(workspaceRoot);
+                
+                if (isComplex && !planState.isActive) {
+                    systemInstruction += `\n\n[TASK PLANNER ACTIVE]\nThe user's request is complex. DO NOT write any actual code yet. You MUST first generate a detailed step-by-step plan using a markdown file. Write your plan to **\`.ultra-light-ai/PLAN.md\`** using the SEARCH/REPLACE format. Number the steps 1, 2, 3...`;
+                } else if (planState.isActive) {
+                    systemInstruction += `\n\n[TASK PLANNER ACTIVE]\nAn active plan exists:\n${planState.planContent}\n\nReview the plan. Complete the next step. If a step is done, mark it as [x] in the PLAN.md file. Only focus on one step at a time!`;
+                }
+            }
+            
+            TokenAccountant.measureSystemPrompt(systemInstruction);
+            let finalPrompt = await this.buildPrompt(message.text, false, false /* Disable hardcoded search */, false, workspaceRoot);
+            
+            if (message.gameMode) {
+                systemInstruction += `\n[GAME DEV MODE ACTIVE]: You are an expert Game Developer. You can use your tools to download free CC0 3D models and textures from the internet without API keys. Only use procedural code if you can't find the asset. DO NOT load remote URLs in Three.js, ALWAYS download them first using download_free_internet_asset.`;
+            }
             
             if (architectureContext) {
                 finalPrompt = architectureContext + '\n' + finalPrompt;
@@ -619,28 +812,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             // SMART SUMMARIZER: Safely compress history if it exceeds user's limit OR token limit
             if ((this.conversationHistory.length / 2 > historyLimit || this.conversationHistory.estimateTokens() > historyTokenLimit) 
-                && mainClient && typeof mainClient.complete === 'function' && this.conversationHistory.length >= 6) {
+                && this.conversationHistory.length >= 6) {
                 this.postMessageToWebview({
                     command: 'statusUpdate',
-                    text: `🧠 Memory optimizing: Summarizing older context to save tokens...`
+                    text: `🧠 Memory optimizing: Compressing older context to save tokens (Zero API cost)...`
                 });
                 try {
-                    const rawHistory = this.conversationHistory.getHistory(this.conversationHistory.length / 2);
-                    const olderMessages = rawHistory.slice(0, rawHistory.length - 4); // Keep last 2 turns intact
-                    
-                    const summaryPrompt = `Summarize the following chat history concisely. Focus on the main technical context, architectural decisions, and the user's ultimate goal. Return ONLY the summary.\n\n${JSON.stringify(olderMessages)}`;
-                    
-                    const summaryResult = await mainClient.complete(summaryPrompt);
-                    
-                    if (summaryResult && summaryResult.text) {
-                        this.conversationHistory.compressHistoryWithSummary(summaryResult.text, 2);
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `✅ Context summarized safely.`
-                        });
-                    }
+                    // Local compression without API call
+                    this.conversationHistory.localCompress(2);
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `✅ Context compressed locally.`
+                    });
                 } catch (err) {
-                    console.error('Main Brain summarization failed', err);
+                    console.error('Local compression failed', err);
                 }
             }
             
@@ -653,6 +838,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             const historyWithoutLast = history.slice(0, -1);
             
+            const cacheKey = workspaceRoot ? generateCacheKey(systemInstruction, historyWithoutLast, finalPrompt) : null;
+            if (cacheKey && workspaceRoot) {
+                const cachedResponse = checkCache(workspaceRoot, cacheKey);
+                if (cachedResponse) {
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `⚡ Cache Hit: Zero-cost instant response loaded!`
+                    });
+                    this.postMessageToWebview({
+                        command: 'streamChunk',
+                        text: cachedResponse,
+                        done: true
+                    });
+                    const cleanResponseText = cachedResponse.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
+                    this.conversationHistory.addMessage('model', cleanResponseText);
+                    return;
+                }
+            }
+
             this.postMessageToWebview({
                 command: 'statusUpdate',
                 text: `📚 Context Window: Sending previous ${historyWithoutLast.length} messages...`
@@ -680,7 +884,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         },
                         {
                             name: "update_architecture_context",
-                            description: "Updates or creates ARCHITECTURE.md with the latest project context, architecture, and recent changes. Use this to maintain your memory across sessions.",
+                            description: "Updates or creates ARCHITECTURE.md with the latest project context, architecture, and recent changes. ONLY use this AFTER you have successfully added a feature or modified files. DO NOT hallucinate details for an empty/new project.",
                             parameters: { type: "object", properties: { content: { type: "string", description: "The full markdown content for the ARCHITECTURE.md file" } } }
                         },
                         {
@@ -697,10 +901,57 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             name: "replace_symbol",
                             description: "AST-Aware Patching: Completely replaces a function or class safely without regex matching. It uses the language server to find the exact symbol boundary.",
                             parameters: { type: "object", properties: { filepath: { type: "string" }, symbolName: { type: "string" }, newCode: { type: "string", description: "The new code to replace it with" } }, required: ["filepath", "symbolName", "newCode"] }
+                        },
+                        {
+                            name: "generate_ui_blueprint",
+                            description: "Generates a deterministic Brand DNA (Colors, Fonts, Inline SVG, Image URLs) for UI/UX tasks. Use this BEFORE writing frontend code for a new website/component.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    industry: { type: "string", description: "e.g., fitness, fintech, healthcare, saas, ecommerce, default" },
+                                    audience: { type: "string" },
+                                    emotion: { type: "string" },
+                                    palette_mood: { type: "string", enum: ["dark", "light"] },
+                                    sections: { type: "array", items: { type: "string" }, description: "List of sections needed, e.g., ['hero', 'features', 'testimonials']" },
+                                    layout: { type: "string", description: "e.g., full-width landing, dashboard" },
+                                    typography_feel: { type: "string", description: "e.g., bold, elegant, modern, friendly" },
+                                    corner_style: { type: "string", enum: ["sharp", "rounded", "pill"], description: "OPTIONAL: The corner style for buttons and cards. Defaults to 'rounded'." },
+                                    custom_colors: { type: "object", properties: { primary: { type: "string" }, accent: { type: "string" }, surface: { type: "string" } }, description: "OPTIONAL: Use ONLY if the user explicitly requested specific colors (e.g. Neon Pink, Hacker Green). Otherwise leave blank." },
+                                    custom_font: { type: "string", description: "OPTIONAL: Use ONLY if the user explicitly requested a specific font family. Otherwise leave blank." }
+                                },
+                                required: ["industry", "audience", "emotion", "palette_mood", "sections", "layout", "typography_feel"]
+                            }
                         }
                     ]
                 }
             ];
+
+            if (message.includeWebSearch || message.gameMode) {
+                const searchWebTool: any = {
+                    name: "search_web",
+                    description: "Searches the internet for information, documentation, or code examples when you do not know the answer. ONLY use this when you explicitly need external information.",
+                    parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
+                };
+                tools[0].functionDeclarations.push(searchWebTool);
+            }
+
+            if (message.gameMode) {
+                const downloadAssetTool: any = {
+                    name: "download_free_internet_asset",
+                    description: "Searches the internet for a free texture, downloads it into the workspace /assets folder, and returns the local file path. Note: 3D models are not supported yet, only textures.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            searchQuery: { type: "string", description: "What texture you are looking for (e.g., 'wood', 'marble')" },
+                            assetType: { type: "string", enum: ["texture"] }
+                        },
+                        required: ["searchQuery", "assetType"]
+                    }
+                };
+                tools[0].functionDeclarations.push(downloadAssetTool);
+            }
+
+            const filteredTools = PromptClassifier.filterTools(promptCategory, tools);
 
             const onToolCall = async (functionCall: any) => {
                 if (functionCall.name === 'read_multiple_files') {
@@ -712,16 +963,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         const fullPath = path.join(workspaceRoot, filepath);
                         if (fs.existsSync(fullPath)) {
                             let content = fs.readFileSync(fullPath, 'utf8');
-                            // H1 FIX: Cap per-file size to prevent token explosion
                             if (estimateTokens(content) > 3000) {
                                 content = truncateToTokens(content, 3000) + '\n\n... (File truncated to stay within limits. Use search_codebase to find specific functions.)';
                             }
                             combinedResult += `\n--- File: ${filepath} ---\n${content}\n`;
+                            
+                            // Step 3: Inject dependencies to give inter-file context
+                            if (content.trim().length > 0) {
+                                const skeletons = await DependencyGraph.getImportSkeletons(fullPath, content, workspaceRoot);
+                                if (skeletons) {
+                                    combinedResult += skeletons;
+                                }
+                            }
                         } else if (filepath.includes('ARCHITECTURE')) {
                             const ruleFiles = ['ARCHITECTURE.md', 'AI_RULES.md', '.cursorrules', '.agent-rules.md'];
                             let found = false;
                             for (const ruleFile of ruleFiles) {
-                                const rulePath = path.join(workspaceRoot, ruleFile);
+                                const rulePath = ruleFile === 'ARCHITECTURE.md' ? path.join(this.getAiMetaDir(workspaceRoot), ruleFile) : path.join(workspaceRoot, ruleFile);
                                 if (fs.existsSync(rulePath)) {
                                     combinedResult += `\n--- File: ${ruleFile} ---\n${fs.readFileSync(rulePath, 'utf8')}\n`;
                                     found = true;
@@ -737,8 +995,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 } else if (functionCall.name === 'update_architecture_context') {
                     if (!workspaceRoot) return "Error: No workspace.";
                     const content = functionCall.args?.content || '';
-                    const fullPath = path.join(workspaceRoot, 'ARCHITECTURE.md');
-                    fs.writeFileSync(fullPath, content, 'utf8');
+                    const archPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
+                    fs.writeFileSync(archPath, content, 'utf8');
                     this.postMessageToWebview({
                         command: 'statusUpdate',
                         text: `📝 AI updated ARCHITECTURE.md to save context.`
@@ -747,14 +1005,34 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 } else if (functionCall.name === 'search_codebase') {
                     if (!this.ragEngine) return "Search engine not initialized.";
                     const query = functionCall.args?.query || '';
-                    const results = await this.ragEngine.search(query, 3);
-                    if (results.length === 0) return "No matches found.";
+                    
+                    let results;
+                    const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_tool', [], query) : null;
+                    const rawCache = ragCacheKey ? checkCache(workspaceRoot!, ragCacheKey) : null;
+                    
+                    if (rawCache) {
+                        try { results = JSON.parse(rawCache); } catch(e) {}
+                    }
+                    
+                    if (results) {
+                        this.postMessageToWebview({ command: 'statusUpdate', text: `⚡ RAG Cache Hit for tool search!` });
+                    } else {
+                        results = await this.ragEngine.search(query, 3);
+                        if (ragCacheKey && results && results.length > 0) {
+                            saveCache(workspaceRoot!, ragCacheKey, JSON.stringify(results));
+                        }
+                    }
+
+                    if (!results || results.length === 0) return "No matches found.";
                     return results.map((r: any) => `File: ${r.filepath}\n\n${r.content}`).join('\n\n---\n\n');
                 } else if (functionCall.name === 'find_references') {
                     if (!workspaceRoot) return "Error: No workspace.";
                     const sym = functionCall.args?.symbolName;
                     try {
-                        const symbols: vscode.SymbolInformation[] | undefined = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', sym);
+                                const symbols: vscode.SymbolInformation[] | undefined = await Promise.race([
+                                    Promise.resolve(vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', sym)),
+                                    new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 2000))
+                                ]);
                         if (!symbols || symbols.length === 0) return `Symbol ${sym} not found.`;
                         const target = symbols[0];
                         const refs: vscode.Location[] | undefined = await vscode.commands.executeCommand('vscode.executeReferenceProvider', target.location.uri, target.location.range.start);
@@ -792,6 +1070,82 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         await vscode.workspace.applyEdit(edit);
                         return `Successfully replaced ${symbolName} in ${filepath} using AST boundaries.`;
                     } catch (e: any) { return `AST Patching Error: ${e.message}`; }
+                } else if (functionCall.name === 'generate_ui_blueprint') {
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🎨 Generating Brand DNA & UI Blueprint...` });
+                    try {
+                        const args = functionCall.args as DesignSemantics;
+                        const dna = extractBrandDNA(args);
+                        const assets = orchestrateAssets(args);
+                        
+                        const result = `
+### BRAND DNA EXTRACTED LOCALLY
+Use these exact variables, colors, fonts, and assets in your code. DO NOT invent new colors or use broken image links.
+
+**CSS Variables (Inject into your styles):**
+${dna.cssVars}
+
+**Inline Logo SVG:**
+${dna.logoSVG}
+
+**Pre-Orchestrated Assets (Use these exact URLs in your <img> tags):**
+${JSON.stringify(assets, null, 2)}
+
+**Spacing Strategy:** ${dna.spacing},
+**Border Radius:** ${dna.borderRadius}
+`;
+                        return result;
+                    } catch (e: any) { return `Blueprint Generation Error: ${e.message}`; }
+                } else if (functionCall.name === 'search_web') {
+                    const query = functionCall.args?.query;
+                    if (!query) return "Error: No query provided.";
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🌐 AI Web Search: ${query}` });
+                    try {
+                        const { searchWeb } = require('../tools/scraper');
+                        const results = await searchWeb(query);
+                        const urls: string[] = [];
+                        const urlMatches = results.matchAll(/\[Source \d+\] (http[^\n]+)/g);
+                        for (const u of urlMatches) {
+                            try { urls.push(`[Source: ${new URL(u[1]).hostname}](${u[1]})`); } catch { /* ignore */ }
+                        }
+                        if (urls.length > 0) {
+                            this.postMessageToWebview({
+                                command: 'streamChunk',
+                                text: `*🌐 Web Sources:* ${urls.join(' | ')}\n\n---\n\n`,
+                                done: false
+                            });
+                        }
+                        return results;
+                    } catch (e: any) {
+                        return `Web Search Error: ${e.message}`;
+                    }
+                } else if (functionCall.name === 'download_free_internet_asset') {
+                    if (!workspaceRoot) return "Error: No workspace.";
+                    const { searchQuery, assetType } = functionCall.args;
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `📦 Fetching Asset: ${searchQuery}` });
+                    try {
+                        const assetsDir = path.join(workspaceRoot, 'assets');
+                        if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir);
+                        if (assetType === 'texture') {
+                            const res = await fetch(`https://api.polyhaven.com/assets?search=${encodeURIComponent(searchQuery)}`);
+                            const data: any = await res.json();
+                            const textureKeys = Object.keys(data).filter(k => data[k].type === 1);
+                            if (textureKeys.length > 0) {
+                                const assetId = textureKeys[0];
+                                const url = `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/${assetId}/${assetId}_diff_2k.jpg`;
+                                const dest = path.join(assetsDir, `${assetId}.jpg`);
+                                const file = fs.createWriteStream(dest);
+                                await new Promise((resolve, reject) => {
+                                    require('https').get(url, (response: any) => {
+                                        response.pipe(file);
+                                        file.on('finish', () => { file.close(); resolve(true); });
+                                    }).on('error', (e: any) => { fs.unlink(dest, ()=>{}); reject(e); });
+                                });
+                                return `Success! Texture downloaded to: ./assets/${assetId}.jpg`;
+                            }
+                            return "Error: Asset not found on PolyHaven. Try a different search term like 'wood' or 'metal'.";
+                        }
+                        return `Error: You requested '${assetType}', but only 'texture' is currently supported. Use primitive Three.js shapes and apply textures to them.`;
+                    } catch (e: any) { return `Asset Download Error: ${e.message}`; }
                 }
                 return `Unknown tool: ${functionCall.name}`;
             };
@@ -812,8 +1166,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             usage: chunk.usage
                         });
                     },
-                    this.currentStreamAbortController.signal,
-                    tools,
+                    this.currentStreamAbortController?.signal,
+                    filteredTools,
                     onToolCall
                 );
             }
@@ -826,6 +1180,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             // Strip <think> tags robustly before saving to history to prevent context pollution
             const cleanResponseText = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
             this.conversationHistory.addMessage('model', cleanResponseText, result.usage);
+
+            // Job 2: Session Summarizer (Micro-Task)
+            if (message.advancedMode && workspaceRoot) {
+                const config = getAgentConfig(workspaceRoot);
+                if (config?.supportBrain?.model) {
+                    (async () => {
+                        try {
+                            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
+                            let scoutClient;
+                            if (config.supportBrain.providerType === 'local') {
+                                scoutClient = new LocalOllamaClient(config.supportBrain.model || 'llama-3.1-8b-instant', config.supportBrain.endpoint || 'http://127.0.0.1:11434', config.supportBrain.apiKey);
+                            } else {
+                                const keyStr = config.supportBrain.apiKey?.trim() || '';
+                                if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.groq.com/openai', keyStr);
+                                else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.openai.com', keyStr);
+                                else scoutClient = new GeminiCloudClient([keyStr], config.supportBrain.model || 'gemini-1.5-flash', 60);
+                            }
+                            const summaryPrompt = `Summarize this AI coding response in exactly 1 sentence (max 20 words). Focus on: what file was changed, what was added/fixed.\n\nResponse:\n${cleanResponseText.substring(0, 1000)}`;
+                            const summaryResult = await scoutClient.complete(summaryPrompt);
+                            SessionMemory.recordDecision(workspaceRoot, summaryResult.text.trim());
+                        } catch (e) {
+                            console.error("Scout Summarizer failed", e);
+                        }
+                    })();
+                }
+            }
 
             // Removed complex JSON background queue. We now rely on conversational step-by-step.
             if (message.architectMode) {
@@ -847,94 +1227,30 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Builds the system instruction with multi-file and context directives.
-     */
-    private buildSystemInstruction(config: AgentConfig | null, workspaceRoot?: string, isAgentMode: boolean = false, isArchitectMode: boolean = false): string {
-        let systemInstruction = config?.systemInstructions || 
-            'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks.';
-        
-        systemInstruction = systemInstruction.replace(/Provide the complete code file content so it can be directly applied\.?/g, '').trim();
-        
-        systemInstruction += `
-You are an expert debugger and 10x developer. Always think step-by-step before making changes.
-When modifying existing code, DO NOT rewrite the entire file unless asked. Use Search and Replace blocks to patch specific lines or functions.
-Format the blocks exactly like this:
-
-**\`src/filepath.ext\`**
-\`\`\`javascript
-<<<<<<< SEARCH
-exact code to be replaced
-=======
-new updated code
->>>>>>> REPLACE
-\`\`\`
-
-CRITICAL: The SEARCH block MUST perfectly match the existing code, including indentation.
-You can include multiple Search/Replace blocks for the same file if needed.
-If you MUST provide a complete file rewrite, format it like this without the search/replace markers:
-**\`src/filepath.ext\`**
-\`\`\`javascript
-// full code here
-\`\`\`
-
-ANTI-ELISION RULE (CRITICAL):
-NEVER use placeholders like "// rest of the code remains the same" or "// ...". You MUST write the complete, exact code in the SEARCH block and the complete updated code in the REPLACE block. If you use placeholders, the file parser will corrupt the user's files and delete their working code. DO NOT DELETE WORKING CODE.
-
-You have the ability to suggest Terminal commands to test your code, debug, or install dependencies.
-If you need to execute a command, provide it in a standard \`\`\`bash block.`;
-
-            systemInstruction += `\nIf the user provides a short 2-3 line request for a new feature or project, first analyze the context, create a step-by-step plan, and then execute it. 
-If the user provides a detailed plan with steps, acknowledge it and systematically execute their exact steps without deviating.
-When suggesting terminal commands, ALWAYS wrap them in \`\`\`bash code blocks so the user can execute them.`;
-
-        if (isArchitectMode) {
-            systemInstruction += `\n\n[ARCHITECT MODE ACTIVE]: You are building a large project or feature. 
-CRITICAL RULE 1: If the user asks you to build a NEW project using a framework (React, Next.js, Django, Vue, Vite, etc.), you MUST FIRST ONLY provide the exact CLI terminal commands to scaffold the project (e.g., \`django-admin startproject\`, \`npx create-next-app\`) using standard \`\`\`bash blocks. DO NOT provide ANY code files or file modifications in this first response.
-CRITICAL RULE 2: STOP GENERATING immediately after providing the scaffolding commands. Wait for the user to run them and reply.
-CRITICAL RULE 3: Once the scaffold is ready, carefully read the context. Do not make arbitrary changes. Break down your coding steps and provide ONLY 1 or 2 file modifications per response. Ask the user for confirmation to continue.
-Do NOT attempt to write the entire codebase at once.`;
-        }
-
-        systemInstruction += `\n\nCRITICAL ARCHITECTURE & TOKEN RULES:
-1. MODULARITY: NEVER write massive, monolithic files (like a huge views.py or thousands of lines in one component). Break down logic into small, modular, single-purpose files and functions.
-2. PERSISTENT MEMORY: You MUST create and maintain an ARCHITECTURE.md file in the root directory. When starting a task, use the 'read_multiple_files' tool to read ['ARCHITECTURE.md'] so you know what files exist.
-3. RAG/SEARCH FIRST: Do NOT randomly guess file names and try to read them. ALWAYS use the 'search_codebase' (RAG) tool first to search for keywords. Once you know the exact file paths from RAG, use 'read_multiple_files' to read them.
-4. TOKEN EFFICIENCY: Read multiple files at once using the 'read_multiple_files' tool passing an array of paths (e.g. ['game/views.py', 'game/models.py']). This saves API requests. Read only the specific files relevant to the user's request.
-5. DRY PRINCIPLE: Do not repeat code. Use imports and keep the codebase strictly organized.
-6. AMBIGUITY RULE (CRITICAL): If the user says "fix error", "solve this bug", or "something is broken" WITHOUT providing the actual error message or traceback, you MUST STOP and ask: "Please paste the exact error message or traceback so I can fix it precisely." DO NOT start blindly reading files. Wait for the error details before calling any tools.
-7. TOOL LOOP PREVENTION: Never call the same tool with the same arguments twice in a row. If a file read returned "not found", do not try again. If you've already explored the structure, stop and respond with your findings.
-8. CONTEXT FALLBACK: A background Scout agent may provide initial context in <scout_context> tags. If this context is missing, insufficient, or incomplete, YOU MUST use the 'read_multiple_files' or 'search_codebase' tools yourself to fetch the missing code before generating your response.
-9. ARCHITECTURE UPDATES: Whenever you solve a bug or make significant code changes, you MUST output an explicit SEARCH/REPLACE block to update the \`ARCHITECTURE.md\` file with notes about the bug fix and how the component's logic changed. Do not wait for the background indexer to do it.
-10. NO PATH HALLUCINATION: NEVER guess or assume file paths (e.g., do not guess 'dashboard/ai/' if it's not in the context). ALWAYS verify paths using the workspace structure or tools before modifying them.
-11. STEP-BY-STEP LIMIT: Provide a MAXIMUM of 3 file modifications per response. If a task requires more, do the first 3 and explicitly ask the user: "Please say 'continue' to proceed with the remaining files."
-12. DEBUGGING & COMMANDS: When analyzing an error, do NOT hallucinate the cause. Output the necessary terminal command in a \`\`\`bash block and explicitly say: "Please run this command and provide the output so I can analyze the error."`;
-
-
-        if (isAgentMode) {
-            systemInstruction += `\n[AGENT MODE ACTIVE]: You can suggest bash commands to install packages or run tests. The user will review and run them. Provide step-by-step instructions.`;
-        }
-        
-        // Add Project-specific rules
-        if (workspaceRoot) {
-            const agentRulesPath = path.join(workspaceRoot, '.agentrules');
-            const cursorRulesPath = path.join(workspaceRoot, '.cursorrules');
-            
-            if (fs.existsSync(agentRulesPath)) {
-                systemInstruction += `\n\n### PROJECT RULES ###\nYou MUST strictly follow these project rules defined by the user:\n${fs.readFileSync(agentRulesPath, 'utf8')}\n`;
-            } else if (fs.existsSync(cursorRulesPath)) {
-                systemInstruction += `\n\n### PROJECT RULES ###\nYou MUST strictly follow these project rules defined by the user:\n${fs.readFileSync(cursorRulesPath, 'utf8')}\n`;
-            }
-        }
-
-        return systemInstruction;
-    }
-
-    /**
      * Builds the final user prompt with context injection (@search, @file, @workspace, active file).
      */
     private async buildPrompt(text: string, includeActiveFile: boolean, includeWebSearch: boolean, includeWorkspace: boolean, workspaceRoot?: string): Promise<string> {
         let finalPrompt = text;
         let contextSources: ContextSource[] = [];
+
+        // Error Diagnosis Engine
+        if (workspaceRoot) {
+            const errorTextToAnalyze = finalPrompt + '\n' + TerminalCapture.getLastOutput();
+            const errorContexts = ErrorDiagnoser.extractErrors(errorTextToAnalyze, workspaceRoot);
+            
+            if (errorContexts.length > 0) {
+                let diagStr = '### ERROR DIAGNOSTICS (Source Snippets) ###\n';
+                for (const ctx of errorContexts) {
+                    diagStr += `\n${ctx.codeSnippet}\n`;
+                }
+                contextSources.push({ name: 'Error Diagnostics', content: diagStr, priority: 9 });
+                
+                this.postMessageToWebview({
+                    command: 'statusUpdate',
+                    text: `🐛 Error Diagnoser: Auto-extracted ${errorContexts.length} source file context(s).`
+                });
+            }
+        }
 
         // Handle @search directive or UI toggle
         if (includeWebSearch || text.toLowerCase().includes('@search')) {
@@ -994,16 +1310,27 @@ Do NOT attempt to write the entire codebase at once.`;
                     ? path.resolve(workspaceRoot, filePath)
                     : filePath;
                 
-                if (fs.existsSync(resolvedPath)) {
-                    const content = fs.readFileSync(resolvedPath, 'utf8');
-                    const ext = path.extname(resolvedPath).slice(1) || 'text';
-                    contextSources.push({ name: `File: ${filePath}`, content: `\`\`\`${ext}\n${content}\n\`\`\``, priority: 10 });
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `📄 Loaded file: ${filePath}`
-                    });
+                if (!fs.existsSync(resolvedPath)) continue;
+
+                const content = fs.readFileSync(resolvedPath, 'utf8');
+                const ext = path.extname(resolvedPath).slice(1) || 'text';
+                let fileContentForContext = content;
+                const tokenCount = estimateTokens(content);
+
+                if (tokenCount > 1500) { // Skeletonize large files
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🦴 Skeletonizing ${filePath}...` });
+                    try {
+                        fileContentForContext = await skeletonizeFile(vscode.Uri.file(resolvedPath));
+                    } catch (e) {
+                        console.error(`Skeletonization failed for ${filePath}`, e);
+                        fileContentForContext = truncateToTokens(content, 1500);
+                    }
                 }
-            } catch { /* skip unreadable files */ }
+
+                contextSources.push({ name: `File: ${filePath}`, content: `\`\`\`${ext}\n${fileContentForContext}\n\`\`\``, priority: 10 });
+                this.postMessageToWebview({ command: 'statusUpdate', text: `📄 Loaded file: ${filePath}` });
+
+            } catch (e) { console.error(`Error processing @file ${filePath}:`, e); }
             finalPrompt = finalPrompt.replace(match[0], '').trim();
         }
 
@@ -1016,9 +1343,12 @@ Do NOT attempt to write the entire codebase at once.`;
         if (wantsWorkspace) {
             if (workspaceRoot) {
                 try {
+                    const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
+                    const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+                    const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
                     const files = await vscode.workspace.findFiles(
                         '**/*',
-                        '{**/node_modules/**,**/dist/**,**/.git/**,**/out/**,**/*.lock}'
+                        excludePattern
                     );
                     const fileList = files.map(f => path.relative(workspaceRoot, f.fsPath)).sort();
                     
@@ -1042,8 +1372,24 @@ Do NOT attempt to write the entire codebase at once.`;
                     text: `🧠 Semantic Search: Analyzing codebase...`
                 });
                 
-                const ragResults = await this.ragEngine.search(text, 3);
-                if (ragResults.length > 0) {
+                let ragResults;
+                const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_manual', [], text) : null;
+                const rawCache = ragCacheKey ? checkCache(workspaceRoot!, ragCacheKey) : null;
+                
+                if (rawCache) {
+                    try { ragResults = JSON.parse(rawCache); } catch(e) {}
+                }
+                
+                if (ragResults) {
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `⚡ RAG Cache Hit: Instant offline search!` });
+                } else {
+                    ragResults = await this.ragEngine.search(text, 3);
+                    if (ragCacheKey && ragResults && ragResults.length > 0) {
+                        saveCache(workspaceRoot!, ragCacheKey, JSON.stringify(ragResults));
+                    }
+                }
+
+                if (ragResults && ragResults.length > 0) {
                     contextSources.push({ name: 'Semantic Codebase Context', content: ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n'), priority: 7 });
                     this.postMessageToWebview({
                         command: 'statusUpdate',
@@ -1059,16 +1405,18 @@ Do NOT attempt to write the entire codebase at once.`;
         // LSP Symbol Resolution for True Codebase Context
         if (workspaceRoot && text.length > 5) {
             try {
-                // Extract potential PascalCase, camelCase, or snake_case symbols
-                const symbolRegex = /[A-Z][a-z0-9]+[A-Z][a-z0-9]+|[A-Z][a-z0-9]+|[a-z0-9]+_[a-z0-9_]+/g;
-                const matches = text.match(symbolRegex) || [];
-                const potentialSymbols = Array.from(new Set(matches))
-                    .filter(s => s.length > 4 && !['javascript', 'typescript', 'python', 'java'].includes(s.toLowerCase()));
+                // Use ContextSelector to only resolve symbols that are explicitly mentioned
+                const mentions = ContextSelector.extractExplicitMentions(text);
+                const potentialSymbols = mentions.symbols;
 
                 if (potentialSymbols.length > 0) {
                     for (const sym of potentialSymbols) {
                         try {
-                            const symbols: vscode.SymbolInformation[] | undefined = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', sym);
+                                    // Wrap in a strict 2-second timeout to prevent Extension Host lockups on large repos
+                                    const symbols: vscode.SymbolInformation[] | undefined = await Promise.race([
+                                        Promise.resolve(vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', sym)),
+                                        new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 2000))
+                                    ]);
                             if (symbols && symbols.length > 0) {
                                 const topSymbols = symbols.slice(0, 2);
                                 for (const s of topSymbols) {
@@ -1092,52 +1440,59 @@ Do NOT attempt to write the entire codebase at once.`;
             } catch { /* ignore regex errors */ }
         }
 
-        // Always auto-include active file unless it's a simple greeting or explicitly told not to
-        const isGreeting = /^(hi|hello|hey|yo|what's up|sup|morning|evening|afternoon)$/i.test(text.trim());
-        let autoIncludeActive = true;
-        if (isGreeting || text.toLowerCase().includes('ignore active file')) {
-            autoIncludeActive = false;
-        }
-
-        // Include active file context if requested or auto-detected
-        if (autoIncludeActive || text.toLowerCase().includes('@active') || text.toLowerCase().includes('@current')) {
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
-                const doc = editor.document;
-                const fileName = path.basename(doc.fileName);
-                const langId = doc.languageId;
+        // Active file context injection using ContextSelector
+        const editor = vscode.window.activeTextEditor;
+        if (editor) {
+            const doc = editor.document;
+            const fileName = path.basename(doc.fileName);
+            const langId = doc.languageId;
+            const fileContent = doc.getText();
+            
+            // BUG-14 FIX: Skip non-code files to avoid wasting token budget
+            const skipLanguages = ['plaintext', 'log', 'binary', 'json', 'xml', 'csv', 'svg', 'markdown'];
+            const skipExtensions = ['.lock', '.min.js', '.min.css', '.map', '.env'];
+            const ext = path.extname(doc.fileName).toLowerCase();
+            const isCodeFile = !skipLanguages.includes(langId) && !skipExtensions.some(e => ext === e);
+            
+            if (isCodeFile && ContextSelector.shouldInjectActiveFile(text, fileName, fileContent)) {
+                const selection = editor.selection;
                 
-                // BUG-14 FIX: Skip non-code files to avoid wasting token budget
-                const skipLanguages = ['plaintext', 'log', 'binary', 'json', 'xml', 'csv', 'svg', 'markdown'];
-                const skipExtensions = ['.lock', '.min.js', '.min.css', '.map', '.env'];
-                const ext = path.extname(doc.fileName).toLowerCase();
-                const isCodeFile = !skipLanguages.includes(langId) && !skipExtensions.some(e => ext === e);
-                
-                if (isCodeFile) {
-                    const selection = editor.selection;
-                    
-                    if (!selection.isEmpty) {
-                        // Include just the selection
-                        const selectedText = doc.getText(selection);
-                        contextSources.push({ name: `Selected code from ${fileName}`, content: `\`\`\`${langId}\n${selectedText}\n\`\`\``, priority: 9 });
-                    } else {
-                        // Include the full file (truncated if too large)
-                        contextSources.push({ name: `Active file context: ${fileName}`, content: `\`\`\`${langId}\n${doc.getText()}\n\`\`\``, priority: 5 });
+                if (!selection.isEmpty) {
+                    // Include just the selection
+                    const selectedText = doc.getText(selection);
+                    contextSources.push({ name: `Selected code from ${fileName}`, content: `\`\`\`${langId}\n${selectedText}\n\`\`\``, priority: 9 });
+                } else {
+                    // Include the full file (truncated if too large)
+                    let fileContentForContext = fileContent;
+                    const tokenCount = estimateTokens(fileContentForContext);
+                    if (tokenCount > 1500) {
+                        this.postMessageToWebview({ command: 'statusUpdate', text: `🦴 Skeletonizing active file...` });
+                        try {
+                            fileContentForContext = await skeletonizeFile(doc.uri);
+                        } catch (e) {
+                            console.error(`Skeletonization failed for active file`, e);
+                            fileContentForContext = truncateToTokens(fileContentForContext, 1500);
+                        }
                     }
+                    contextSources.push({ name: `Active file context: ${fileName}`, content: `\`\`\`${langId}\n${fileContentForContext}\n\`\`\``, priority: 5 });
                 }
-                finalPrompt = finalPrompt.replace(/@active|@current/gi, '').trim();
             }
+            finalPrompt = finalPrompt.replace(/@active|@current/gi, '').trim();
         }
         const promptConfig = getAgentConfig(workspaceRoot);
-        const maxTokens = promptConfig?.contextLimits?.maxTokens || 8192;
+        const maxContextTokens = promptConfig?.contextLimits?.maxContextTokens || 7000;
         
         // Assemble final prompt with context
         // Optimization for smaller models: Place Context BEFORE the User Request
         // Smaller models (3B-7B) suffer from 'lost in the middle' and attend strongest to the end of the prompt.
         if (contextSources.length > 0) {
             const userPromptTokens = estimateTokens(finalPrompt);
-            // Reserve 2000 tokens for system prompt and chat history
-            const availableContextTokens = Math.max(500, maxTokens - 2000 - userPromptTokens);
+            // Dynamic token accounting
+            const availableContextTokens = TokenAccountant.getRemainingBudget(
+                maxContextTokens,
+                this.conversationHistory.estimateTokens(),
+                userPromptTokens
+            );
             
             const allocated = allocateBudget(availableContextTokens, contextSources);
             const totalUsed = allocated.reduce((sum, a) => sum + a.tokens, 0);
@@ -1172,87 +1527,24 @@ RULES FOR USING CONTEXT:
      * Save settings to .agent-config.json
      */
     private async handleSaveSettings(message: any): Promise<void> {
-        try {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders || workspaceFolders.length === 0) {
-                throw new Error('No active workspace folder to save configuration.');
-            }
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            
-            // Global Save logic: Save in user's home directory to share across projects and prevent GitHub leaks
-            const os = require('os');
-            const globalDir = path.join(os.homedir(), '.ultra-light-ai');
-            if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true });
-            const configPath = path.join(globalDir, 'config.json');
-
-            const isAdvancedMode = !!(message.config.mainBrain && message.config.supportBrain && message.config.supportBrain.model);
-
-            const newConfig: AgentConfig = {
-                // Preserve Legacy structure so older systems don't crash
-                providers: {
-                    cloud: {
-                        model: message.config.mainBrain?.providerType === 'cloud' ? message.config.mainBrain.model : 'gemini-1.5-pro',
-                        apiKey: message.config.mainBrain?.apiKey || '',
-                        rpmLimit: 15,
-                        timeoutSeconds: Number(message.config.timeoutSeconds)
-                    },
-                    local: {
-                        model: message.config.mainBrain?.providerType === 'local' ? message.config.mainBrain.model : 'llama3',
-                        endpoint: message.config.mainBrain?.endpoint || 'http://127.0.0.1:11434'
-                    }
-                },
-                activeProvider: message.config.mainBrain?.providerType || 'cloud',
-
-                // New Dual-Brain Config
-                mainBrain: message.config.mainBrain,
-                supportBrain: message.config.supportBrain,
-                advancedModeEnabled: isAdvancedMode,
-
-                contextLimits: {
-                    maxOutputTokens: Number(message.config.maxOutputTokens || message.config.maxTokens || 8192),
-                    maxContextTokens: Number(message.config.maxContextTokens || 32000),
-                    historyLength: Number(message.config.historyLength || 10)
-                },
-                systemInstructions: message.config.systemInstructions
-            };
-
-            fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2), 'utf8');
-            
-            // BUG FIX: Sync to local workspace config if it exists so it doesn't shadow the global save
-            const localConfigPath = path.join(workspaceRoot, '.vscode', 'ultra-light-ai.json');
-            const legacyConfigPath = path.join(workspaceRoot, '.agent-config.json');
-            if (fs.existsSync(localConfigPath)) {
-                fs.writeFileSync(localConfigPath, JSON.stringify(newConfig, null, 2), 'utf8');
-            } else if (fs.existsSync(legacyConfigPath)) {
-                fs.writeFileSync(legacyConfigPath, JSON.stringify(newConfig, null, 2), 'utf8');
-            }
-
-            // Save VS Code extension settings
-            if (message.config.enableInlineCompletions !== undefined || message.config.enableHoverExplanations !== undefined) {
-                const vsConfig = vscode.workspace.getConfiguration('ultraLightAI');
-                if (message.config.enableInlineCompletions !== undefined) {
-                    await vsConfig.update('enableInlineCompletions', message.config.enableInlineCompletions, vscode.ConfigurationTarget.Global);
-                }
-                if (message.config.enableHoverExplanations !== undefined) {
-                    await vsConfig.update('enableHoverExplanations', message.config.enableHoverExplanations, vscode.ConfigurationTarget.Global);
-                }
-            }
-
-            vscode.window.showInformationMessage('✨ Configuration saved successfully!');
-            
-            this.postMessageToWebview({
-                command: 'settingsSaved',
-                success: true,
-                model: message.config.model
-            });
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to save settings: ${error?.message || error}`);
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            vscode.window.showErrorMessage('No active workspace folder to save configuration.');
             this.postMessageToWebview({
                 command: 'settingsSaved',
                 success: false,
-                error: error?.message || error
+                error: 'No active workspace folder'
             });
+            return;
         }
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        
+        await SettingsHandler.handleSaveSettings(
+            message,
+            workspaceRoot,
+            (root) => this.getAiMetaDir(root),
+            (msg) => this.postMessageToWebview(msg)
+        );
     }
 
     /**
@@ -1314,44 +1606,7 @@ RULES FOR USING CONTEXT:
                                 throw new Error(`Could not find the specified search block in ${filepath}. Ensure the code exactly matches the file context.`);
                             }
                         }
-                        
-                        // Regex Fallback to Scout Brain
-                        if (!blocksFound && (content.includes('<<<<<<<') || content.includes('======='))) {
-                            const config = getAgentConfig(workspaceRoot);
-                            const isAdvanced = config?.advancedModeEnabled && config?.supportBrain?.model;
-                            
-                            if (isAdvanced) {
-                                this.postMessageToWebview({
-                                    command: 'statusUpdate',
-                                    text: `🤖 Regex parsing failed. Scout Brain is recovering malformed blocks...`
-                                });
-                                try {
-                                    const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-                                    let scoutClient;
-                                    const supportBrain = config.supportBrain;
-                                    if (supportBrain.providerType === 'local') {
-                                        scoutClient = new LocalOllamaClient(supportBrain.model || 'llama-3.1-8b-instant', supportBrain.endpoint || 'http://127.0.0.1:11434', supportBrain.apiKey);
-                                    } else {
-                                        scoutClient = new GeminiCloudClient([supportBrain.apiKey?.trim() || ''], supportBrain.model || 'gemini-1.5-flash', 60);
-                                    }
-                                    
-                                    const fixPrompt = `Extract SEARCH and REPLACE blocks from this text. Return ONLY a valid JSON array of objects with "search" and "replace" keys. No markdown.\n\n${content}`;
-                                    const fixResponse = await scoutClient.complete(fixPrompt);
-                                    
-                                    const jsonStr = fixResponse.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-                                    const parsedBlocks = JSON.parse(jsonStr);
-                                    
-                                    for (const b of parsedBlocks) {
-                                        blocksFound = true;
-                                        const patchResult = await this.applyPatchWithTiers(fileText, b.search, b.replace, filepath, false);
-                                        if (patchResult.success) fileText = patchResult.text;
-                                    }
-                                } catch (err) {
-                                    console.error("Scout recovery failed:", err);
-                                }
-                            }
-                        }
-                        
+                        // Removed old Scout Regex Fallback -> Replaced by Job 1 SEARCH Healer
                         if (!blocksFound) {
                             throw new Error(`Malformed Search/Replace block in ${filepath}. Check if the block format is exactly <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE`);
                         }
@@ -1370,7 +1625,14 @@ RULES FOR USING CONTEXT:
                                 }
                             }
                         }
-                        fileText = content;
+                        
+                        // FIX: Remove markdown wrapping for full file overwrites so actual files aren't corrupted
+                        let cleanContent = content.trim();
+                        const blockMatch = cleanContent.match(/^```[a-zA-Z]*\r?\n([\s\S]*?)\r?\n```$/);
+                        if (blockMatch && blockMatch[1]) {
+                            cleanContent = blockMatch[1].trim();
+                        }
+                        fileText = cleanContent;
                     }
                 }
 
@@ -1387,11 +1649,81 @@ RULES FOR USING CONTEXT:
                 createdFiles.push(filepath);
             }
             
+            // Save snapshots for all modified files before applying the atomic edit
+            for (const filepath of Object.keys(fileGroups)) {
+                const fullPath = path.join(workspaceRoot, filepath);
+                if (fs.existsSync(fullPath)) {
+                    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
+                    FileVersioning.saveSnapshot(workspaceRoot, fullPath, document.getText());
+                }
+            }
+            
             const success = await vscode.workspace.applyEdit(edit);
             if (!success) {
                 throw new Error("VS Code failed to apply the workspace edits.");
             }
+
+            // Patch Integrity Validator
+            const profile = ProjectScanner.getProfile(workspaceRoot);
+            if (profile && (profile.buildCommand || profile.testCommand)) {
+                const cmdToRun = profile.testCommand || profile.buildCommand;
+                if (cmdToRun) {
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `🔍 Validating patch integrity: Running \`${cmdToRun}\`...`
+                    });
+
+                    try {
+                        const output = await TerminalCapture.runAndCapture(cmdToRun, workspaceRoot);
+                        if (output.includes('Exit Code:') && !output.includes('Exit Code: 0')) {
+                            // Build failed! Auto-Rollback
+                            vscode.window.showErrorMessage(`Build failed after patch. Rolling back and notifying AI.`);
+                            
+                            for (const filepath of Object.keys(fileGroups)) {
+                                const fullPath = path.join(workspaceRoot, filepath);
+                                const content = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
+                                if (content) {
+                                    fs.writeFileSync(fullPath, content, 'utf8');
+                                }
+                            }
+
+                            this.postMessageToWebview({
+                                command: 'injectChatAndSend',
+                                text: `The code you applied broke the build/tests. I have automatically rolled it back. Here is the error:\n<terminal_output>\n${output}\n</terminal_output>\nPlease fix the issue.`
+                            });
+                            return; // Halt further processing
+                        } else {
+                            vscode.window.showInformationMessage(`✅ Build/Tests passed after patch!`);
+                        }
+                    } catch (e) {
+                        console.error('Integrity check failed', e);
+                    }
+                }
+            }
             
+            // Auto-update Session Memory for every applied file (fixes long-chat amnesia)
+            for (const filepath of createdFiles) {
+                const fullPath = path.join(workspaceRoot, filepath);
+                if (fs.existsSync(fullPath)) {
+                    const content = fs.readFileSync(fullPath, 'utf8');
+                    SessionMemory.recordFileApplied(workspaceRoot, filepath, content);
+                }
+            }
+
+            // Auto-update Architecture.md (backend-driven, no AI needed)
+            const archPath = path.join(workspaceRoot, '.ultra-light-ai', 'ARCHITECTURE.md');
+            const archLines: string[] = [];
+            for (const filepath of createdFiles) {
+                const fullPath = path.join(workspaceRoot, filepath);
+                const lineCount = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf8').split('\n').length : 0;
+                const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+                archLines.push(`- \`${filepath}\` — ${lineCount} lines (applied: ${ts})`);
+            }
+            if (archLines.length > 0) {
+                const entry = `\n## Applied ${new Date().toLocaleDateString()}\n${archLines.join('\n')}\n`;
+                fs.appendFileSync(archPath, entry, 'utf8');
+            }
+
             // Save files automatically to prevent dirty state if needed, or let user decide.
             vscode.window.showInformationMessage(`✨ Applied changes to ${message.files.length} files! (Use Ctrl+Z to undo)`);
             
@@ -1399,6 +1731,17 @@ RULES FOR USING CONTEXT:
                 const firstFile = path.join(workspaceRoot, createdFiles[0]);
                 const doc = await vscode.workspace.openTextDocument(firstFile);
                 await vscode.window.showTextDocument(doc);
+
+                // Auto-launch Game Runner if an HTML file was generated/edited
+                if (firstFile.endsWith('.html') || fs.existsSync(path.join(workspaceRoot, 'index.html'))) {
+                    const gamePath = firstFile.endsWith('.html') ? firstFile : path.join(workspaceRoot, 'index.html');
+                    setTimeout(() => {
+                        try {
+                            const { GameRunnerPanel } = require('./gameRunnerPanel');
+                            GameRunnerPanel.createOrShow(this._extensionUri, gamePath, workspaceRoot);
+                        } catch(e) { console.error("Auto-launch GameRunner failed", e); }
+                    }, 800); // slight delay to let VS Code save/format
+                }
             }
 
             this.postMessageToWebview({
@@ -1420,19 +1763,52 @@ RULES FOR USING CONTEXT:
     private handleOpenConfig(): void {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            
             // Open Global Config
             const os = require('os');
             const globalConfigPath = path.join(os.homedir(), '.ultra-light-ai', 'config.json');
-            const finalPath = fs.existsSync(globalConfigPath) ? globalConfigPath : null;
-            
-            if (finalPath && fs.existsSync(finalPath)) {
-                vscode.workspace.openTextDocument(finalPath).then(doc => {
+            if (fs.existsSync(globalConfigPath)) {
+                vscode.workspace.openTextDocument(globalConfigPath).then(doc => {
                     vscode.window.showTextDocument(doc);
                 });
             } else {
                 vscode.window.showErrorMessage('Global Agent configuration file does not exist yet. Please save settings from the UI first.');
+            }
+        }
+    }
+
+    /**
+     * Clear local cache
+     */
+    private handleClearCache(): void {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const aiMetaDir = this.getAiMetaDir(workspaceRoot);
+            const cachePath = path.join(aiMetaDir, 'cache.json');
+            const ragCachePath = path.join(aiMetaDir, 'rag-index.json');
+            
+            if (fs.existsSync(ragCachePath)) {
+                try { fs.unlinkSync(ragCachePath); } catch (e) { /* ignore */ }
+            }
+            
+            if (fs.existsSync(cachePath)) { // Check for new path
+                try {
+                    fs.unlinkSync(cachePath);
+                    vscode.window.showInformationMessage('🗑️ Cache cleared successfully!');
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Failed to clear cache: ${e.message}`);
+                }
+            } else {
+                // Also check for old path and clear it
+                const oldCachePath = path.join(workspaceRoot, '.vscode', 'ultra-light-ai-cache.json');
+                if (fs.existsSync(oldCachePath)) {
+                    try {
+                        fs.unlinkSync(oldCachePath);
+                        vscode.window.showInformationMessage('🗑️ Cache cleared successfully!');
+                        return;
+                    } catch (e) { /* ignore */ }
+                }
+                vscode.window.showInformationMessage('Cache is already empty.');
             }
         }
     }
@@ -1456,12 +1832,29 @@ RULES FOR USING CONTEXT:
             return;
         }
 
-        // Action Block UI Interceptor added
-        this.postMessageToWebview({
-            command: 'streamChunk',
-            text: `\n\n> 🤖 **AI Wants to Execute:**\n> \`\`\`bash\n> ${command}\n> \`\`\`\n> *Command placed in terminal. Review and press Enter to execute.*`,
-            done: false
-        });
+        const scaffoldPatterns = [
+            /npx\s+create-/i, /npm\s+init/i, /yarn\s+create/i, /pnpm\s+create/i,
+            /django-admin\s+startproject/i, /vue\s+create/i, /ng\s+new/i, /composer\s+create-project/i,
+            /rails\s+new/i, /cargo\s+new/i, /dotnet\s+new/i, /npx\s+vite/i
+        ];
+        
+        const isScaffold = scaffoldPatterns.some(pattern => pattern.test(command));
+
+        if (isScaffold) {
+            this.postMessageToWebview({
+                command: 'streamChunk',
+                text: `\n\n> 🏗️ **PROJECT SCAFFOLD DETECTED**\n> The AI has prepared a setup command:\n> \`\`\`bash\n> ${command}\n> \`\`\`\n> *⚠️ Command placed in terminal. Press Enter in terminal to execute it. Once it finishes, reply "done" to let the AI continue coding.*`,
+                done: false
+            });
+            vscode.window.showWarningMessage('🏗️ Scaffold Command Detected. Please run it in the terminal, wait for it to finish, and then reply to AI.');
+        } else {
+            // Action Block UI Interceptor added
+            this.postMessageToWebview({
+                command: 'streamChunk',
+                text: `\n\n> 🤖 **AI Wants to Execute:**\n> \`\`\`bash\n> ${command}\n> \`\`\`\n> *Command placed in terminal. Review and press Enter to execute.*`,
+                done: false
+            });
+        }
         
         let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI');
         if (!terminal) {
@@ -1469,7 +1862,9 @@ RULES FOR USING CONTEXT:
         }
         terminal.show();
         // Set addNewLine to false so the user can edit the command before hitting enter
-        terminal.sendText(command, false);
+        // BUG FIX: Join multiline commands with '&&' so they don't break when stripped of newlines
+        const safeCommand = command.trim().split(/\r?\n/).filter(line => line.trim().length > 0).join(' && ');
+        terminal.sendText(safeCommand, false);
         vscode.window.showInformationMessage('Command placed in terminal. Edit it if needed, then press Enter.');
     }
 

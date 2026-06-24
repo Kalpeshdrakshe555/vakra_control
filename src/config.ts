@@ -59,9 +59,14 @@ export function getAgentConfig(workspaceRoot?: string): AgentConfig | null {
 
     // 2. Load Workspace Override (if user manually created one for a specific project)
     if (workspaceRoot) {
-        const localConfigPath = path.join(workspaceRoot, '.vscode', 'ultra-light-ai.json');
+        const newLocalConfigPath = path.join(workspaceRoot, '.ultra-light-ai', 'workspace-config.json');
+        const oldLocalConfigPath = path.join(workspaceRoot, '.vscode', 'ultra-light-ai.json');
         const legacyConfigPath = path.join(workspaceRoot, '.agent-config.json');
-        const workspacePath = fs.existsSync(localConfigPath) ? localConfigPath : (fs.existsSync(legacyConfigPath) ? legacyConfigPath : null);
+        
+        const workspacePath = fs.existsSync(newLocalConfigPath) ? newLocalConfigPath : 
+                              (fs.existsSync(oldLocalConfigPath) ? oldLocalConfigPath : 
+                              (fs.existsSync(legacyConfigPath) ? legacyConfigPath : null));
+                              
         if (workspacePath) {
             try {
                 const workspaceConfig = JSON.parse(fs.readFileSync(workspacePath, 'utf8')) as AgentConfig;

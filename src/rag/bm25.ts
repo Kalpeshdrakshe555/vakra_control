@@ -2,6 +2,7 @@ export class BM25 {
     private k1 = 1.5;
     private b = 0.75;
     private documentLengths: Map<string, number> = new Map();
+    private documentBoosts: Map<string, number> = new Map();
     private termFrequencies: Map<string, Map<string, number>> = new Map();
     private documentCount = 0;
     private averageDocumentLength = 0;
@@ -16,9 +17,10 @@ export class BM25 {
             .filter(t => t.length > 2);          // Ignore very short words
     }
 
-    public addDocument(id: string, text: string) {
+    public addDocument(id: string, text: string, boost: number = 1.0) {
         const tokens = this.tokenize(text);
         this.documentLengths.set(id, tokens.length);
+        this.documentBoosts.set(id, boost);
         
         const tf = new Map<string, number>();
         for (const token of tokens) {
@@ -26,11 +28,10 @@ export class BM25 {
         }
         this.termFrequencies.set(id, tf);
         
+        // O(1) incremental average instead of O(n) full-sum per document
+        const prevTotal = this.averageDocumentLength * (this.documentCount);
         this.documentCount++;
-        
-        let totalLen = 0;
-        for (const len of this.documentLengths.values()) totalLen += len;
-        this.averageDocumentLength = totalLen / this.documentCount;
+        this.averageDocumentLength = (prevTotal + tokens.length) / this.documentCount;
 
         for (const token of new Set(tokens)) {
             const df = (this.inverseDocumentFrequencies.get(token) || 0) + 1;
@@ -51,6 +52,8 @@ export class BM25 {
             const idf = Math.log(1 + (this.documentCount - df + 0.5) / (df + 0.5));
             score += idf * ((tf * (this.k1 + 1)) / (tf + this.k1 * (1 - this.b + this.b * (docLength / this.averageDocumentLength))));
         }
-        return score;
+        
+        const boost = this.documentBoosts.get(docId) || 1.0;
+        return score * boost;
     }
 }

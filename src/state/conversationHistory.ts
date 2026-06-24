@@ -222,6 +222,74 @@ export class ConversationHistory {
         this.saveToFile();
     }
 
+    public localCompress(keepRecentTurns: number): void {
+        const session = this.activeSession;
+        if (!session || session.messages.length <= keepRecentTurns * 2) return;
+
+        const messagesToCompress = session.messages.slice(0, -(keepRecentTurns * 2));
+        const messagesToKeep = session.messages.slice(-(keepRecentTurns * 2));
+
+        const modifiedFiles = new Set<string>();
+        const keyDecisions: string[] = [];
+        let fixedBugs = 0;
+
+        for (const msg of messagesToCompress) {
+            // Find file headers: **`filepath`**
+            const fileMatches = msg.text.matchAll(/\*\*\`([^\`]+)\`\*\*/g);
+            for (const match of fileMatches) {
+                modifiedFiles.add(match[1]);
+            }
+
+            // Find bug mentions
+            if (/(error|exception|bug|fix|fail)/i.test(msg.text)) {
+                fixedBugs++;
+            }
+
+            // Find search/replace blocks as "made changes"
+            if (msg.text.includes('<<<<<<< SEARCH')) {
+                // Just noting that a change was made
+            }
+
+            // Extract small bullet points as decisions if any exist (heuristic)
+            const bullets = msg.text.matchAll(/^- (.*decision.*|.*chose.*|.*fixed.*)$/gmi);
+            for (const match of bullets) {
+                keyDecisions.push(match[1].trim());
+            }
+        }
+
+        let summaryText = `[SYSTEM: History Compressed locally to save tokens]\n`;
+        if (modifiedFiles.size > 0) {
+            summaryText += `- Modified files: ${Array.from(modifiedFiles).join(', ')}\n`;
+        }
+        if (fixedBugs > 0) {
+            summaryText += `- Addressed approximately ${Math.ceil(fixedBugs / 2)} issues/errors.\n`;
+        }
+        if (keyDecisions.length > 0) {
+            summaryText += `- Key points: ${keyDecisions.slice(-3).join(' | ')}\n`;
+        }
+        if (summaryText === `[SYSTEM: History Compressed locally to save tokens]\n`) {
+            summaryText += `- Discussed various code implementations.\n`;
+        }
+
+        session.messages = [
+            {
+                role: 'user',
+                text: 'Here is a local summary of our earlier conversation:',
+                timestamp: Date.now() - 1000
+            },
+            {
+                role: 'model',
+                text: summaryText,
+                timestamp: Date.now() - 500,
+                fileBackups: []
+            },
+            ...messagesToKeep
+        ];
+
+        session.updatedAt = Date.now();
+        this.saveToFile();
+    }
+
     public addFileBackupToLatestMessage(filepath: string, content: string | null): void {
         const session = this.activeSession;
         if (!session || session.messages.length === 0) return;
@@ -259,7 +327,7 @@ export class ConversationHistory {
     public estimateTokens(): number {
         const session = this.activeSession;
         if (!session) return 0;
-        return session.messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 3), 0);
+        return session.messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 4), 0);
     }
 
     public trimToTokenBudget(maxTokens: number): void {

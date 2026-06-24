@@ -30,7 +30,7 @@ Just click the ⚙️ Gear Icon, select **Local Provider**, enter your model nam
 
 ---
 
-## 🚀🔥 9 New "Cursor-Killer" Agentic Features
+## 🚀🔥 13 New "Cursor-Killer" Agentic Features
 
 We've heavily upgraded the core engine. You now have access to:
 
@@ -63,6 +63,18 @@ Create a `.agentrules` (or `.cursorrules`) file in the root of your workspace. D
 ### 9. 👻 Ghost Text Autocomplete (FIM)
 Experience Copilot-style inline ghost text as you type. Pause for a split second, and the AI will predict your next lines of code based on the surrounding context.
 
+### 10. 🎨 UI/UX Design Engine (Zero Assets Needed)
+Build stunning, modern UI directly from prompts. The AI automatically acts as a vector artist, generating inline SVG logos, leveraging Live Open APIs (Picsum, Pravatar) for dynamic images, and embedding Tailwind CSS animations.
+
+### 11. 🛠️ Native Tool Calling
+The AI is empowered with native workspace tools: `read_multiple_files`, `update_architecture_context`, `search_codebase`, `find_references`, and an AST-Aware `replace_symbol` function for surgical file patches.
+
+### 12. 🧠 Smart Memory Summarizer
+Never hit token limits again. When your chat history grows too large, a background process intercepts and summarizes older conversations into dense context blocks, preserving crucial architectural decisions.
+
+### 13. 🛡️ Terminal Execution Sandboxing
+Prevents accidental destruction. An aggressive safety interceptor catches and blocks dangerous shell patterns (`rm -rf`, `format`) and cleanly joins multiline AI commands using `&&`.
+
 ---
 
 ## ✨ Classic Features
@@ -76,15 +88,15 @@ Experience Copilot-style inline ghost text as you type. Pause for a split second
 
 ---
 
-## ⚙️ Configuration & The `.agent-config.json` File
+## ⚙️ Configuration & Smart Saves
 
-To keep your settings portable, Ultra Light AI uses a local configuration file. 
-When you configure your API Keys, Tokens, or Model via the **⚙️ Gear Icon**, the extension creates a hidden `.agent-config.json` file in your project's root directory.
+To keep your settings portable and secure, Ultra Light AI utilizes a smart dual-save mechanism:
+1. **Global Save:** API keys and global preferences are saved securely in your home directory (`~/.ultra-light-ai/config.json`) to share across projects and prevent GitHub leaks.
+2. **Workspace Save:** Project-specific settings and UI preferences are strictly saved in `.vscode/ultra-light-ai.json`.
+*(Note: The legacy root `.agent-config.json` is now automatically cleaned up and deleted to prevent workspace pollution).*
 
-> **💡 Note to Users:** 
-> - Your API Keys are stored here. 
-> - **Please add `.agent-config.json` to your `.gitignore`** so you don't commit your keys!
-> - This file overrides any global `.env` settings.
+> **💡 Note to Users:**
+> Global credentials will automatically apply to any new project you open, allowing you to seamlessly transition between workspaces without re-entering API keys.
 
 ---
 

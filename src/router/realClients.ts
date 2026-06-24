@@ -242,7 +242,7 @@ export class GeminiCloudClient implements IEngine {
         }
         this.resetKeyRotation();
 
-        const contents = [
+        const contents: any[] = [
             ...history.map(h => ({
                 role: h.role,
                 parts: [{ text: h.text }]

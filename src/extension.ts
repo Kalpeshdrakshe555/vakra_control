@@ -2,9 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { StateMachine } from './state/stateMachine';
 import { EngineRouter } from './router/engineRouter';
-import { SequentialOperator } from './operations/sequentialLoop';
 import { GeminiCloudClient } from './router/realClients';
-import { CloudClient as DummyCloudClient } from './router/dummyClients';
 import { SidebarProvider } from './webview/sidebarProvider';
 import { IEngine } from './router/IEngine';
 import { InlineCompletionProvider } from './providers/inlineCompletionProvider';
@@ -12,11 +10,11 @@ import { AiCodeActionProvider, registerCodeActionCommands } from './providers/co
 import { AiHoverProvider } from './providers/hoverProvider';
 import { ensureAgentConfig, getGeminiApiKeys, getGeminiModel, getGeminiTimeout } from './config';
 import { RagEngine } from './rag/ragEngine';
-import { BackgroundIndexer } from './indexer/backgroundIndexer';
+import * as fs from 'fs';
+import { extractSurgicalErrorContext } from './utils/terminalHeuristics';
 
 // Global reference for the RAG engine
 export let globalRagEngine: RagEngine | null = null;
-export let globalBackgroundIndexer: BackgroundIndexer | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Ultra Light AI');
@@ -56,21 +54,19 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Setup file watcher for RAG
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
-    watcher.onDidChange(uri => globalRagEngine?.updateFile(uri.fsPath));
-    watcher.onDidCreate(uri => globalRagEngine?.updateFile(uri.fsPath));
-    watcher.onDidDelete(uri => globalRagEngine?.updateFile(uri.fsPath));
+    context.subscriptions.push(watcher);
+    const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
+    const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+    const safeUpdateRag = (uri: vscode.Uri) => {
+        const fp = uri.fsPath.replace(/\\/g, '/');
+        if (combinedIgnores.some(folder => fp.includes(`/${folder}/`) || fp.endsWith(`/${folder}`))) return;
+        globalRagEngine?.updateFile(uri.fsPath);
+    };
+    watcher.onDidChange(safeUpdateRag);
+    watcher.onDidCreate(safeUpdateRag);
+    watcher.onDidDelete(safeUpdateRag);
 
-    // Initialize Background AST Indexer
-    globalBackgroundIndexer = new BackgroundIndexer(workspaceRoot);
-    globalBackgroundIndexer.initialize();
-    
-    context.subscriptions.push(
-        vscode.workspace.onDidSaveTextDocument((document) => {
-            if (document.uri.scheme === 'file') {
-                globalBackgroundIndexer?.onFileChanged(document.uri.fsPath);
-            }
-        })
-    );
+    // (Background AST Indexer removed: replaced by in-stream micro-tasks via Scout)
 
     // ──────────────────────────────────────────────────────────────────────
     // STATUS BAR ITEM
@@ -141,6 +137,23 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('ultra-light-ai.openSidebar', async () => {
             await vscode.commands.executeCommand('ultra-light-ai-sidebar.focus');
+        })
+    );
+
+    // Command: Play Game
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ultra-light-ai.playGame', async () => {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders && workspaceFolders.length > 0) {
+                const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                const gamePath = path.join(workspaceRoot, 'index.html');
+                if (fs.existsSync(gamePath)) {
+                    const { GameRunnerPanel } = require('./webview/gameRunnerPanel');
+                    GameRunnerPanel.createOrShow(context.extensionUri, gamePath, workspaceRoot);
+                } else {
+                    vscode.window.showErrorMessage('No index.html found in the workspace root to play!');
+                }
+            }
         })
     );
 
@@ -328,10 +341,10 @@ IMPORTANT: Return ONLY the raw modified code block. Do not include markdown code
                 if (clipboardText) {
                     await vscode.commands.executeCommand('ultra-light-ai-sidebar.focus');
                     
-                    const lines = clipboardText.split('\n');
-                    const lastLines = lines.slice(-60).join('\n').trim();
+                    // NEW: Use Surgical Heuristics to compress the error
+                    const surgicalContext = await extractSurgicalErrorContext(clipboardText, workspaceRoot);
                     
-                    const prompt = `I got an error in my terminal. Please help me fix it:\n\n\`\`\`\n${lastLines}\n\`\`\``;
+                    const prompt = `I got an error in my terminal. Please help me fix it:\n\n${surgicalContext}`;
                     
                     sidebarProvider.postMessageToWebview({
                         command: 'injectChatAndSend',
@@ -340,8 +353,8 @@ IMPORTANT: Return ONLY the raw modified code block. Do not include markdown code
                 } else {
                     vscode.window.showErrorMessage('Could not read terminal output.');
                 }
-            } catch (err) {
-                vscode.window.showErrorMessage('Failed to capture terminal output.');
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Failed to capture terminal output: ${err.message || err}`);
             }
         })
     );

@@ -67,3 +67,30 @@ export function allocateBudget(totalBudgetTokens: number, sources: ContextSource
 
     return result;
 }
+
+export class TokenAccountant {
+    private static systemPromptTokens: number = -1;
+    
+    public static measureSystemPrompt(systemPrompt: string): void {
+        this.systemPromptTokens = estimateTokens(systemPrompt);
+    }
+
+    public static measureHistory(history: Array<{ role: 'user' | 'model'; text: string }>): number {
+        return history.reduce((sum, m) => sum + estimateTokens(m.text), 0);
+    }
+
+    public static getRemainingBudget(
+        maxTokens: number, 
+        historyTokens: number, 
+        userPromptTokens: number
+    ): number {
+        const sysPromptTokens = this.systemPromptTokens > -1 ? this.systemPromptTokens : 2500;
+        
+        // Use user-provided maxTokens, but ensure we don't exceed free tier limits if not set
+        const effectiveMax = maxTokens;
+        
+        const used = sysPromptTokens + historyTokens + userPromptTokens;
+        // If remaining is less than 500, we skip context injection (budget exhausted)
+        return Math.max(0, effectiveMax - used - 500); // 500 token safety buffer
+    }
+}

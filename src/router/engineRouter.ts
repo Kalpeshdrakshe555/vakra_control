@@ -68,6 +68,7 @@ export class EngineRouter {
 
             try {
                 // Attempt completion with history (empty history array)
+                if (!engine.completeWithHistory) throw new Error("engine.completeWithHistory is undefined");
                 const response = await engine.completeWithHistory(systemInstruction, [], prompt, false);
 
                 state.activeEngine = engine.name;

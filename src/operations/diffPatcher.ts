@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
+import { FileVersioning } from './fileVersioning';
 
 /**
  * Extracts and applies code updates to the target file.
@@ -30,6 +31,10 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
                 }
             }
             if (blocksFound) {
+                const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+                if (workspaceFolder) {
+                    FileVersioning.saveSnapshot(workspaceFolder.uri.fsPath, filePath, fs.readFileSync(filePath, 'utf8'));
+                }
                 fs.writeFileSync(filePath, fileText, 'utf8');
                 return true;
             } else {
@@ -52,6 +57,10 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
             return false;
         }
         
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+        if (workspaceFolder && fileText.length > 0) {
+            FileVersioning.saveSnapshot(workspaceFolder.uri.fsPath, filePath, fileText);
+        }
         fs.writeFileSync(filePath, contentToWrite, 'utf8');
         return true;
     } catch (error) {

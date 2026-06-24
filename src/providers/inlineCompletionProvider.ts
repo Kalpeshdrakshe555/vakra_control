@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { GeminiCloudClient } from '../router/realClients';
 import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout } from '../config';
+import { globalRagEngine } from '../extension';
 
 /**
  * InlineCompletionItemProvider — Provides Copilot-style ghost text suggestions
@@ -81,13 +82,24 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
             const lang = document.languageId;
             const fileName = document.fileName.split(/[\\/]/).pop() || 'unknown';
 
+            // 🔥 RAG Context Injection: Fetch background context for the current line
+            let ragContext = '';
+            const textBeforeCursor = document.lineAt(position.line).text.substring(0, position.character).trim();
+            
+            if (globalRagEngine && textBeforeCursor.length > 5) {
+                const results = globalRagEngine.search(textBeforeCursor, 1); // Get top 1 result to keep prompt minimal
+                if (results && results.length > 0) {
+                     ragContext = `\n// --- Workspace Reference: ${results[0].filepath} ---\n${results[0].content}\n// -----------------------------------\n`;
+                }
+            }
+
             const prompt = `You are an AI code completion engine. Complete the code at the cursor position marked with <CURSOR>.
 RULES:
 - Return ONLY the completion text that goes after the cursor. NO explanations, NO code blocks, NO markdown.
 - Keep completions short (1-3 lines max).
 - Match the existing code style, indentation, and language conventions.
 - If you can't provide a meaningful completion, respond with nothing.
-
+${ragContext}
 File: ${fileName} (${lang})
 
 \`\`\`${lang}

@@ -179,24 +179,34 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Enable streaming responses in chat (token-by-token display)."
+        },
+        "ultraLightAI.ignoreFolders": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["node_modules", ".git", "dist", "out", "build", ".next", ".vscode"],
+          "markdownDescription": "List of folder names to ignore during AI background indexing and RAG file watching."
         }
       }
     }
   },
   "scripts": {
-    "compile": "node esbuild.js",
-    "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production",
+    "build:css": "npx tailwindcss -i ./src/webview/input.css -o ./dist/tailwind.css --minify",
+    "compile": "npm run build:css && node esbuild.js",
+    "watch": "npm run build:css && node esbuild.js --watch",
+    "package": "npm run build:css && node esbuild.js --production",
     "pretest": "npm run compile && tsc -p .",
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
+    "@highlightjs/cdn-assets": "^11.9.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.20.2",
+    "marked": "^12.0.0",
     "mocha": "^11.7.6",
+    "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3"
   }
 }

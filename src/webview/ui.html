@@ -5,34 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ultra Light Agent Chat</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'Menlo', 'monospace'],
-                    },
-                    colors: {
-                        cyber: {
-                            bg: '#1C1C1E',          // Apple Dark Mode Bg
-                            panel: '#2C2C2E',       // Apple Panel
-                            border: '#3A3A3C',      // Subtle border
-                            neonCyan: '#0A84FF',    // Apple Blue
-                            neonPink: '#FF453A',    // Apple Red
-                            neonPurple: '#BF5AF2',  // Apple Purple
-                        }
-                    }
-                }
-            }
-        }
-    </script>
-    <!-- Marked.js for Markdown parsing -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- Highlight.js for Syntax Highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- Local Tailwind CSS -->
+    <link href="{{TAILWIND_CSS_URI}}" rel="stylesheet">
+    <!-- Local Marked.js for Markdown parsing -->
+    <script src="{{MARKED_URI}}"></script>
+    <!-- Local Highlight.js for Syntax Highlighting -->
+    <link rel="stylesheet" href="{{HIGHLIGHT_CSS_URI}}">
+    <script src="{{HIGHLIGHT_JS_URI}}"></script>
     <style>
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(8px); }
@@ -212,7 +191,7 @@
             <!-- Files injected here via JS -->
         </div>
         
-        <div class="relative flex items-end gap-2 bg-cyber-panel border border-white/10 rounded-2xl px-3 py-2.5 focus-within:border-cyber-neonCyan/50 focus-within:shadow-[0_0_15px_rgba(0,209,255,0.15)] focus-within:bg-[#1A212D] transition-all duration-300">
+        <div class="relative flex items-end gap-2 bg-cyber-panel/40 backdrop-blur-md border border-white/10 shadow-inner rounded-2xl px-3 py-2.5 focus-within:border-cyber-neonCyan/50 focus-within:shadow-[0_0_20px_rgba(0,209,255,0.15)] focus-within:bg-cyber-panel/70 transition-all duration-300">
             <button 
                 id="add-file-btn" 
                 class="flex items-center justify-center p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all cursor-pointer shrink-0" 
@@ -240,24 +219,44 @@
         </div>
         
         <!-- Status Bar -->
-        <div class="flex items-center justify-between mt-2.5 px-1 text-[10px] text-slate-500 font-mono">
-            <div class="flex items-center gap-1.5 bg-black/20 px-2 py-0.5 rounded-full border border-white/5">
+        <div class="flex items-center justify-between mt-3 px-1.5 text-[10px] text-slate-400 font-mono">
+            
+            <!-- Model Badge -->
+            <div class="flex items-center gap-1.5 bg-cyber-panel/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/5 shadow-inner">
                 <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></span>
                 <span class="tracking-wide">Model: <span class="text-cyber-neonCyan font-bold" id="active-model-badge">gemma-4-31b-it</span></span>
             </div>
+
+            <!-- Controls -->
             <div class="flex items-center gap-2">
-                <label class="flex items-center gap-1 cursor-pointer hover:text-cyber-neonPink transition-colors bg-black/20 px-2 py-0.5 rounded-full border border-white/5" title="Include Web Search Results">
-                    <input type="checkbox" id="include-web-search" class="accent-cyber-neonPink w-3 h-3 cursor-pointer">
-                    <span class="tracking-wide">@web</span>
+                
+                <!-- @web Custom Toggle -->
+                <label class="group relative flex items-center gap-1.5 cursor-pointer bg-cyber-panel/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/5 hover:border-cyber-neonPink/40 transition-all shadow-inner" title="Include Web Search Results">
+                    <input type="checkbox" id="include-web-search" class="peer sr-only">
+                    <div class="w-2.5 h-2.5 rounded-full border border-slate-500 peer-checked:bg-cyber-neonPink peer-checked:border-cyber-neonPink peer-checked:shadow-[0_0_8px_rgba(255,69,58,0.6)] transition-all"></div>
+                    <span class="tracking-wide text-slate-400 group-hover:text-slate-200 peer-checked:text-cyber-neonPink transition-colors">@web</span>
                 </label>
-                <select id="mode-select" class="bg-black/20 border border-white/5 rounded-full text-[10px] text-slate-300 outline-none px-2 py-0.5 cursor-pointer ml-1 hover:border-white/20 transition-colors appearance-none text-center">
-                    <option value="chat">💬 Normal Chat</option>
-                    <option value="architect">🏢 Architect</option>
-                    <option value="advanced">🚀 Advanced (Dual-Brain)</option>
-                </select>
-                <button id="reset-state-btn" class="hover:text-white transition-colors cursor-pointer uppercase tracking-widest text-[9px] bg-black/20 hover:bg-cyber-neonPink/20 border border-white/5 hover:border-cyber-neonPink/40 px-2 py-0.5 rounded-full ml-1 flex items-center gap-1">
+
+                <!-- Mode Select Dropdown -->
+                <div class="relative group">
+                    <select id="mode-select" class="appearance-none bg-cyber-panel/50 backdrop-blur-sm border border-white/5 group-hover:border-cyber-neonCyan/40 rounded-full text-[10px] text-slate-300 outline-none pl-3 pr-6 py-1 cursor-pointer transition-all shadow-inner font-sans tracking-wide">
+                        <option value="chat" class="bg-cyber-bg text-slate-200 py-1">💬 Normal Chat</option>
+                        <option value="architect" class="bg-cyber-bg text-slate-200 py-1">🏢 Architect</option>
+                        <option value="advanced" class="bg-cyber-bg text-slate-200 py-1">🚀 Advanced (Dual-Brain)</option>
+                        <option value="game_dev" class="bg-cyber-bg text-slate-200 py-1">🎮 Game Dev Mode</option>
+                    </select>
+                    <!-- Custom Dropdown Arrow -->
+                    <svg class="w-3 h-3 text-slate-400 absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none group-hover:text-cyber-neonCyan transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                </div>
+
+                <button id="reset-state-btn" class="hover:text-white transition-all cursor-pointer uppercase tracking-widest text-[9px] bg-cyber-panel/50 backdrop-blur-sm hover:bg-cyber-neonPink/20 border border-white/5 hover:border-cyber-neonPink/40 px-2.5 py-1 rounded-full flex items-center gap-1 shadow-inner">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                     Reset
+                </button>
+
+                <button id="play-game-btn" class="hidden hover:text-white transition-all cursor-pointer uppercase tracking-widest text-[9px] bg-cyber-panel/50 backdrop-blur-sm hover:bg-green-400/20 border border-white/5 hover:border-green-400/40 px-2.5 py-1 rounded-full flex items-center gap-1 text-green-400 font-bold shadow-inner">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Play
                 </button>
             </div>
         </div>
@@ -345,7 +344,7 @@
                 </div>
                 <div class="space-y-1.5">
                     <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Context Tokens</label>
-                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 32000" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 7000" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
                 </div>
                 <div class="space-y-1.5">
                     <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">History Length</label>
@@ -370,6 +369,9 @@
 
             <!-- Action buttons -->
             <div class="flex items-center gap-3 pt-2 shrink-0">
+                <button type="button" id="clear-cache-btn" class="flex-1 bg-red-900/40 hover:bg-red-600/60 border border-red-500/30 text-red-200 font-bold py-2 rounded-lg transition-all shadow-sm cursor-pointer">
+                    Clear Cache
+                </button>
                 <button type="submit" id="save-settings-btn" class="flex-1 bg-gradient-to-r from-cyber-neonCyan to-cyber-neonPurple text-cyber-bg font-bold py-2 rounded-lg hover:opacity-90 transition-all hover:shadow-[0_0_12px_rgba(0,240,255,0.3)] cursor-pointer">
                     Save Config
                 </button>
@@ -443,6 +445,34 @@
         const openRawConfigLink = document.getElementById('open-raw-config-link');
         
         let thinkingBubble = null;
+        
+        const modeSelectDropdown = document.getElementById('mode-select');
+        const includeWebSearchCheckbox = document.getElementById('include-web-search');
+        const playGameBtn = document.getElementById('play-game-btn');
+        
+        if (playGameBtn) {
+            playGameBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'playGame' });
+            });
+        }
+        
+        if (modeSelectDropdown && includeWebSearchCheckbox) {
+            modeSelectDropdown.addEventListener('change', (e) => {
+                if (e.target.value === 'game_dev') {
+                    includeWebSearchCheckbox.checked = true;
+                    if (playGameBtn) playGameBtn.classList.remove('hidden');
+                } else {
+                    if (playGameBtn) playGameBtn.classList.add('hidden');
+                }
+            });
+
+            includeWebSearchCheckbox.addEventListener('change', (e) => {
+                if (!e.target.checked && modeSelectDropdown.value === 'game_dev') {
+                    modeSelectDropdown.value = 'chat';
+                    if (playGameBtn) playGameBtn.classList.add('hidden');
+                }
+            });
+        }
 
         // Configure marked options globally once
         const renderer = new marked.Renderer();
@@ -462,6 +492,11 @@
                 highlighted = escapeHtml(codeText || '');
             }
             return `<pre><code class="hljs ${lang || ''}">${highlighted}</code></pre>`;
+        };
+
+        // BUG FIX: Prevent AI from injecting raw HTML/CSS and breaking the Extension UI
+        renderer.html = function(html) {
+            return escapeHtml(html);
         };
 
         marked.setOptions({
@@ -491,6 +526,13 @@
             e.preventDefault();
             vscode.postMessage({ command: 'openConfig' });
         });
+
+        const clearCacheBtn = document.getElementById('clear-cache-btn');
+        if (clearCacheBtn) {
+            clearCacheBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'clearCache' });
+            });
+        }
 
         // Toggle local endpoint inputs
         const mainProvider = document.getElementById('main-provider');
@@ -533,7 +575,7 @@
                 timeoutSeconds: parseInt(document.getElementById('setting-timeout').value, 10) || 60,
                 systemInstructions: document.getElementById('setting-instructions').value.trim(),
                 maxOutputTokens: parseInt(document.getElementById('setting-maxOutputTokens').value, 10) || 8192,
-                maxContextTokens: parseInt(document.getElementById('setting-maxContextTokens').value, 10) || 32000,
+                maxContextTokens: parseInt(document.getElementById('setting-maxContextTokens').value, 10) || 7000,
                 historyLength: parseInt(document.getElementById('setting-historyLength').value, 10) || 20,
                 enableInlineCompletions: document.getElementById('setting-enableInline').checked,
                 enableHoverExplanations: document.getElementById('setting-enableHover').checked
@@ -578,11 +620,26 @@
                 }
             }
 
+            // Advanced Mode visibility logic
+            const advancedOption = document.querySelector('#mode-select option[value="advanced"]');
+            if (advancedOption) {
+                const hasMain = config.mainBrain && config.mainBrain.apiKey && config.mainBrain.model;
+                const hasSupport = config.supportBrain && config.supportBrain.apiKey && config.supportBrain.model;
+                if (hasMain && hasSupport) {
+                    advancedOption.style.display = '';
+                } else {
+                    advancedOption.style.display = 'none';
+                    if (document.getElementById('mode-select').value === 'advanced') {
+                        document.getElementById('mode-select').value = 'chat';
+                    }
+                }
+            }
+
             // Shared Settings
             document.getElementById('setting-timeout').value = config.providers?.cloud?.timeoutSeconds || config.timeoutSeconds || 60;
             document.getElementById('setting-instructions').value = config.systemInstructions || '';
             document.getElementById('setting-maxOutputTokens').value = config.contextLimits?.maxOutputTokens || config.maxTokens || 8192;
-            document.getElementById('setting-maxContextTokens').value = config.contextLimits?.maxContextTokens || 32000;
+            document.getElementById('setting-maxContextTokens').value = config.contextLimits?.maxContextTokens || 7000;
             document.getElementById('setting-historyLength').value = config.contextLimits?.historyLength || config.historyLength || 20;
             
             checkTokenWarning();
@@ -781,6 +838,7 @@
             const mode = document.getElementById('mode-select')?.value || 'chat';
             const isAdvancedMode = (mode === 'advanced');
             const isArchitectMode = (mode === 'architect');
+            const isGameMode = (mode === 'game_dev');
 
             vscode.postMessage({
                 command: 'sendChatStream',
@@ -788,7 +846,8 @@
                 timestamp: timestamp,
                 includeWebSearch: document.getElementById('include-web-search')?.checked || false,
                 advancedMode: isAdvancedMode,
-                architectMode: isArchitectMode
+                architectMode: isArchitectMode,
+                gameMode: isGameMode
             });
         }
 
@@ -848,17 +907,21 @@
                 for (let i = 0; i < tokens.length; i++) {
                     const token = tokens[i];
                     
-                    // Detect filepath from headings/paragraphs like: **`src/views.py`**
                     if (token.type === 'paragraph' || token.type === 'heading') {
-                        // H4 FIX: Strict regex — filepath MUST be wrapped in backticks
-                        const match = /\*{0,2}\s*`([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`\s*\*{0,2}/.exec(token.text);
-                        if (match) {
-                            currentFilepath = match[1];
+                        const lines = token.text.split('\n');
+                        for (const line of lines) {
+                            const cleanLine = line.trim();
+                            // Match formats like: `src/App.tsx`, **src/App.tsx**, File: src/App.tsx
+                            const match = /(?:File:?\s*)?(?:\*\*)?\s*`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`?\s*(?:\*\*)?/i.exec(cleanLine);
+                            // Ensure the matched filepath is the majority of the line
+                            if (match && cleanLine.length <= match[0].length + 12) {
+                                currentFilepath = match[1];
+                                break;
+                            }
                         }
                     } else if (token.type === 'code') {
-                        // Skip terminal commands and data formats
                         const lang = token.lang ? token.lang.toLowerCase() : '';
-                        if (['bash', 'sh', 'shell', 'cmd', 'powershell', 'bat', 'json', 'yaml', 'yml', 'toml', 'ini', 'env', 'txt', 'log'].includes(lang)) {
+                        if (['bash', 'sh', 'shell', 'cmd', 'powershell', 'bat', 'txt', 'log'].includes(lang)) {
                             currentFilepath = null;
                             continue;
                         }
@@ -929,6 +992,17 @@
                         btn.classList.add('bg-green-600/90');
                         btn.disabled = true;
                         rejectBtn.classList.add('hidden');
+                        undoBtn.classList.remove('hidden');
+                        undoBtn.classList.add('flex');
+                    });
+
+                    const undoBtn = document.createElement('button');
+                    undoBtn.className = 'bg-slate-700/80 hover:bg-yellow-600/90 text-slate-300 hover:text-white text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer items-center justify-center gap-1 hidden';
+                    undoBtn.innerHTML = `↩️ Undo`;
+                    undoBtn.addEventListener('click', () => {
+                        vscode.postMessage({ command: 'rollbackFile', filepath: file.filepath });
+                        undoBtn.innerHTML = `✔️ Reverted`;
+                        undoBtn.disabled = true;
                     });
 
                     rejectBtn.addEventListener('click', () => {
@@ -939,6 +1013,7 @@
                     });
 
                     btnContainer.appendChild(btn);
+                    btnContainer.appendChild(undoBtn);
                     btnContainer.appendChild(rejectBtn);
                     actionContainerDiv.appendChild(btnContainer);
                 });
@@ -1068,6 +1143,10 @@
                         runBtn.className = 'bg-pink-900/80 hover:bg-pink-600 text-pink-100 border border-pink-700/50 hover:border-pink-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
                         runBtn.innerHTML = '▶ RUN';
                         
+                        const runAndCaptureBtn = document.createElement('button');
+                        runAndCaptureBtn.className = 'bg-cyan-900/80 hover:bg-cyan-600 text-cyan-100 border border-cyan-700/50 hover:border-cyan-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
+                        runAndCaptureBtn.innerHTML = '▶ RUN & READ';
+
                         const rejectCmdBtn = document.createElement('button');
                         rejectCmdBtn.className = 'bg-slate-700/80 hover:bg-red-600/90 text-slate-300 hover:text-white border border-slate-600 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
                         rejectCmdBtn.innerHTML = '❌ REJECT';
@@ -1077,11 +1156,21 @@
                             runBtn.innerHTML = 'STARTED!';
                             runBtn.classList.replace('bg-pink-900/80', 'bg-green-600/90');
                             rejectCmdBtn.classList.add('hidden');
+                            runAndCaptureBtn.classList.add('hidden');
                             setTimeout(() => { 
                                 runBtn.innerHTML = '▶ RUN'; 
                                 runBtn.classList.replace('bg-green-600/90', 'bg-pink-900/80');
                                 rejectCmdBtn.classList.remove('hidden');
+                                runAndCaptureBtn.classList.remove('hidden');
                             }, 2000);
+                        });
+                        
+                        runAndCaptureBtn.addEventListener('click', () => {
+                            vscode.postMessage({ command: 'runAndCapture', cmd: code });
+                            runAndCaptureBtn.innerHTML = 'RUNNING...';
+                            runAndCaptureBtn.classList.replace('bg-cyan-900/80', 'bg-green-600/90');
+                            runBtn.classList.add('hidden');
+                            rejectCmdBtn.classList.add('hidden');
                         });
 
                         rejectCmdBtn.addEventListener('click', () => {
@@ -1090,6 +1179,7 @@
                         });
                         
                         terminalActions.appendChild(runBtn);
+                        terminalActions.appendChild(runAndCaptureBtn);
                         terminalActions.appendChild(rejectCmdBtn);
                         actionsContainer.appendChild(terminalActions);
                     }
@@ -1186,6 +1276,18 @@
                             btn.disabled = true;
                             rejectBtn.classList.add('hidden');
                             previewBtn.classList.add('hidden');
+                            undoBtn.classList.remove('hidden');
+                            undoBtn.classList.add('flex');
+                        });
+
+                        const undoBtn = document.createElement('button');
+                        undoBtn.className = 'bg-cyber-border hover:bg-yellow-600 text-slate-200 text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer items-center justify-center gap-1.5 shadow-sm hidden';
+                        undoBtn.innerHTML = `↩️ Undo`;
+                        undoBtn.addEventListener('click', () => {
+                            vscode.postMessage({ command: 'rollbackFile', filepath: file.filepath });
+                            undoBtn.innerHTML = `✔️ Reverted`;
+                            undoBtn.classList.add('opacity-50');
+                            undoBtn.disabled = true;
                         });
 
                         previewBtn.addEventListener('click', () => {
@@ -1200,6 +1302,7 @@
                         });
 
                         btnContainer.appendChild(btn);
+                        btnContainer.appendChild(undoBtn);
                         btnContainer.appendChild(previewBtn);
                         btnContainer.appendChild(rejectBtn);
                         actionContainerDiv.appendChild(btnContainer);
@@ -1442,6 +1545,36 @@
             } else if (message.command === 'chatCleared') {
                 chatContainer.innerHTML = '';
                 appendSystemMessage('Conversation cleared. Started a new chat.');
+            }
+            // NEW: Onboarding Commands
+            else if (message.command === 'showOnboarding') {
+                const msgDiv = document.createElement('div');
+                msgDiv.id = 'onboarding-card';
+                msgDiv.className = 'flex justify-center w-full my-3 animate-fade-in';
+                msgDiv.innerHTML = `
+                    <div class="px-4 py-3 bg-cyber-panel/80 border border-cyber-neonCyan/50 text-xs text-slate-200 rounded-xl max-w-[95%] shadow-[0_0_15px_rgba(0,209,255,0.2)] flex flex-col gap-2">
+                        <div class="flex items-center gap-2 font-bold text-cyber-neonCyan">
+                            <span class="w-2 h-2 bg-cyber-neonCyan rounded-full animate-ping"></span>
+                            New Project Detected
+                        </div>
+                        <p class="text-[10px] text-slate-400 leading-relaxed">Analyzing codebase structure and building ARCHITECTURE.md memory in background...</p>
+                    </div>
+                `;
+                chatContainer.appendChild(msgDiv);
+                scrollToBottom();
+            } else if (message.command === 'onboardingComplete') {
+                const card = document.getElementById('onboarding-card');
+                if (card) {
+                    card.innerHTML = `
+                    <div class="px-4 py-3 bg-green-900/20 border border-green-500/50 text-xs text-slate-200 rounded-xl max-w-[95%] shadow-[0_0_15px_rgba(34,197,94,0.1)] flex flex-col gap-1.5">
+                        <div class="flex items-center gap-2 font-bold text-green-400">✅ Project Scanned</div>
+                        <p class="text-[10px] text-slate-400">I now understand your project context. All AI-generated files are in the <code class="text-green-300 bg-green-900/30 px-1 rounded">.ultra-light-ai</code> folder.</p>
+                        <p class="text-[9px] text-yellow-400/80 font-mono mt-1 p-1.5 bg-yellow-900/20 border border-yellow-500/20 rounded">Tip: Add <code class="text-yellow-300">/.ultra-light-ai/</code> to your .gitignore</p>
+                    </div>`;
+                }
+            } else if (message.command === 'onboardingFailed') {
+                const card = document.getElementById('onboarding-card');
+                if (card) card.style.display = 'none';
             }
         });
     </script>
