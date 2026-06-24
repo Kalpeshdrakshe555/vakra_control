@@ -87,6 +87,18 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider('ultra-light-ai-sidebar', sidebarProvider)
     );
 
+    // Initialize Terminal Error Interceptor
+    const { TerminalErrorInterceptor } = require('./features/terminalInterceptor');
+    TerminalErrorInterceptor.activate(context, sidebarProvider);
+
+    // Initialize Skeleton Expander
+    const { SkeletonExpander } = require('./features/skeletonExpander');
+    SkeletonExpander.activate(context);
+
+    // Initialize Smart Search
+    const { SmartSearch } = require('./features/smartSearch');
+    SmartSearch.activate(context, () => globalRagEngine);
+
     // ──────────────────────────────────────────────────────────────────────
     // INLINE COMPLETION PROVIDER (Copilot-style ghost text)
     // ──────────────────────────────────────────────────────────────────────

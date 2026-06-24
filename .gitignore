@@ -37,3 +37,6 @@ Thumbs.db
 
 # TypeScript Build Cache
 *.tsbuildinfo
+
+# Project Notes
+features.md

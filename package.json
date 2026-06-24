@@ -78,6 +78,16 @@
         "command": "ultra-light-ai.fixTerminalError",
         "title": "Ultra Light AI: Fix Terminal Error",
         "icon": "$(warning)"
+      },
+      {
+        "command": "ultra-light-ai.skeletonExpand",
+        "title": "Ultra Light AI: Skeleton Expand",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "ultra-light-ai.smartSearch",
+        "title": "Ultra Light AI: Semantic Smart Search",
+        "icon": "$(search)"
       }
     ],
     "keybindings": [
@@ -107,6 +117,17 @@
         "key": "ctrl+k",
         "mac": "cmd+k",
         "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "ultra-light-ai.skeletonExpand",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "ultra-light-ai.smartSearch",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f"
       }
     ],
     "menus": {

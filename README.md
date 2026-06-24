@@ -30,7 +30,7 @@ Just click the ⚙️ Gear Icon, select **Local Provider**, enter your model nam
 
 ---
 
-## 🚀🔥 13 New "Cursor-Killer" Agentic Features
+## 🚀🔥 17 New "Cursor-Killer" Agentic Features
 
 We've heavily upgraded the core engine. You now have access to:
 
@@ -74,6 +74,18 @@ Never hit token limits again. When your chat history grows too large, a backgrou
 
 ### 13. 🛡️ Terminal Execution Sandboxing
 Prevents accidental destruction. An aggressive safety interceptor catches and blocks dangerous shell patterns (`rm -rf`, `format`) and cleanly joins multiline AI commands using `&&`.
+
+### 14. 🚨 Terminal Error Interceptor (Quick-Fix)
+Listens to your VS Code terminal. If a Python, Node, Go, or C++ execution crashes with a Traceback/Exception, it automatically shows a popup. One click sends the exact error snippet to the AI for a lightning-fast fix.
+
+### 15. ⚡ Skeleton Expander (Inline Pseudo-code to Code)
+Write comments or pseudo-code directly in your editor (e.g., `# 1. verify cart # 2. process payment`). Select them, press `Ctrl + Shift + Enter`, and the AI will expand them into fully working code seamlessly.
+
+### 16. 🔍 Semantic "Smart" Search Bar
+Press `Ctrl + Alt + F` to open the Smart Search box. Type natural language queries like *"where is the logic to calculate cart total?"*. The RAG Engine scans your codebase and jumps directly to the matching file and line at zero token cost.
+
+### 17. 📊 TDD Scaffolder & Database Visualizer
+Use the 1-click suggestion chips in the chat to instantly generate edge-case unit tests for your active file, or command the AI to scan your entire workspace and draw a `Mermaid.js` ER Diagram of your database schema.
 
 ---
 
