@@ -26,6 +26,9 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "enabledApiProposals": [
+    "terminalDataWriteEvent"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [

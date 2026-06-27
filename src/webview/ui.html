@@ -416,6 +416,22 @@
         }
 
         const chatInput = document.getElementById('chat-input');
+        
+        // Cycle placeholders to teach new features
+        const placeholders = [
+            "Ask a question or type '/' for commands...",
+            "Tip: Use @file path/to/file.ts to include it",
+            "Tip: Type @rag to semantic search your codebase",
+            "Tip: Hit Ctrl+Shift+Enter to expand skeleton code",
+            "Tip: Try the 'Architect Mode' for large projects"
+        ];
+        let placeholderIndex = 0;
+        setInterval(() => {
+            if (chatInput && !chatInput.value && document.activeElement !== chatInput) {
+                placeholderIndex = (placeholderIndex + 1) % placeholders.length;
+                chatInput.setAttribute('placeholder', placeholders[placeholderIndex]);
+            }
+        }, 5000);
         const sendBtn = document.getElementById('send-btn');
         const chatContainer = document.getElementById('chat-container');
         const settingsBtn = document.getElementById('settings-btn');
@@ -1547,7 +1563,45 @@
                 });
             } else if (message.command === 'chatCleared') {
                 chatContainer.innerHTML = '';
-                appendSystemMessage('Conversation cleared. Started a new chat.');
+                // Re-inject Welcome Message with Suggestion Chips
+                const welcomeDiv = document.createElement('div');
+                welcomeDiv.className = 'flex justify-start w-full animate-fade-in mt-2';
+                welcomeDiv.innerHTML = `
+                    <div class="max-w-[92%] bg-white/[0.02] border border-white/10 text-slate-300 rounded-2xl rounded-tl-sm px-4 py-3.5 shadow-xl relative overflow-hidden flex flex-col gap-3">
+                        <div class="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-cyber-neonCyan via-cyber-neonPurple to-transparent"></div>
+                        <p class="text-sm select-text leading-relaxed font-medium">
+                            New chat started! I'm ready to help you code.
+                        </p>
+                        <p class="text-[10px] text-slate-400 font-mono">Type a prompt or try one of these actions:</p>
+                        <div class="flex flex-wrap gap-2 mt-1">
+                            <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyber-neonCyan/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Refactor active file for performance"><span class="text-cyber-neonCyan">⚡</span> Refactor File</button>
+                            <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyber-neonPink/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Explain active file architecture"><span class="text-cyber-neonPink">🔍</span> Explain Logic</button>
+                            <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyber-neonPurple/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Generate unit tests for active file (Targeted Unit-Test Scaffolder)"><span class="text-cyber-neonPurple">🧪</span> Generate Tests</button>
+                            <button class="suggestion-chip px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-400/60 rounded-lg text-xs text-slate-300 hover:text-white transition-all shadow-sm cursor-pointer flex items-center gap-1" data-prompt="Scan the project codebase and generate a complete Mermaid.js ER Diagram of the Database Schema in ARCHITECTURE.md"><span class="text-green-400">📊</span> Visualize Database</button>
+                        </div>
+                    </div>
+                `;
+                chatContainer.appendChild(welcomeDiv);
+                // Re-attach suggestion chip click handlers
+                welcomeDiv.querySelectorAll('.suggestion-chip').forEach(chip => {
+                    chip.addEventListener('click', () => {
+                        const prompt = chip.getAttribute('data-prompt');
+                        if (prompt) {
+                            chatInput.value = prompt;
+                            chatInput.focus();
+                            chatInput.style.height = 'auto';
+                            chatInput.style.height = (chatInput.scrollHeight) + 'px';
+                        }
+                    });
+                });
+            } else if (message.command === 'fillInput') {
+                // Terminal Interceptor: Fill the chat input with error context
+                if (message.text) {
+                    chatInput.value = message.text;
+                    chatInput.focus();
+                    chatInput.style.height = 'auto';
+                    chatInput.style.height = (chatInput.scrollHeight) + 'px';
+                }
             }
             // NEW: Onboarding Commands
             else if (message.command === 'showOnboarding') {

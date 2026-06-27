@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgriGuard 360 | Smart Farm OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        agri: { 500: '#10b981', 600: '#059669', 700: '#047857', 900: '#0f172a' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom styling for FAQ accordion */
+        details>summary {
+            list-style: none;
+        }
+
+        details>summary::-webkit-details-marker {
+            display: none;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50 text-gray-800 font-sans antialiased">
+
+    <nav class="fixed w-full z-50 bg-white/95 backdrop-blur shadow-md border-b border-gray-100 transition-all">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-20 items-center">
+                <div class="flex-shrink-0 flex items-center gap-2">
+                    <i class="fa-solid fa-leaf text-agri-600 text-3xl"></i>
+                    <span class="font-bold text-2xl text-agri-900 tracking-tight">AgriGuard 360</span>
+                </div>
+                <div class="hidden lg:flex space-x-6 items-center font-medium">
+                    <a href="#home" class="text-gray-600 hover:text-agri-600 transition">Home</a>
+                    <a href="#ecosystem" class="text-gray-600 hover:text-agri-600 transition">Ecosystem</a>
+                    <a href="#how-it-works" class="text-gray-600 hover:text-agri-600 transition">How it Works</a>
+                    <a href="#about" class="text-gray-600 hover:text-agri-600 transition">Team</a>
+                    <a href="#pricing" class="text-gray-600 hover:text-agri-600 transition">Pricing</a>
+
+                    <div class="relative flex items-center border-l pl-4 border-gray-300">
+                        <i class="fa-solid fa-globe text-gray-400 mr-2"></i>
+                        <select
+                            class="bg-transparent border-none text-sm text-gray-700 font-bold focus:ring-0 cursor-pointer outline-none">
+                            <option>English</option>
+                            <option>हिंदी (Hindi)</option>
+                            <option>मराठी (Marathi)</option>
+                        </select>
+                    </div>
+
+                    <a href="#"
+                        class="px-5 py-2.5 bg-agri-900 text-white rounded-lg hover:bg-gray-800 transition shadow-lg">Farm
+                        Dashboard</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <section id="home" class="relative pt-32 pb-20 lg:pt-48 lg:pb-24 overflow-hidden bg-agri-900">
+        <div
+            class="absolute inset-0 opacity-20 bg-[url('https://images.unsplash.com/photo-1625246333195-78d9c38ad449?q=80&w=2070&auto=format&fit=crop')] bg-cover bg-center">
+        </div>
+        <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <span
+                class="px-4 py-1.5 rounded-full bg-agri-600/20 text-agri-500 font-semibold text-sm tracking-wide border border-agri-500/30 mb-6 inline-block">100%
+                Solar Powered & Off-Grid</span>
+            <h1 class="text-4xl md:text-6xl font-bold text-white mb-6 leading-tight">
+                Digital Command Center <br> <span class="text-agri-500">For Your Farm.</span>
+            </h1>
+            <p class="mt-4 text-xl text-gray-300 max-w-3xl mx-auto mb-10">
+                An All-in-One Smart Farm Operating System giving you remote physical control, automated deterrence, and
+                24/7 surveillance directly from your phone.
+            </p>
+            <div class="flex flex-col sm:flex-row justify-center gap-4">
+                <a href="#pricing"
+                    class="px-8 py-4 bg-agri-600 text-white rounded-lg font-bold text-lg hover:bg-agri-500 shadow-lg shadow-agri-500/30 transition transform hover:-translate-y-1">Pre-Book
+                    Setup</a>
+                <a href="#demo"
+                    class="px-8 py-4 bg-white/10 text-white rounded-lg font-bold text-lg hover:bg-white/20 border border-gray-600 backdrop-blur transition"><i
+                        class="fa-solid fa-play mr-2"></i> Watch Demo</a>
+            </div>
+        </div>
+    </section>
+
+    <div class="bg-white border-b border-gray-200 py-6">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <p class="text-center text-sm font-bold text-gray-400 mb-4 uppercase tracking-wider">Trusted & Powered By
+            </p>
+            <div class="flex flex-wrap justify-center gap-8 md:gap-16 items-center opacity-70">
+                <div
+                    class="flex items-center gap-2 text-xl font-bold text-gray-800 hover:text-orange-600 transition cursor-default">
+                    <i class="fa-solid fa-rocket"></i> Startup India</div>
+                <div
+                    class="flex items-center gap-2 text-xl font-bold text-gray-800 hover:text-blue-600 transition cursor-default">
+                    <i class="fa-solid fa-cloud"></i> Google Cloud</div>
+                <div
+                    class="flex items-center gap-2 text-xl font-bold text-gray-800 hover:text-yellow-500 transition cursor-default">
+                    <i class="fa-solid fa-fire"></i> Firebase Realtime</div>
+                <div
+                    class="flex items-center gap-2 text-xl font-bold text-gray-800 hover:text-green-600 transition cursor-default">
+                    <i class="fa-solid fa-shield-halved"></i> IP67 Certified</div>
+            </div>
+        </div>
+    </div>
+
+    <section id="ecosystem" class="py-20 bg-gray-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-agri-900">Our Enterprise Ecosystem</h2>
+                <p class="text-gray-500 mt-4">Industrial-grade security and monitoring infrastructure for modern
+                    farmers.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl transition group">
+                    <div
+                        class="w-14 h-14 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center text-2xl mb-6 group-hover:bg-blue-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-camera"></i></div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-3">360° Surveillance</h3>
+                    <p class="text-gray-600 text-sm">Integration of 4G Solar CCTV with color night vision, accessible
+                        anywhere.</p>
+                </div>
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl transition group">
+                    <div
+                        class="w-14 h-14 bg-orange-50 text-orange-600 rounded-xl flex items-center justify-center text-2xl mb-6 group-hover:bg-orange-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-bolt"></i></div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-3">Smart Deterrence</h3>
+                    <p class="text-gray-600 text-sm">Remote control of Zhatka Machines, motorized torches, and
+                        high-decibel sirens.</p>
+                </div>
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl transition group">
+                    <div
+                        class="w-14 h-14 bg-agri-50 text-agri-600 rounded-xl flex items-center justify-center text-2xl mb-6 group-hover:bg-agri-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-droplet"></i></div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-3">Precision IoT Sensors</h3>
+                    <p class="text-gray-600 text-sm">Real-time data from Soil Moisture, Temperature, and PIR Motion
+                        sensors.</p>
+                </div>
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl transition group">
+                    <div
+                        class="w-14 h-14 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center text-2xl mb-6 group-hover:bg-purple-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-leaf"></i></div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-3">AI Crop Doctor</h3>
+                    <p class="text-gray-600 text-sm">Upload photos for instant AI-based disease diagnosis and treatment
+                        plans.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="demo" class="py-20 bg-agri-900 text-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex flex-col lg:flex-row items-center gap-12">
+                <div class="lg:w-1/2">
+                    <h2 class="text-3xl font-bold mb-6">See AgriGuard 360 in Action</h2>
+                    <p class="text-gray-400 mb-6">Watch how our 100% solar-powered hub is installed in the fields and
+                        how the zero-latency app controls the physical hardware to protect your crops.</p>
+                    <ul class="space-y-4 mb-8">
+                        <li class="flex items-center gap-3"><i class="fa-solid fa-check-circle text-agri-500"></i> Easy
+                            30-minute installation</li>
+                        <li class="flex items-center gap-3"><i class="fa-solid fa-check-circle text-agri-500"></i>
+                            Weatherproof & theft-resistant design</li>
+                        <li class="flex items-center gap-3"><i class="fa-solid fa-check-circle text-agri-500"></i> Works
+                            on minimal 4G networks</li>
+                    </ul>
+                </div>
+                <div class="lg:w-1/2 w-full">
+                    <div
+                        class="relative w-full aspect-video bg-gray-800 rounded-2xl overflow-hidden shadow-2xl border border-gray-700 group cursor-pointer">
+                        <div
+                            class="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1592982537447-6f296b020083?q=80&w=2070&auto=format&fit=crop')] bg-cover bg-center opacity-60 transition group-hover:scale-105 group-hover:opacity-80">
+                        </div>
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <div
+                                class="w-20 h-20 bg-agri-600/90 rounded-full flex items-center justify-center text-white text-3xl shadow-lg group-hover:bg-agri-500 transition">
+                                <i class="fa-solid fa-play ml-1"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="how-it-works" class="py-20 bg-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-agri-900">Zero-Latency Threat Response</h2>
+                <p class="text-gray-500 mt-4">How AgriGuard 360 saves your farm at 2:00 AM.</p>
+            </div>
+            <div class="flex flex-col md:flex-row justify-between items-center gap-8 relative">
+                <div
+                    class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-gray-200 -z-10 transform -translate-y-1/2">
+                </div>
+                <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-md text-center w-full md:w-1/3">
+                    <div
+                        class="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-2xl mx-auto mb-4 border-4 border-white">
+                        1</div>
+                    <h4 class="font-bold text-lg mb-2">Motion Detected</h4>
+                    <p class="text-sm text-gray-500">PIR sensors detect a wild boar entering the farm boundaries.</p>
+                </div>
+                <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-md text-center w-full md:w-1/3">
+                    <div
+                        class="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center text-2xl mx-auto mb-4 border-4 border-white">
+                        2</div>
+                    <h4 class="font-bold text-lg mb-2">Instant App Alert</h4>
+                    <p class="text-sm text-gray-500">Firebase pushes a zero-latency alert to the farmer's mobile app.
+                    </p>
+                </div>
+                <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-md text-center w-full md:w-1/3">
+                    <div
+                        class="w-16 h-16 bg-agri-100 text-agri-600 rounded-full flex items-center justify-center text-2xl mx-auto mb-4 border-4 border-white">
+                        3</div>
+                    <h4 class="font-bold text-lg mb-2">Remote Action</h4>
+                    <p class="text-sm text-gray-500">Farmer remotely triggers the loud siren and rotates the torch to
+                        scare the animal.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-20 bg-gray-50 border-t border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-agri-900">Success Stories</h2>
+                <p class="text-gray-500 mt-4">Real results from Indian farmers.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+                    <div class="text-yellow-400 text-sm mb-4"><i class="fa-solid fa-star"></i><i
+                            class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i
+                            class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i></div>
+                    <p class="text-gray-600 italic mb-6">"Pichle saal jungli suar meri 2 acre ki fasal kha gaye the.
+                        AgriGuard ka siren aur torch system lagane ke baad, ek bhi nuksan nahi hua. Zhatka machine app
+                        se control karna bohot aasan hai."</p>
+                    <div class="flex items-center gap-4">
+                        <img src="https://ui-avatars.com/api/?name=Ramesh+Patil&background=10b981&color=fff"
+                            class="w-12 h-12 rounded-full">
+                        <div>
+                            <h4 class="font-bold text-gray-900 text-sm">Ramesh Patil</h4>
+                            <p class="text-xs text-gray-500">Latur, Maharashtra (15 Acres)</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+                    <div class="text-yellow-400 text-sm mb-4"><i class="fa-solid fa-star"></i><i
+                            class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i
+                            class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i></div>
+                    <p class="text-gray-600 italic mb-6">"Raat me khet par paani dene jana bohot unsafe tha. Ab main app
+                        par camera dekh kar pehle area check karta hu, fir jaata hu. AI crop doctor ne mujhe fungus
+                        detect karne me bhi madad ki."</p>
+                    <div class="flex items-center gap-4">
+                        <img src="https://ui-avatars.com/api/?name=Suresh+Kumar&background=0f172a&color=fff"
+                            class="w-12 h-12 rounded-full">
+                        <div>
+                            <h4 class="font-bold text-gray-900 text-sm">Suresh Kumar</h4>
+                            <p class="text-xs text-gray-500">Karnal, Haryana (8 Acres)</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+                    <div class="text-yellow-400 text-sm mb-4"><i class="fa-solid fa-star"></i><i
+                            class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i
+                            class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i></div>
+                    <p class="text-gray-600 italic mb-6">"As a remote farm owner, this is a lifesaver. I live in Pune
+                        but manage my farm in Nashik. The dashboard gives me peace of mind with real-time temperature
+                        and moisture data."</p>
+                    <div class="flex items-center gap-4">
+                        <img src="https://ui-avatars.com/api/?name=Anita+Deshmukh&background=10b981&color=fff"
+                            class="w-12 h-12 rounded-full">
+                        <div>
+                            <h4 class="font-bold text-gray-900 text-sm">Anita Deshmukh</h4>
+                            <p class="text-xs text-gray-500">Nashik, Maharashtra (25 Acres)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="about" class="py-20 bg-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-agri-900">The Visionaries Behind AgriGuard 360</h2>
+                <p class="text-gray-500 mt-4 max-w-2xl mx-auto">We are a team of 5 passionate engineers and agricultural
+                    enthusiasts on a mission to make farming fearless and profitable in India.</p>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6 text-center">
+                <div class="p-4"><img
+                        src="https://ui-avatars.com/api/?name=Partner+1&background=10b981&color=fff&size=128"
+                        class="w-20 h-20 rounded-full mx-auto mb-4 border-2 border-agri-100">
+                    <h4 class="font-bold text-gray-900">John Doe</h4>
+                    <p class="text-xs text-agri-600 font-semibold">CEO & Visionary</p>
+                </div>
+                <div class="p-4"><img
+                        src="https://ui-avatars.com/api/?name=Partner+2&background=0f172a&color=fff&size=128"
+                        class="w-20 h-20 rounded-full mx-auto mb-4 border-2 border-agri-100">
+                    <h4 class="font-bold text-gray-900">Jane Smith</h4>
+                    <p class="text-xs text-agri-600 font-semibold">CTO</p>
+                </div>
+                <div class="p-4"><img
+                        src="https://ui-avatars.com/api/?name=Partner+3&background=10b981&color=fff&size=128"
+                        class="w-20 h-20 rounded-full mx-auto mb-4 border-2 border-agri-100">
+                    <h4 class="font-bold text-gray-900">Raj Patel</h4>
+                    <p class="text-xs text-agri-600 font-semibold">COO</p>
+                </div>
+                <div class="p-4"><img
+                        src="https://ui-avatars.com/api/?name=Partner+4&background=0f172a&color=fff&size=128"
+                        class="w-20 h-20 rounded-full mx-auto mb-4 border-2 border-agri-100">
+                    <h4 class="font-bold text-gray-900">Amit Kumar</h4>
+                    <p class="text-xs text-agri-600 font-semibold">Hardware Head</p>
+                </div>
+                <div class="p-4"><img
+                        src="https://ui-avatars.com/api/?name=Partner+5&background=10b981&color=fff&size=128"
+                        class="w-20 h-20 rounded-full mx-auto mb-4 border-2 border-agri-100">
+                    <h4 class="font-bold text-gray-900">Priya Singh</h4>
+                    <p class="text-xs text-agri-600 font-semibold">CMO</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="pricing" class="py-20 bg-gray-50">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-agri-900">Transparent Pricing Plans</h2>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div
+                    class="bg-agri-900 p-8 rounded-3xl shadow-xl text-white relative overflow-hidden transform hover:-translate-y-2 transition duration-300">
+                    <div class="absolute top-0 right-0 bg-agri-500 text-xs font-bold px-3 py-1 rounded-bl-lg">POPULAR
+                    </div>
+                    <h3 class="text-2xl font-bold mb-2">Enterprise Hardware</h3>
+                    <p class="text-gray-400 text-sm mb-6">Complete physical farm security ecosystem.</p>
+                    <div class="mb-6"><span class="text-4xl font-bold">₹45,000</span> <span class="text-gray-400">/
+                            one-time</span></div>
+                    <ul class="space-y-4 mb-8 text-sm text-gray-300">
+                        <li><i class="fa-solid fa-check text-agri-500 mr-2"></i> Solar Panels & Inverter Hub</li>
+                        <li><i class="fa-solid fa-check text-agri-500 mr-2"></i> ESP32 Controller & Relays</li>
+                        <li><i class="fa-solid fa-check text-agri-500 mr-2"></i> Motorized Torch, Siren & CCTV</li>
+                        <li><i class="fa-solid fa-check text-agri-500 mr-2"></i> 1 Year FREE App Premium Access</li>
+                    </ul>
+                    <button
+                        class="w-full py-3 bg-agri-600 hover:bg-agri-500 rounded-lg font-bold transition shadow-lg shadow-agri-500/30">Pre-Order
+                        Hardware</button>
+                </div>
+                <div
+                    class="bg-white p-8 rounded-3xl shadow-md border border-gray-200 transform hover:-translate-y-2 transition duration-300">
+                    <h3 class="text-2xl font-bold text-gray-900 mb-2">Software Only (SaaS)</h3>
+                    <p class="text-gray-500 text-sm mb-6">For farmers who want AI and analytics.</p>
+                    <div class="mb-6"><span class="text-4xl font-bold text-gray-900">₹99</span> <span
+                            class="text-gray-500">/ month</span></div>
+                    <ul class="space-y-4 mb-8 text-sm text-gray-600">
+                        <li><i class="fa-solid fa-check text-agri-600 mr-2"></i> AI Crop Doctor Diagnostics</li>
+                        <li><i class="fa-solid fa-check text-agri-600 mr-2"></i> Live Weather Forecasts</li>
+                        <li><i class="fa-solid fa-check text-agri-600 mr-2"></i> E-commerce Marketplace Access</li>
+                        <li><i class="fa-solid fa-check text-agri-600 mr-2"></i> Government Subsidies Tracker</li>
+                    </ul>
+                    <button
+                        class="w-full py-3 bg-gray-900 text-white hover:bg-gray-800 rounded-lg font-bold transition">Start
+                        Free Trial</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-20 bg-white">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl font-bold text-agri-900">Frequently Asked Questions</h2>
+            </div>
+            <div class="space-y-4">
+                <details class="group bg-gray-50 border border-gray-200 rounded-lg cursor-pointer">
+                    <summary class="flex justify-between items-center font-semibold p-4 text-gray-900">
+                        Does the hardware work without Internet?
+                        <i class="fa-solid fa-chevron-down text-gray-500 group-open:rotate-180 transition"></i>
+                    </summary>
+                    <div class="p-4 pt-0 text-gray-600 text-sm border-t border-gray-200 mt-2">
+                        Yes, our app has an "Offline Mode". The sensors and deterrents run on local edge logic. However,
+                        for remote alerts to your phone, a basic 4G connection is required.
+                    </div>
+                </details>
+                <details class="group bg-gray-50 border border-gray-200 rounded-lg cursor-pointer">
+                    <summary class="flex justify-between items-center font-semibold p-4 text-gray-900">
+                        Is there a warranty on the hardware?
+                        <i class="fa-solid fa-chevron-down text-gray-500 group-open:rotate-180 transition"></i>
+                    </summary>
+                    <div class="p-4 pt-0 text-gray-600 text-sm border-t border-gray-200 mt-2">
+                        Yes, all our hardware components come with a 1-year replacement warranty. The solar panels have
+                        a 5-year performance guarantee.
+                    </div>
+                </details>
+                <details class="group bg-gray-50 border border-gray-200 rounded-lg cursor-pointer">
+                    <summary class="flex justify-between items-center font-semibold p-4 text-gray-900">
+                        Who will install the setup?
+                        <i class="fa-solid fa-chevron-down text-gray-500 group-open:rotate-180 transition"></i>
+                    </summary>
+                    <div class="p-4 pt-0 text-gray-600 text-sm border-t border-gray-200 mt-2">
+                        AgriGuard 360 is designed for DIY plug-and-play installation. However, we also provide a network
+                        of local technicians in supported districts who can install it for a nominal fee.
+                    </div>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <section id="contact" class="py-20 bg-agri-900 text-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-12">
+                <div>
+                    <h2 class="text-3xl font-bold mb-6">Get in Touch</h2>
+                    <p class="text-gray-400 mb-8">Ready to secure your farm? Contact our team for a personalized demo or
+                        technical support.</p>
+                    <div class="space-y-6">
+                        <div class="flex items-start gap-4">
+                            <div
+                                class="w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center shadow-sm text-agri-500">
+                                <i class="fa-solid fa-location-dot"></i></div>
+                            <div>
+                                <h4 class="font-bold">Corporate Office</h4>
+                                <p class="text-gray-400 text-sm">Tech Park, Chhatrapati Sambhajinagar, Maharashtra,
+                                    India</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-4">
+                            <div
+                                class="w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center shadow-sm text-agri-500">
+                                <i class="fa-solid fa-phone"></i></div>
+                            <div>
+                                <h4 class="font-bold">Toll-Free Support</h4>
+                                <p class="text-gray-400 text-sm">1800-123-4567 (24/7 Available)</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-8 rounded-2xl shadow-lg">
+                    <form onsubmit="event.preventDefault(); alert('Lead Submitted successfully!');">
+                        <div class="mb-4">
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">Full Name</label>
+                            <input type="text"
+                                class="w-full px-4 py-2 border border-gray-300 text-gray-900 rounded-lg focus:ring-2 focus:ring-agri-500 focus:outline-none"
+                                placeholder="Enter your name">
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">Phone Number</label>
+                            <input type="tel"
+                                class="w-full px-4 py-2 border border-gray-300 text-gray-900 rounded-lg focus:ring-2 focus:ring-agri-500 focus:outline-none"
+                                placeholder="+91">
+                        </div>
+                        <div class="mb-6">
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">Message</label>
+                            <textarea rows="3"
+                                class="w-full px-4 py-2 border border-gray-300 text-gray-900 rounded-lg focus:ring-2 focus:ring-agri-500 focus:outline-none"
+                                placeholder="How can we help you?"></textarea>
+                        </div>
+                        <button type="submit"
+                            class="w-full py-3 bg-agri-900 text-white rounded-lg font-bold hover:bg-gray-800 transition">Submit
+                            Request</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="bg-gray-900 text-gray-300 py-12 border-t border-gray-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-4 gap-8">
+            <div class="col-span-1 md:col-span-2">
+                <div class="flex items-center gap-2 mb-4">
+                    <i class="fa-solid fa-leaf text-agri-500 text-2xl"></i>
+                    <span class="font-bold text-xl text-white tracking-tight">AgriGuard 360</span>
+                </div>
+                <p class="text-sm text-gray-400 max-w-sm mb-6">Empowering Indian farmers with enterprise-grade security
+                    and AI, making farming fearless and profitable.</p>
+            </div>
+            <div>
+                <h4 class="text-white font-bold mb-4">Quick Links</h4>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="#ecosystem" class="hover:text-agri-500 transition">Our Ecosystem</a></li>
+                    <li><a href="#pricing" class="hover:text-agri-500 transition">Pricing & Plans</a></li>
+                    <li><a href="#contact" class="hover:text-agri-500 transition">Book a Demo</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4 class="text-white font-bold mb-4">Legal</h4>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="#" class="hover:text-agri-500 transition">Privacy Policy</a></li>
+                    <li><a href="#" class="hover:text-agri-500 transition">Terms & Conditions</a></li>
+                </ul>
+            </div>
+        </div>
+        <div
+            class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-12 pt-8 border-t border-gray-800 text-center text-sm text-gray-500">
+            &copy; 2026 AgriGuard 360. All rights reserved.
+        </div>
+    </footer>
+
+    <div class="fixed bottom-6 right-6 z-50 flex flex-col items-end">
+        <div id="chat-window"
+            class="hidden w-80 bg-white rounded-2xl shadow-2xl border border-gray-200 mb-4 overflow-hidden transform transition-all">
+            <div class="bg-agri-900 p-4 text-white flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-robot text-agri-500 text-xl"></i>
+                    <span class="font-bold">Kisan Mitra (AI)</span>
+                </div>
+                <button onclick="toggleChat()" class="text-gray-300 hover:text-white"><i
+                        class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="p-4 h-64 bg-gray-50 overflow-y-auto text-sm text-gray-600 flex flex-col gap-3">
+                <div class="bg-gray-200 p-3 rounded-lg rounded-tl-none self-start max-w-[80%]">
+                    Namaste! Main Kisan Mitra hoon. Main aapki kya madad kar sakta hoon?
+                </div>
+            </div>
+            <div class="p-3 bg-white border-t border-gray-100 flex gap-2">
+                <input type="text" placeholder="Type a message..."
+                    class="flex-1 px-3 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-agri-500">
+                <button
+                    class="w-10 h-10 bg-agri-600 text-white rounded-lg flex items-center justify-center hover:bg-agri-700"><i
+                        class="fa-solid fa-paper-plane text-xs"></i></button>
+            </div>
+        </div>
+        <button onclick="toggleChat()"
+            class="w-16 h-16 bg-agri-600 hover:bg-agri-500 text-white rounded-full shadow-xl shadow-agri-600/40 flex items-center justify-center text-2xl transition transform hover:scale-105 active:scale-95">
+            <i class="fa-solid fa-headset"></i>
+        </button>
+    </div>
+
+    <script>
+        function toggleChat() {
+            const chat = document.getElementById('chat-window');
+            if (chat.classList.contains('hidden')) {
+                chat.classList.remove('hidden');
+            } else {
+                chat.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+
+</html>

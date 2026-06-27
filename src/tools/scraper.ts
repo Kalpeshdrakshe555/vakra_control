@@ -17,22 +17,29 @@ export async function fetchWebContext(url: string): Promise<string> {
 
         const html = await response.text();
 
+        // Extract core content first if possible
+        let mainContent = html;
+        const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+        if (mainMatch && mainMatch[1]) {
+            mainContent = mainMatch[1];
+        }
+
         // Basic code block formatting preservation
-        let cleanText = html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, p1) => {
+        let cleanText = mainContent.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, p1) => {
             return '\n```\n' + p1.replace(/<[^>]+>/g, '').trim() + '\n```\n';
         });
 
-        // 1. Strip script, style and head tags including their nested contents
-        // 2. Strip all remaining tags
+        // 1. Strip noisy tags including their nested contents
+        // 2. Strip all remaining HTML tags
         // 3. Normalize white spaces and trim
         cleanText = cleanText
-            .replace(/<(style|script|head|title|nav|footer)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
+            .replace(/<(style|script|head|title|nav|footer|aside|header|form|button|figure|iframe|noscript|svg)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
             .replace(/<[^>]+>/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Truncate to maximum of 3000 characters per page
-        return cleanText.substring(0, 3000);
+        // Truncate to maximum of 2000 characters per page to save tokens
+        return cleanText.substring(0, 2000);
     } catch (error) {
         console.error(`fetchWebContext failed for ${url}:`, error);
         return '';

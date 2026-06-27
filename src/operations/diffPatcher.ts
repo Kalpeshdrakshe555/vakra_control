@@ -104,16 +104,34 @@ export async function applyDiffToActiveFile(extractedCode: string): Promise<bool
  * 5. First & Last Line Anchor Match
  */
 export function applyRobustSearchReplace(fileText: string, searchStr: string, replaceStr: string): { success: boolean, result: string } {
-    // Tier 1: Exact Match
-    if (fileText.includes(searchStr)) {
-        return { success: true, result: fileText.replace(searchStr, replaceStr) };
+    // Helper to normalize tabs to 4 spaces and trim trailing whitespace
+    const normalize = (str: string) => str.replace(/\t/g, '    ').split(/\r?\n/).map(l => l.trimRight()).join('\n');
+    
+    // Tier 0: Empty SEARCH = Full file overwrite (Model creating a new file or wiping one)
+    if (searchStr.trim().length === 0) {
+        return { success: true, result: replaceStr };
     }
 
-    // Tier 2: Normalized Line Endings
-    const normSearch = searchStr.replace(/\r\n/g, '\n');
-    const normFile = fileText.replace(/\r\n/g, '\n');
-    if (normFile.includes(normSearch)) {
-        return { success: true, result: normFile.replace(normSearch, replaceStr.replace(/\r\n/g, '\n')) };
+    const normFileText = normalize(fileText);
+    const normSearchStr = normalize(searchStr);
+
+    // Tier 1: Exact Match (Normalized)
+    if (normFileText.includes(normSearchStr)) {
+        // We replace in the ORIGINAL fileText to preserve user's tabs if possible, 
+        // but since we matched normalized, we might have to use normalized if original doesn't match
+        if (fileText.includes(searchStr)) {
+            return { success: true, result: fileText.replace(searchStr, replaceStr) };
+        } else {
+             // Tab/Space mismatch occurred, replace on normalized version
+             return { success: true, result: normFileText.replace(normSearchStr, replaceStr) };
+        }
+    }
+
+    // Tier 2: Normalized Line Endings Only
+    const searchNoR = searchStr.replace(/\r\n/g, '\n');
+    const fileNoR = fileText.replace(/\r\n/g, '\n');
+    if (fileNoR.includes(searchNoR)) {
+        return { success: true, result: fileNoR.replace(searchNoR, replaceStr.replace(/\r\n/g, '\n')) };
     }
 
     // Tier 3: Trimmed Match
@@ -122,8 +140,9 @@ export function applyRobustSearchReplace(fileText: string, searchStr: string, re
     }
 
     // Tier 4: Line-by-Line Indentation & Empty Line Agnostic Match
-    const searchLines = searchStr.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-    const fileLines = fileText.split(/\r?\n/);
+    const searchLines = normSearchStr.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const fileLines = normFileText.split('\n');
+    const origFileLines = fileText.split(/\r?\n/);
     
     if (searchLines.length === 0) {
          return { success: false, result: fileText };
@@ -158,50 +177,51 @@ export function applyRobustSearchReplace(fileText: string, searchStr: string, re
     }
 
     if (bestMatchStart !== -1 && bestMatchEnd !== -1) {
-        const pre = fileLines.slice(0, bestMatchStart).join('\n');
-        const post = fileLines.slice(bestMatchEnd + 1).join('\n');
+        const pre = origFileLines.slice(0, bestMatchStart).join('\n');
+        const post = origFileLines.slice(bestMatchEnd + 1).join('\n');
         const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
         return { success: true, result };
     }
 
-    // Tier 5: Fallback to First and Last line matching (with intermediate validation)
+    // Tier 5: Sliding Window Fallback (Score-based)
     if (searchLines.length > 1) {
-        const firstLine = searchLines[0];
-        const lastLine = searchLines[searchLines.length - 1];
-        
-        let startIdx = -1;
-        let endIdx = -1;
-        for (let i = 0; i < fileLines.length; i++) {
-            if (fileLines[i].trim() === firstLine) {
-                startIdx = i;
-                break;
-            }
-        }
-        if (startIdx !== -1) {
-            for (let i = startIdx; i < fileLines.length; i++) {
-                if (fileLines[i].trim() === lastLine) {
-                    endIdx = i;
-                    break;
+        let bestScore = 0;
+        let bestStart = -1;
+        let bestEnd = -1;
+
+        // Try to find a block in the file that matches the most search lines
+        for (let i = 0; i < fileLines.length - searchLines.length + 1; i++) {
+            let currentScore = 0;
+            // Check a window of lines up to 2x the search size to account for added/removed empty lines
+            const windowSize = Math.min(fileLines.length - i, searchLines.length * 2);
+            let searchIdx = 0;
+            let lastMatchedFileIdx = i;
+
+            for (let w = 0; w < windowSize && searchIdx < searchLines.length; w++) {
+                if (fileLines[i + w].trim() === searchLines[searchIdx]) {
+                    currentScore++;
+                    searchIdx++;
+                    lastMatchedFileIdx = i + w;
+                } else if (fileLines[i + w].trim() === '') {
+                     // ignore empty lines in file
+                } else {
+                     // mismatch, keep looking for this search line further in the window
                 }
             }
+
+            if (currentScore > bestScore) {
+                bestScore = currentScore;
+                bestStart = i;
+                bestEnd = lastMatchedFileIdx;
+            }
         }
-        
-        if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx && (endIdx - startIdx) < searchLines.length * 3) {
-            // H2 FIX: Validate that at least 40% of intermediate search lines also match
-            const fileLinesInRange = fileLines.slice(startIdx, endIdx + 1).map(l => l.trim()).filter(l => l.length > 0);
-            const intermediateSearchLines = searchLines.slice(1, -1);
-            let matchedCount = 0;
-            for (const sl of intermediateSearchLines) {
-                if (fileLinesInRange.includes(sl)) matchedCount++;
-            }
-            const matchRatio = intermediateSearchLines.length > 0 ? matchedCount / intermediateSearchLines.length : 1;
-            
-            if (matchRatio >= 0.4) {
-                const pre = fileLines.slice(0, startIdx).join('\n');
-                const post = fileLines.slice(endIdx + 1).join('\n');
-                const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
-                return { success: true, result };
-            }
+
+        // If we matched at least 60% of the lines in the SEARCH block
+        if (bestScore / searchLines.length >= 0.6) {
+             const pre = origFileLines.slice(0, bestStart).join('\n');
+             const post = origFileLines.slice(bestEnd + 1).join('\n');
+             const result = (pre ? pre + '\n' : '') + replaceStr + (post ? '\n' + post : '');
+             return { success: true, result };
         }
     }
 

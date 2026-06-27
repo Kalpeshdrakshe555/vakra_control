@@ -36,7 +36,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         private readonly _workspaceRoot: string,
         private readonly ragEngine?: any
     ) {
-        this.conversationHistory = new ConversationHistory(20, this._workspaceRoot);
+        const config = require('../config').getAgentConfig(this._workspaceRoot);
+        const historyLimit = config?.contextLimits?.historyLength || 10;
+        this.conversationHistory = new ConversationHistory(historyLimit * 2, this._workspaceRoot);
     }
 
     public resolveWebviewView(
@@ -468,7 +470,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (startIdx !== -1) {
                 const endIdx = fileLines.findIndex((l, idx) => idx > startIdx && l.includes(lastLine));
                 if (endIdx !== -1) {
-                    fileLines.splice(startIdx, endIdx - startIdx + 1, replaceStr);
+                    fileLines.splice(startIdx, endIdx - startIdx + 1, ...replaceStr.split('\n'));
                     return { success: true, text: fileLines.join('\n') };
                 }
             }
@@ -479,7 +481,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const workspaceFolders = vscode.workspace.workspaceFolders;
             if (workspaceFolders && workspaceFolders.length > 0) {
                 const config = require('../config').getAgentConfig(workspaceFolders[0].uri.fsPath);
-                if (config?.advancedModeEnabled && config?.supportBrain?.model) {
+                if (config?.supportBrain?.model) {
                     const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
                     let scoutClient;
                     if (config.supportBrain.providerType === 'local') {
@@ -649,9 +651,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     text: `🧠 Memory optimizing: Compressing older context to save tokens (Zero API cost)...`
                 });
                 try {
-                    // Local compression without API call
-                    this.conversationHistory.localCompress(2);
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `✅ Context compressed locally.` });
+                    // Local compression without API call. Keep slightly less than the limit to free space.
+                    const keepRecent = Math.max(2, Math.floor(historyLimit * 0.5));
+                    this.conversationHistory.localCompress(keepRecent);
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `✅ Context compressed locally (kept ${keepRecent} recent turns).` });
                 } catch (err) { console.error('Compression failed', err); }
             }
 
@@ -783,7 +786,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             
             // Task Planner Injection
             if (workspaceRoot) {
-                const isComplex = TaskPlanner.isComplexRequest(message.text);
+                // In Architect Mode, EVERY request is considered complex to enforce plan-first workflow
+                const isComplex = message.architectMode || TaskPlanner.isComplexRequest(message.text);
                 const planState = TaskPlanner.readPlan(workspaceRoot);
                 
                 if (isComplex && !planState.isActive) {
@@ -818,11 +822,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     text: `🧠 Memory optimizing: Compressing older context to save tokens (Zero API cost)...`
                 });
                 try {
-                    // Local compression without API call
-                    this.conversationHistory.localCompress(2);
+                    // Local compression without API call. Keep slightly less than the limit to free space.
+                    const keepRecent = Math.max(2, Math.floor(historyLimit * 0.5));
+                    this.conversationHistory.localCompress(keepRecent);
                     this.postMessageToWebview({
                         command: 'statusUpdate',
-                        text: `✅ Context compressed locally.`
+                        text: `✅ Context compressed locally (kept ${keepRecent} recent turns).`
                     });
                 } catch (err) {
                     console.error('Local compression failed', err);
@@ -1005,6 +1010,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 } else if (functionCall.name === 'search_codebase') {
                     if (!this.ragEngine) return "Search engine not initialized.";
                     const query = functionCall.args?.query || '';
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🧠 RAG Search: Querying "${query}"...` });
                     
                     let results;
                     const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_tool', [], query) : null;
@@ -1362,15 +1368,18 @@ ${JSON.stringify(assets, null, 2)}
             finalPrompt = finalPrompt.replace(/@workspace/gi, '').trim();
         }
 
-        // Manual RAG Trigger (Fallback for non-tool-calling local models)
-        const wantsRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
+        // Auto-RAG Trigger: Always inject top 2-3 snippets if it's a substantive query, unless heavily explicit context is already given
+        const isExplicitRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
+        const wantsRag = isExplicitRag || (!hasFileMatch && !wantsWorkspace && text.length > 15 && this.ragEngine);
         
         if (wantsRag && this.ragEngine) {
             try {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🧠 Semantic Search: Analyzing codebase...`
-                });
+                if (isExplicitRag) {
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `🧠 Semantic Search: Analyzing codebase...`
+                    });
+                }
                 
                 let ragResults;
                 const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_manual', [], text) : null;
@@ -1380,21 +1389,29 @@ ${JSON.stringify(assets, null, 2)}
                     try { ragResults = JSON.parse(rawCache); } catch(e) {}
                 }
                 
-                if (ragResults) {
+                if (ragResults && isExplicitRag) {
                     this.postMessageToWebview({ command: 'statusUpdate', text: `⚡ RAG Cache Hit: Instant offline search!` });
-                } else {
-                    ragResults = await this.ragEngine.search(text, 3);
+                } else if (!ragResults) {
+                    ragResults = await this.ragEngine.search(text, isExplicitRag ? 3 : 2);
                     if (ragCacheKey && ragResults && ragResults.length > 0) {
                         saveCache(workspaceRoot!, ragCacheKey, JSON.stringify(ragResults));
                     }
                 }
 
                 if (ragResults && ragResults.length > 0) {
-                    contextSources.push({ name: 'Semantic Codebase Context', content: ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n'), priority: 7 });
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `🧠 Semantic Search: Loaded ${ragResults.length} relevant files.`
-                    });
+                    contextSources.push({ name: 'Semantic Codebase Context (Auto-RAG)', content: ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n'), priority: 7 });
+                    if (isExplicitRag) {
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `🧠 Semantic Search: Loaded ${ragResults.length} relevant files.`
+                        });
+                    } else {
+                        // Silent or subtle status for auto-RAG
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `🧠 Auto-RAG injected ${ragResults.length} background context snippets.`
+                        });
+                    }
                 }
             } catch (err: any) {
                 console.error("RAG search failed", err);
