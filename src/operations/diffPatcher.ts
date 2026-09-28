@@ -388,7 +388,7 @@ export function applyRobustSearchReplace(
             }
         }
 
-        if (bestAvgScore >= 0.70 && bestStart !== -1 && bestEnd !== -1) {
+        if (bestAvgScore >= 0.65 && bestStart !== -1 && bestEnd !== -1) {
             const pre = origFileLines.slice(0, bestStart);
             const post = origFileLines.slice(bestEnd + 1);
             const result = (pre.length > 0 ? pre.join('\n') + '\n' : '') + replaceStr + (post.length > 0 ? '\n' + post.join('\n') : '');
