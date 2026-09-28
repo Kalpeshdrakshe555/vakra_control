@@ -8,7 +8,7 @@ import { IEngine } from './router/IEngine';
 import { InlineCompletionProvider } from './providers/inlineCompletionProvider';
 import { AiCodeActionProvider, registerCodeActionCommands } from './providers/codeActionProvider';
 import { AiHoverProvider } from './providers/hoverProvider';
-import { ensureAgentConfig, getGeminiApiKeys, getGeminiModel, getGeminiTimeout } from './config';
+import { ensureAgentConfig, getGeminiApiKeys, getGeminiModel, getGeminiTimeout, setSecretStorage, saveSecureApiKey } from './config';
 import { RagEngine } from './rag/ragEngine';
 import * as fs from 'fs';
 import { extractSurgicalErrorContext } from './utils/terminalHeuristics';
@@ -19,6 +19,8 @@ export let globalRagEngine: RagEngine | null = null;
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Ultra Light AI');
     outputChannel.appendLine('Activating "ultra-light-ai" extension...');
+
+    setSecretStorage(context.secrets);
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : '';
@@ -49,7 +51,15 @@ export function activate(context: vscode.ExtensionContext) {
         globalRagEngine = new RagEngine(root);
         
         setTimeout(() => {
-            globalRagEngine?.buildIndex().catch(err => outputChannel.appendLine(`RAG Indexing Error: ${err}`));
+            if (statusBarItem) statusBarItem.text = '$(sync~spin) Ultra Light AI (Indexing...)';
+            globalRagEngine?.buildIndex()
+                .then(() => {
+                    if (statusBarItem) statusBarItem.text = '$(sparkle) Ultra Light AI';
+                })
+                .catch(err => {
+                    outputChannel.appendLine(`RAG Indexing Error: ${err}`);
+                    if (statusBarItem) statusBarItem.text = '$(sparkle) Ultra Light AI';
+                });
         }, 3000);
 
         if (activeWatcherDisposable) {
@@ -122,6 +132,22 @@ export function activate(context: vscode.ExtensionContext) {
         TerminalErrorInterceptor.activate(context, sidebarProvider);
     } catch (err) {
         outputChannel.appendLine(`TerminalErrorInterceptor skipped: ${err}`);
+    }
+
+    // First-run wizard check for missing API keys
+    if (keys.length === 0) {
+        setTimeout(async () => {
+            const inputKey = await vscode.window.showInputBox({
+                title: 'Ultra Light AI — First-Run Setup',
+                prompt: 'Please enter your Gemini API Key to enable AI features (or leave empty to configure later in Settings)',
+                password: true,
+                placeHolder: 'AIzaSy...'
+            });
+            if (inputKey && inputKey.trim()) {
+                await saveSecureApiKey(inputKey.trim());
+                vscode.window.showInformationMessage('✨ API Key saved securely in OS Keychain!');
+            }
+        }, 1500);
     }
 
     // Initialize Skeleton Expander
@@ -360,6 +386,35 @@ IMPORTANT: Return ONLY the raw modified code block. Do not include markdown code
                 fileName: vscode.window.activeTextEditor 
                     ? path.basename(vscode.window.activeTextEditor.document.fileName)
                     : 'none'
+            });
+        })
+    );
+
+    // Command: Auto-Fix Diagnostics (Squiggly Red Lines)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ultra-light-ai.autoFixDiagnostics', async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                vscode.window.showErrorMessage('No active text editor.');
+                return;
+            }
+
+            const uri = editor.document.uri;
+            const diagnostics = vscode.languages.getDiagnostics(uri);
+            const errors = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+
+            if (errors.length === 0) {
+                vscode.window.showInformationMessage('🎉 No active error diagnostics found in this file!');
+                return;
+            }
+
+            const errorSummary = errors.map(e => `Line ${e.range.start.line + 1}: ${e.message}`).join('\n');
+            const relPath = path.relative(workspaceRoot || '', uri.fsPath);
+
+            await vscode.commands.executeCommand('ultra-light-ai-sidebar.focus');
+            sidebarProvider.postMessageToWebview({
+                command: 'injectChatAndSend',
+                text: `Please fix the following error diagnostics in \`${relPath}\`:\n\`\`\`\n${errorSummary}\n\`\`\`\n\nActive File: @file "${relPath}"`
             });
         })
     );

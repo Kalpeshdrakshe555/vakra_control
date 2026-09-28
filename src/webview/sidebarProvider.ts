@@ -1426,6 +1426,35 @@ ${JSON.stringify(assets, null, 2)}
             }
         }
 
+        // Handle @terminal mention — inject last captured terminal output
+        if (text.toLowerCase().includes('@terminal')) {
+            const termOutput = TerminalCapture.getLastOutput();
+            if (termOutput) {
+                contextSources.push({ name: 'Last Terminal Output', content: termOutput, priority: 8 });
+                this.postMessageToWebview({ command: 'statusUpdate', text: `🖥️ Injected @terminal output.` });
+            } else {
+                this.postMessageToWebview({ command: 'statusUpdate', text: `🖥️ @terminal requested, but no active terminal output recorded yet.` });
+            }
+            finalPrompt = finalPrompt.replace(/@terminal/gi, '').trim();
+        }
+
+        // Handle @git mention — inject uncommitted git diffs
+        if (text.toLowerCase().includes('@git') && workspaceRoot) {
+            try {
+                const { execSync } = require('child_process');
+                const gitDiff = execSync('git diff HEAD', { cwd: workspaceRoot, encoding: 'utf8', timeout: 5000 });
+                if (gitDiff && gitDiff.trim()) {
+                    contextSources.push({ name: 'Uncommitted Git Diff', content: `\`\`\`diff\n${gitDiff.slice(0, 4000)}\n\`\`\``, priority: 8 });
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🌿 Injected @git diff context.` });
+                } else {
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🌿 @git: Workspace clean, no uncommitted diffs found.` });
+                }
+            } catch (e) {
+                this.postMessageToWebview({ command: 'statusUpdate', text: `🌿 @git: Unable to run git diff or git not initialized.` });
+            }
+            finalPrompt = finalPrompt.replace(/@git/gi, '').trim();
+        }
+
         // Handle @search directive or UI toggle
         if (includeWebSearch || text.toLowerCase().includes('@search')) {
             const { searchWeb } = require('../tools/scraper');
