@@ -334,10 +334,19 @@
         <!-- Status Bar -->
         <div class="flex items-center justify-between mt-3 px-1.5 text-[10px] text-slate-400 font-mono">
             
-            <!-- Model Badge -->
-            <div class="flex items-center gap-1.5 bg-cyber-panel/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/5 shadow-inner">
-                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></span>
-                <span class="tracking-wide">Model: <span class="text-cyber-neonCyan font-bold" id="active-model-badge">gemma-4-31b-it</span></span>
+            <!-- Model Badge & Token Cost Meter -->
+            <div class="flex items-center gap-2">
+                <div class="flex items-center gap-1.5 bg-cyber-panel/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/5 shadow-inner">
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></span>
+                    <span class="tracking-wide">Model: <span class="text-cyber-neonCyan font-bold" id="active-model-badge">gemma-4-31b-it</span></span>
+                </div>
+                <div class="hidden sm:flex items-center gap-1.5 bg-cyber-panel/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/5 text-[9px] font-mono text-slate-400" id="token-meter-badge">
+                    <span>Tokens: <strong class="text-cyan-400" id="meter-token-count">0</strong></span>
+                    <span>|</span>
+                    <span>Context: <strong class="text-purple-400" id="meter-context-pct">0%</strong></span>
+                    <span>|</span>
+                    <span>Est. Cost: <strong class="text-green-400" id="meter-cost-val">$0.000</strong></span>
+                </div>
             </div>
 
             <!-- Controls -->
@@ -714,6 +723,21 @@
         });
 
         // Populate Form Fields when Settings are Loaded
+        function updateTokenMeter(totalTokens) {
+            const countEl = document.getElementById('meter-token-count');
+            const pctEl = document.getElementById('meter-context-pct');
+            const costEl = document.getElementById('meter-cost-val');
+
+            if (countEl && pctEl && costEl) {
+                countEl.innerText = totalTokens >= 1000 ? (totalTokens / 1000).toFixed(1) + 'k' : totalTokens;
+                const maxCtx = 8192;
+                const pct = Math.min(100, Math.round((totalTokens / maxCtx) * 100));
+                pctEl.innerText = `${pct}%`;
+                const cost = (totalTokens / 1000000) * 0.15; // ~$0.15 / 1M tokens estimated
+                costEl.innerText = `$${cost.toFixed(4)}`;
+            }
+        }
+
         function populateSettings(config) {
             // Main Brain
             if (config.mainBrain) {
@@ -1285,7 +1309,7 @@
                 bubbleDiv.appendChild(actionDiv);
             }
 
-            // Display token usage if available
+            // Display token usage if available & update footer cost meter
             if (usage) {
                 const usageDiv = document.createElement('div');
                 usageDiv.className = 'text-[9px] text-slate-500 font-mono pt-1.5 border-t border-cyber-border/20 flex justify-between gap-1';
@@ -1295,6 +1319,8 @@
                     <span>Total: <span class="text-cyber-neonPurple font-bold">${usage.totalTokens}</span></span>
                 `;
                 bubbleDiv.appendChild(usageDiv);
+
+                updateTokenMeter(usage.totalTokens);
             }
 
             msgDiv.appendChild(bubbleDiv);

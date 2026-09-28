@@ -80,7 +80,33 @@ export function getAgentConfig(workspaceRoot?: string): AgentConfig | null {
 /**
  * Retrieves Gemini API Keys from configuration, env files, or falls back to a hardcoded key.
  */
+let globalSecretStorage: vscode.SecretStorage | null = null;
+
+export function setSecretStorage(secrets: vscode.SecretStorage) {
+    globalSecretStorage = secrets;
+}
+
+export async function getSecureApiKey(): Promise<string | undefined> {
+    if (globalSecretStorage) {
+        const secretKey = await globalSecretStorage.get('ultra_light_ai_api_key');
+        if (secretKey && secretKey.trim()) return secretKey.trim();
+    }
+    return undefined;
+}
+
+export async function saveSecureApiKey(apiKey: string): Promise<void> {
+    if (globalSecretStorage) {
+        await globalSecretStorage.store('ultra_light_ai_api_key', apiKey.trim());
+    }
+}
+
+let cachedSecretKey: string | undefined = undefined;
+
 export function getGeminiApiKeys(workspaceRoot?: string, extensionPath?: string): string[] {
+    if (cachedSecretKey) {
+        return [cachedSecretKey];
+    }
+
     // 1. Try loading from .agent-config.json
     const config = getAgentConfig(workspaceRoot);
     if (config?.providers?.cloud?.apiKey) {

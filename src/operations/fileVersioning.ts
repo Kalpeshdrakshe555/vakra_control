@@ -2,6 +2,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export class FileVersioning {
+    public static createCheckpoint(workspaceRoot: string, label: string): string {
+        const timestamp = Date.now();
+        const cpDir = path.join(workspaceRoot, '.ultra-light-ai', 'checkpoints', `${timestamp}_${label.replace(/[^a-zA-Z0-9]/g, '_')}`);
+        if (!fs.existsSync(cpDir)) {
+            fs.mkdirSync(cpDir, { recursive: true });
+        }
+        return cpDir;
+    }
+
     public static saveSnapshot(workspaceRoot: string, filepath: string, content: string): void {
         if (!fs.existsSync(filepath)) return; // Only snapshot existing files
         

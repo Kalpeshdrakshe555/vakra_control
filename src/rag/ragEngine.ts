@@ -73,7 +73,15 @@ export class RagEngine {
             }
 
             const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+            const aiignorePath = path.join(this.workspaceRoot, '.aiignore');
+            let aiignoreList: string[] = [];
+            if (fs.existsSync(aiignorePath)) {
+                try {
+                    const aiContent = fs.readFileSync(aiignorePath, 'utf8');
+                    aiignoreList = aiContent.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+                } catch (e) {}
+            }
+            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, ...aiignoreList, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
             const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
 
             const files = await vscode.workspace.findFiles(
