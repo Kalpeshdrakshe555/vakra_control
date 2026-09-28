@@ -1803,6 +1803,11 @@
                 });
             } else if (message.command === 'loadSettings') {
                 populateSettings(message.config);
+            } else if (message.command === 'workspaceChanged') {
+                if (message.config) {
+                    populateSettings(message.config);
+                }
+                appendSystemMessage(`Workspace switched: ${message.workspaceRoot || 'No Workspace'}`);
             } else if (message.command === 'settingsSaved') {
                 if (message.success) {
                     appendSystemMessage(`Settings saved. Model: ${message.model}`);

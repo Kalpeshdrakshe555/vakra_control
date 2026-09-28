@@ -41,18 +41,22 @@ export function activate(context: vscode.ExtensionContext) {
     // Instantiate default fallback engine router
     const defaultRouter = new EngineRouter([geminiClient], stateMachine);
 
-    // Initialize RAG Engine if workspace exists
-    if (workspaceRoot) {
-        globalRagEngine = new RagEngine(workspaceRoot);
+    // Function to set up RAG Engine and file watcher for a given workspace root
+    let activeWatcherDisposable: vscode.Disposable | null = null;
+    const setupWorkspaceRag = (root: string) => {
+        if (!root) return;
+        ensureAgentConfig(root);
+        globalRagEngine = new RagEngine(root);
         
-        // Run in background with delay to prevent Extension Host from hanging
         setTimeout(() => {
             globalRagEngine?.buildIndex().catch(err => outputChannel.appendLine(`RAG Indexing Error: ${err}`));
-        }, 5000); 
+        }, 3000);
 
-        // Setup file watcher for RAG
+        if (activeWatcherDisposable) {
+            activeWatcherDisposable.dispose();
+        }
+
         const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
-        context.subscriptions.push(watcher);
         const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
         const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
         const safeUpdateRag = (uri: vscode.Uri) => {
@@ -63,6 +67,12 @@ export function activate(context: vscode.ExtensionContext) {
         watcher.onDidChange(safeUpdateRag);
         watcher.onDidCreate(safeUpdateRag);
         watcher.onDidDelete(safeUpdateRag);
+        activeWatcherDisposable = watcher;
+        context.subscriptions.push(watcher);
+    };
+
+    if (workspaceRoot) {
+        setupWorkspaceRag(workspaceRoot);
     }
 
     // (Background AST Indexer removed: replaced by in-stream micro-tasks via Scout)
@@ -84,6 +94,26 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('ultra-light-ai-sidebar', sidebarProvider)
+    );
+
+    // ──────────────────────────────────────────────────────────────────────
+    // DYNAMIC MULTI-ROOT & WORKSPACE SWITCH LISTENER
+    // ──────────────────────────────────────────────────────────────────────
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+            const currentFolders = vscode.workspace.workspaceFolders;
+            const newRoot = currentFolders && currentFolders.length > 0 ? currentFolders[0].uri.fsPath : '';
+            outputChannel.appendLine(`Workspace folders changed. New primary root: ${newRoot}`);
+
+            if (newRoot) {
+                setupWorkspaceRag(newRoot);
+            } else {
+                globalRagEngine = null;
+            }
+
+            sidebarProvider.updateWorkspaceRoot(newRoot, globalRagEngine);
+            vscode.window.showInformationMessage(`Ultra Light AI workspace updated: ${newRoot ? path.basename(newRoot) : 'No workspace'}`);
+        })
     );
 
     // Initialize Terminal Error Interceptor (safely guarded for proposed API access)

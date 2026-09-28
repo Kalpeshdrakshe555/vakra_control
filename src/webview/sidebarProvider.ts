@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
 import { applyDiffToActiveFile, applyRobustSearchReplace, resolveSafeWorkspacePath } from '../operations/diffPatcher';
-import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, AgentConfig } from '../config';
+import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, ensureAgentConfig, AgentConfig } from '../config';
 import { GameRunnerPanel } from './gameRunnerPanel';
 import { ConversationHistory } from '../state/conversationHistory';
 import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
@@ -33,8 +33,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly _workspaceRoot: string,
-        private readonly ragEngine?: any
+        private _workspaceRoot: string,
+        private ragEngine?: any
     ) {
         const config = require('../config').getAgentConfig(this._workspaceRoot);
         const historyLimit = config?.contextLimits?.historyLength || 10;
@@ -387,6 +387,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             }
         });
+    }
+
+    /**
+     * Dynamic Multi-Root / Workspace Switch Update
+     */
+    public updateWorkspaceRoot(newWorkspaceRoot: string, ragEngine?: any) {
+        this._workspaceRoot = newWorkspaceRoot;
+        this.ragEngine = ragEngine;
+        if (newWorkspaceRoot) {
+            ensureAgentConfig(newWorkspaceRoot);
+        }
+        if (this._view) {
+            const config = getAgentConfig(newWorkspaceRoot);
+            this.postMessageToWebview({
+                command: 'workspaceChanged',
+                workspaceRoot: newWorkspaceRoot,
+                config: config
+            });
+        }
     }
 
     /**
