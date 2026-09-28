@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 
 async function getSymbols(uri: vscode.Uri): Promise<vscode.DocumentSymbol[]> {
     try {
@@ -89,4 +91,78 @@ export async function skeletonizeFile(uri: vscode.Uri): Promise<string> {
 
     // Final cleanup pass to remove excessive newlines
     return content.replace(/\n\s*\n\s*\n/g, '\n\n');
+}
+
+/**
+ * Generates a compact structural map of the workspace (file paths tree + top-level class/function signatures)
+ * to provide the model with immediate structural awareness without needing blind file reads.
+ */
+export async function generateStructuralRepoMap(workspaceRoot: string, maxFiles: number = 25): Promise<string> {
+    try {
+        const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
+        const combinedIgnores = Array.from(new Set([
+            ...userIgnoreFolders, 
+            'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__'
+        ]));
+        const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock,**/*.min.js,**/*.map}`;
+
+        const files = await vscode.workspace.findFiles(
+            '**/*.{ts,js,py,java,go,rs,tsx,jsx,css,html}',
+            excludePattern,
+            maxFiles
+        );
+
+        if (files.length === 0) return '';
+
+        const mapLines: string[] = ['<workspace_structural_map>'];
+
+        for (const fileUri of files) {
+            const relPath = path.relative(workspaceRoot, fileUri.fsPath).replace(/\\/g, '/');
+            const symbols = await getSymbols(fileUri);
+            
+            mapLines.push(`📁 ${relPath}`);
+
+            if (symbols && symbols.length > 0) {
+                for (const sym of symbols) {
+                    const kindName = sym.kind === vscode.SymbolKind.Class ? 'class' :
+                                     sym.kind === vscode.SymbolKind.Interface ? 'interface' :
+                                     sym.kind === vscode.SymbolKind.Function ? 'function' :
+                                     sym.kind === vscode.SymbolKind.Method ? 'method' : '';
+                    if (kindName) {
+                        mapLines.push(`   - ${kindName} ${sym.name}`);
+                        if (sym.children && (sym.kind === vscode.SymbolKind.Class || sym.kind === vscode.SymbolKind.Interface)) {
+                            for (const child of sym.children.slice(0, 5)) {
+                                if (child.kind === vscode.SymbolKind.Method || child.kind === vscode.SymbolKind.Function) {
+                                    mapLines.push(`     • method ${child.name}`);
+                                }
+                            }
+                            if (sym.children.length > 5) {
+                                mapLines.push(`     • ... (${sym.children.length - 5} more methods)`);
+                            }
+                        }
+                    }
+                }
+            } else {
+                try {
+                    const content = await fs.promises.readFile(fileUri.fsPath, 'utf8');
+                    const lines = content.split('\n');
+                    const signatures: string[] = [];
+                    for (const line of lines.slice(0, 80)) {
+                        const trimmed = line.trim();
+                        const match = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:class|function|def)\s+([a-zA-Z0-9_]+)/);
+                        if (match) {
+                            signatures.push(`   - ${match[0]}`);
+                        }
+                    }
+                    mapLines.push(...signatures.slice(0, 5));
+                } catch {}
+            }
+        }
+
+        mapLines.push('</workspace_structural_map>');
+        return mapLines.join('\n');
+    } catch (e) {
+        console.warn('Failed to generate structural repo map:', e);
+        return '';
+    }
 }

@@ -35,7 +35,7 @@ export class PromptClassifier {
                 allowedNames = ['read_multiple_files', 'search_codebase', 'generate_ui_blueprint', 'search_web', 'download_free_internet_asset'];
                 break;
             case 'backend':
-                allowedNames = ['read_multiple_files', 'search_codebase', 'find_references', 'replace_symbol', 'update_architecture_context', 'search_web'];
+                allowedNames = ['read_multiple_files', 'search_codebase', 'find_references', 'replace_symbol', 'update_architecture_context', 'search_web', 'execute_terminal_command'];
                 break;
             case 'info':
                 allowedNames = ['read_multiple_files', 'search_codebase', 'search_web'];

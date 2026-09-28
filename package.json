@@ -24,10 +24,8 @@
     "code assistant"
   ],
   "activationEvents": [
-    "onStartupFinished"
-  ],
-  "enabledApiProposals": [
-    "terminalDataWriteEvent"
+    "onStartupFinished",
+    "onView:ultra-light-ai-sidebar"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -206,8 +204,18 @@
         },
         "ultraLightAI.ignoreFolders": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["node_modules", ".git", "dist", "out", "build", ".next", ".vscode"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            ".git",
+            "dist",
+            "out",
+            "build",
+            ".next",
+            ".vscode"
+          ],
           "markdownDescription": "List of folder names to ignore during AI background indexing and RAG file watching."
         }
       }
@@ -232,5 +240,8 @@
     "mocha": "^11.7.6",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3"
+  },
+  "allowScripts": {
+    "esbuild@0.20.2": true
   }
 }

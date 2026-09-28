@@ -16,12 +16,17 @@ export class PromptBuilder {
         workspaceRoot?: string, 
         isAgentMode: boolean = false, 
         isArchitectMode: boolean = false,
-        taskCategory: 'ui' | 'backend' | 'info' | 'general' = 'general'
+        taskCategory: 'ui' | 'backend' | 'info' | 'general' = 'general',
+        structuralRepoMap?: string
     ): string {
         let systemInstruction = config?.systemInstructions || 
             'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks.';
         
         systemInstruction = systemInstruction.replace(/Provide the complete code file content so it can be directly applied\.?/g, '').trim();
+
+        if (structuralRepoMap && structuralRepoMap.trim().length > 0) {
+            systemInstruction += `\n\n### WORKSPACE STRUCTURAL REPO MAP ###\nYou have direct structural awareness of the project files and signatures below. Use this map to know where classes, methods, and files live without making blind multi-file read calls:\n${structuralRepoMap}\n`;
+        }
         
         systemInstruction += `
 You are an expert debugger and 10x developer. Always think step-by-step before making changes.
@@ -29,7 +34,7 @@ When modifying existing code, DO NOT rewrite the entire file unless asked. Use S
 Format the blocks exactly like this:
 
 **\`src/filepath.ext\`**
-\`\`\`javascript
+\`\`\`language
 <<<<<<< SEARCH
 exact code to be replaced
 =======
@@ -37,32 +42,58 @@ new updated code
 >>>>>>> REPLACE
 \`\`\`
 
-CRITICAL: The SEARCH block MUST perfectly match the existing code, including indentation.
-You can include multiple Search/Replace blocks for the same file if needed.
-If you MUST provide a complete file rewrite, format it like this without the search/replace markers:
+CRITICAL ANCHOR RULES (MANDATORY FOR SEARCH/REPLACE):
+1. ALWAYS provide 2-3 UNCHANGED context anchor lines immediately BEFORE and AFTER the code you are changing. This allows the patcher to locate the exact region even if line numbers shifted.
+2. The SEARCH block MUST perfectly match the existing code character-for-character, including indentation and spaces.
+3. STRICT PROHIBITION ON PLACEHOLDERS (ANTI-ELISION):
+   NEVER use lazy placeholders or ellipsis anywhere in SEARCH or REPLACE blocks!
+   FORBIDDEN examples:
+   - \`// ...\` or \`# ...\` or \`/* ... */\`
+   - \`// ... rest of code\` or \`# rest of code\`
+   - \`// existing code\` or \`# unchanged\`
+   - \`... existing implementation\`
+   Any response containing these placeholders will be AUTOMATICALLY REJECTED by the diff validator. You MUST output the full, complete code.
+
+COMPACT 1-SHOT SEARCH/REPLACE EXAMPLE:
+Suppose you want to update a calculation function in \`src/pricing.ts\`:
+
+**\`src/pricing.ts\`**
+\`\`\`typescript
+<<<<<<< SEARCH
+// Calculate subtotal and tax
+export function calculateTotal(items: Item[]): number {
+    let total = 0;
+    for (const item of items) {
+        total += item.price;
+    }
+    return total;
+}
+export function formatCurrency(val: number): string {
+=======
+// Calculate subtotal and tax
+export function calculateTotal(items: Item[], discountPercent: number = 0): number {
+    let total = 0;
+    for (const item of items) {
+        total += item.price;
+    }
+    return total * (1 - discountPercent / 100);
+}
+export function formatCurrency(val: number): string {
+>>>>>>> REPLACE
+\`\`\`
+Notice how the top comment \`// Calculate subtotal and tax\` and the bottom function header \`export function formatCurrency(val: number): string {\` serve as exact structural anchors preserved in both SEARCH and REPLACE blocks.
+
+ANTI-HALLUCINATION RULES:
+1. NEVER guess what code looks like. The SEARCH block must come from actual file content provided in context or fetched via read tools.
+2. If the file is small (under 150 lines), or if you are creating a new file, provide the full file without SEARCH/REPLACE markers:
 **\`src/filepath.ext\`**
-\`\`\`javascript
+\`\`\`language
 // full code here
 \`\`\`
-
-ANTI-HALLUCINATION RULES FOR SEARCH BLOCKS (Violations will corrupt user files):
-1. NEVER write what you "think" the code looks like. The SEARCH block MUST be copied character-for-character from the actual file content provided to you.
-2. If the file is small (under 150 lines), ALWAYS use a full file rewrite instead of SEARCH/REPLACE to avoid mismatch errors.
 3. NEVER include markdown fences inside a SEARCH or REPLACE block.
-4. Include 3-5 lines of surrounding context in SEARCH blocks to make the match unambiguous.
-5. If you are unsure of the exact content, ask for the file content before making changes.
-
-CRITICAL UI FORMATTING RULES:
-- NEVER use the **\`filepath.ext\`** header for general explanations, examples, or thinking. 
-- ONLY use the **\`filepath.ext\`** header when you want the system to actually modify or create that file!
-- FILEPATH RULE: ALWAYS use the FULL relative path from workspace root in **\`filepath\`** headers. Example: Use **\`myproject/settings.py\`** NOT **\`settings.py\`**. Use **\`store/models.py\`** NOT **\`models.py\`**.
-- If you output your thought process (e.g., in <think> tags), keep it strictly as plain text without file headers or code blocks.
-
-ANTI-ELISION RULE (CRITICAL):
-NEVER use placeholders like "// rest of the code remains the same" or "// ...". You MUST write the complete, exact code in the SEARCH block and the complete updated code in the REPLACE block. If you use placeholders, the file parser will corrupt the user's files and delete their working code. DO NOT DELETE WORKING CODE.
-
-You have the ability to suggest Terminal commands to test your code, debug, or install dependencies.
-If you need to execute a command, provide it in a standard \`\`\`bash block.`;
+4. FILEPATH RULE: ALWAYS use the FULL relative path from workspace root in **\`filepath\`** headers (e.g. **\`src/utils/math.ts\`**, **\`server/app.py\`**).
+5. If you output your thought process (e.g., in <think> tags), keep it strictly as plain text without file headers or code blocks.
+6. When suggesting Terminal commands, ALWAYS wrap them in standard \`\`\`bash blocks.`;
 
             systemInstruction += `\nIf the user provides a short 2-3 line request for a new feature or project, first analyze the context, create a step-by-step plan, and then execute it. 
 If the user provides a detailed plan with steps, acknowledge it and systematically execute their exact steps without deviating.
@@ -71,10 +102,10 @@ When suggesting terminal commands, ALWAYS wrap them in \`\`\`bash code blocks so
         if (isArchitectMode) {
             systemInstruction += `\n\n[ARCHITECT MODE ACTIVE]: You are an elite Senior Architect planning and building a complex project.
 CRITICAL EXECUTION FLOW (MUST FOLLOW STRICTLY):
-STEP 1 - PLAN: ALWAYS output a numbered architectural plan FIRST. List the directories, tech stack, and components needed. Do NOT write code yet.
-STEP 2 - SCAFFOLD: Provide the exact terminal commands needed to scaffold the project (e.g. \`npx create-next-app@latest .\` or \`django-admin startproject\`) in standard \`\`\`bash blocks. 
-STEP 3 - PAUSE: STOP GENERATING. Ask the user to approve the plan and run the scaffolding commands. Do NOT output file modifications in the same response as the plan.
-STEP 4 - EXECUTE: Once the user approves, write the code for ONLY 1 or 2 files per turn. Ask for confirmation before continuing to the next files. Never write the entire project at once.
+STEP 1 - ARCHITECTURAL BLUEPRINT: ALWAYS output a numbered architectural plan FIRST. List the directory layout, technology stack, data flow, and components needed. Do NOT dump massive raw code blocks in this step!
+STEP 2 - SCAFFOLDING & COMMANDS: Provide the exact terminal commands needed to scaffold or install dependencies (e.g. \`npx create-next-app@latest .\`, \`npm install\`, \`pip install\`) in standard \`\`\`bash blocks.
+STEP 3 - HIGH-LEVEL SUMMARY & PAUSE: Give a short, professional architectural summary of what is designed. Ask the user to approve the plan or run commands before proceeding.
+STEP 4 - MODULAR EXECUTION: When creating or editing files, NEVER output more than 2 files per response. Always use clean SEARCH/REPLACE blocks or concise new file blocks. At the end of file changes, always provide a 2-line summary of changes made.
 PROJECT NAMING RULE: When creating Django/Flask/Rails projects, the project folder name and app folder names MUST be DIFFERENT. For example: project folder = \`mysite\`, app folder = \`store\`.`;
         }
 

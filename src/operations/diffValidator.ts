@@ -1,6 +1,53 @@
 import * as fs from 'fs';
 
 export class DiffValidator {
+    private static readonly LAZY_PLACEHOLDER_PATTERNS: { pattern: RegExp; description: string }[] = [
+        { pattern: /\/\/\s*\.{3,}/i, description: "'// ...'" },
+        { pattern: /#\s*\.{3,}/i, description: "'# ...'" },
+        { pattern: /\/\*\s*\.{3,}\s*\*\//i, description: "'/* ... */'" },
+        { pattern: /\/\/\s*(?:rest\s+of|existing|remaining)\s+(?:the\s+)?code/i, description: "'// existing code' or '// rest of code'" },
+        { pattern: /#\s*(?:rest\s+of|existing|remaining)\s+(?:the\s+)?code/i, description: "'# rest of code' or '# existing code'" },
+        { pattern: /\.{3,}\s*existing\s+implementation/i, description: "'... existing implementation'" },
+        { pattern: /\/\/\s*\.{3,}\s*(?:existing|rest|remaining|code|functions?|methods?|imports?)/i, description: "'// ... existing code'" },
+        { pattern: /#\s*\.{3,}\s*(?:existing|rest|remaining|code|functions?|methods?|imports?)/i, description: "'# ... existing code'" },
+        { pattern: /\/\/\s*(?:code\s+)?remains?\s+(?:the\s+)?(?:same|unchanged)/i, description: "'// code remains unchanged'" },
+        { pattern: /#\s*(?:code\s+)?remains?\s+(?:the\s+)?(?:same|unchanged)/i, description: "'# code remains unchanged'" },
+        { pattern: /\/\/\s*(?:keep\s+existing|leave\s+existing|previous\s+code)/i, description: "'// keep existing code'" },
+        { pattern: /#\s*(?:keep\s+existing|leave\s+existing|previous\s+code)/i, description: "'# keep existing code'" }
+    ];
+
+    /**
+     * Validates replacement code block before applying to ensure it contains complete,
+     * working code without lazy placeholders or accidental wipes.
+     */
+    public static validateReplacementContent(content: string, options?: { allowEmpty?: boolean }): { valid: boolean; reason?: string } {
+        const trimmed = content.trim();
+
+        // 1. Check for completely empty replacement blocks
+        if (trimmed.length === 0) {
+            const isIntentionalDeletion = options?.allowEmpty === true || 
+                /\b(delete|deletion|remove|removed|clear|empty|intentional)\b/i.test(content);
+            if (!isIntentionalDeletion) {
+                return {
+                    valid: false,
+                    reason: "Replacement block is completely empty. If you intentionally want to delete code, mark it with an explicit comment (e.g. '// intentional deletion') or use a valid replacement."
+                };
+            }
+        }
+
+        // 2. Check for lazy placeholders / ellipsis
+        for (const { pattern, description } of this.LAZY_PLACEHOLDER_PATTERNS) {
+            if (pattern.test(content)) {
+                return {
+                    valid: false,
+                    reason: `Lazy placeholder detected (${description}). Full code must be outputted without ellipsis or placeholder comments, otherwise existing code will be erased or corrupted.`
+                };
+            }
+        }
+
+        return { valid: true };
+    }
+
     /**
      * Calculates a confidence score (0-100) for a search block matching existing text.
      */

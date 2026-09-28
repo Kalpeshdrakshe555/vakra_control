@@ -14,17 +14,20 @@ export class StateMachine {
     private readonly stateFilePath: string;
 
     constructor(workspaceRoot?: string) {
-        if (workspaceRoot) {
-            this.stateFilePath = path.join(workspaceRoot, '.ai_state.json');
-        } else {
+        let baseDir = workspaceRoot;
+        if (!baseDir) {
             const workspaceFolders = vscode.workspace.workspaceFolders;
             if (workspaceFolders && workspaceFolders.length > 0) {
-                this.stateFilePath = path.join(workspaceFolders[0].uri.fsPath, '.ai_state.json');
+                baseDir = workspaceFolders[0].uri.fsPath;
             } else {
-                // Fallback if no active workspace folder is open
-                this.stateFilePath = path.join(process.cwd(), '.ai_state.json');
+                baseDir = process.cwd();
             }
         }
+        const aiDir = path.join(baseDir, '.ultra-light-ai');
+        if (!fs.existsSync(aiDir)) {
+            try { fs.mkdirSync(aiDir, { recursive: true }); } catch {}
+        }
+        this.stateFilePath = path.join(aiDir, 'ai_state.json');
     }
 
     /**

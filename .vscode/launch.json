@@ -1,18 +1,19 @@
 {
     "version": "0.2.0",
     "configurations": [
+    
         {
             "name": "Run Extension",
             "type": "extensionHost",
             "request": "launch",
             "args": [
-                "--extensionDevelopmentPath=${workspaceFolder}",
-                "--enable-proposed-api=ultra-light-ai.ultra-light-ai"
+                "--extensionDevelopmentPath=${workspaceFolder}"
             ],
             "outFiles": [
                 "${workspaceFolder}/dist/**/*.js"
             ],
-            "preLaunchTask": "npm: compile"
+            "preLaunchTask": "npm: compile",
+            "stopOnEntry": false
         },
         {
             "name": "Extension Tests",

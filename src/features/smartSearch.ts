@@ -32,7 +32,11 @@ export class SmartSearch {
 
                     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 
-                    const quickPickItems = chunks.map((chunk: any) => {
+                    interface SmartSearchQuickPickItem extends vscode.QuickPickItem {
+                        chunk: any;
+                    }
+
+                    const quickPickItems: SmartSearchQuickPickItem[] = chunks.map((chunk: any) => {
                         const relativePath = path.relative(workspaceRoot, chunk.filepath);
                         return {
                             label: `$(symbol-${chunk.type === 'function' ? 'method' : chunk.type === 'class' ? 'class' : 'file'}) ${chunk.name || 'Block'}`,
@@ -42,7 +46,7 @@ export class SmartSearch {
                         };
                     });
 
-                    const selected = await vscode.window.showQuickPick(quickPickItems, {
+                    const selected = await vscode.window.showQuickPick<SmartSearchQuickPickItem>(quickPickItems, {
                         placeHolder: 'Select a result to jump to the code',
                         matchOnDescription: true,
                         matchOnDetail: true

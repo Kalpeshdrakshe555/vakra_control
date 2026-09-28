@@ -57,7 +57,10 @@ export class GeminiCloudClient implements IEngine {
                                     }
                                 ]
                             }
-                        ]
+                        ],
+                        generationConfig: {
+                            maxOutputTokens: this.maxTokens
+                        }
                     }),
                     signal: controller.signal
                 });
@@ -137,7 +140,10 @@ export class GeminiCloudClient implements IEngine {
                                     }
                                 ]
                             }
-                        ]
+                        ],
+                        generationConfig: {
+                            maxOutputTokens: this.maxTokens
+                        }
                     }),
                     signal: controller.signal
                 });

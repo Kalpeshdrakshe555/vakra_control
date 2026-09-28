@@ -1,13 +1,13 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
-import { applyDiffToActiveFile, applyRobustSearchReplace } from '../operations/diffPatcher';
+import { applyDiffToActiveFile, applyRobustSearchReplace, resolveSafeWorkspacePath } from '../operations/diffPatcher';
 import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, AgentConfig } from '../config';
 import { GameRunnerPanel } from './gameRunnerPanel';
 import { ConversationHistory } from '../state/conversationHistory';
 import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
-import { skeletonizeFile } from '../utils/astSkeletonizer';
+import { skeletonizeFile, generateStructuralRepoMap } from '../utils/astSkeletonizer';
 import { extractBrandDNA, orchestrateAssets, DesignSemantics } from '../utils/designBrain';
 import { generateCacheKey, checkCache, saveCache } from '../utils/queryCache';
 import { ContextSelector } from '../utils/contextSelector';
@@ -141,6 +141,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 await this.handleChatMessageStream(message);
             } else if (message.command === 'applyDiff') {
                 try {
+                    const activeEditor = vscode.window.activeTextEditor;
+                    if (activeEditor) {
+                        const fullPath = activeEditor.document.uri.fsPath;
+                        this.conversationHistory.addFileBackupToLatestMessage(fullPath, activeEditor.document.getText());
+                    }
                     await applyDiffToActiveFile(message.text);
                     vscode.window.showInformationMessage('✨ Code applied successfully!');
                 } catch (error: any) {
@@ -175,10 +180,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         const msgsToRevert = messages.slice(targetIdx);
                         const revertEdit = new vscode.WorkspaceEdit();
                         let hasEdits = false;
+                        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
                         
                         const fileToOldestContent = new Map<string, string | null>();
                         
-                        // Find the oldest backup state for each file within the deleted messages range
+                        // 1. Collect oldest file backups from the messages being rolled back
                         for (const msg of msgsToRevert) {
                             if ((msg as any).fileBackups) {
                                 for (const backup of (msg as any).fileBackups) {
@@ -189,15 +195,42 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             }
                         }
 
-                        // Apply the exact old state directly to VS Code Buffers
+                        // 2. Fallback: Detect files mentioned in modified blocks that might lack explicit backup
+                        if (workspaceRoot) {
+                            for (const msg of msgsToRevert) {
+                                const fileMatches = (msg.text || '').matchAll(/\*\*\`([^\`]+)\`\*\*/g);
+                                for (const m of fileMatches) {
+                                    const candidateRel = m[1];
+                                    const fullPath = path.isAbsolute(candidateRel) ? candidateRel : path.join(workspaceRoot, candidateRel);
+                                    if (!fileToOldestContent.has(fullPath)) {
+                                        const snap = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
+                                        if (snap !== null) {
+                                            fileToOldestContent.set(fullPath, snap);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Revert both disk and VS Code Buffers
                         for (const [filepath, content] of fileToOldestContent.entries()) {
                             const fileUri = vscode.Uri.file(filepath);
                             if (content === null) {
+                                // Newly created file in this session -> Delete from disk and workspace!
+                                if (fs.existsSync(filepath)) {
+                                    try {
+                                        fs.unlinkSync(filepath);
+                                    } catch (e) {
+                                        console.error("Failed to delete file on rollback", filepath, e);
+                                    }
+                                }
                                 revertEdit.deleteFile(fileUri, { ignoreIfNotExists: true });
                                 hasEdits = true;
                                 revertedCount++;
                             } else {
+                                // Modified file -> Restore exact original state to disk & buffer
                                 try {
+                                    fs.writeFileSync(filepath, content, 'utf8');
                                     let doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
                                     if (!doc && fs.existsSync(filepath)) {
                                         doc = await vscode.workspace.openTextDocument(fileUri);
@@ -209,21 +242,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                                         );
                                         revertEdit.replace(fileUri, fullRange, content);
                                         hasEdits = true;
-                                        revertedCount++;
-                                    } else if (!fs.existsSync(filepath)) {
-                                        revertEdit.createFile(fileUri, { ignoreIfExists: true });
-                                        revertEdit.insert(fileUri, new vscode.Position(0, 0), content);
-                                        hasEdits = true;
-                                        revertedCount++;
                                     }
+                                    revertedCount++;
                                 } catch (e) {
-                                    console.error("Failed to prepare revert for", filepath, e);
+                                    console.error("Failed to restore file on rollback", filepath, e);
                                 }
                             }
                         }
 
                         if (hasEdits) {
                             await vscode.workspace.applyEdit(revertEdit);
+                            // Save any open documents to ensure zero unsaved dirty mismatch
+                            for (const filepath of fileToOldestContent.keys()) {
+                                const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
+                                if (doc && doc.isDirty) {
+                                    await doc.save();
+                                }
+                            }
                         }
 
                         // Restore the user's prompt directly into the chat input box!
@@ -242,7 +277,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             command: 'restoreHistory',
                             messages: this.conversationHistory.getAllMessages()
                         });
-                        vscode.window.showInformationMessage(`⏪ Chat rolled back. Reverted ${revertedCount} file modifications automatically.`);
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `⏪ Rollback complete: Reverted ${revertedCount} file(s) and restored prompt.`
+                        });
+                        vscode.window.showInformationMessage(`⏪ Chat rolled back. Reverted ${revertedCount} file(s) automatically.`);
                     }
                 }
             } else if (message.command === 'getSessions') {
@@ -308,14 +347,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             } else if (message.command === 'clearCache') {
                 this.handleClearCache();
             } else if (message.command === 'rollbackFile') {
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
                 if (workspaceRoot && message.filepath) {
-                    const content = FileVersioning.getLatestSnapshot(workspaceRoot, message.filepath);
-                    if (content) {
-                        require('fs').writeFileSync(message.filepath, content, 'utf8');
-                        vscode.window.showInformationMessage(`✅ Rolled back ${path.basename(message.filepath)} to previous state.`);
+                    const fullPath = path.isAbsolute(message.filepath) ? message.filepath : path.join(workspaceRoot, message.filepath);
+                    const content = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
+                    if (content !== null) {
+                        fs.writeFileSync(fullPath, content, 'utf8');
+                        const fileUri = vscode.Uri.file(fullPath);
+                        let doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
+                        if (doc) {
+                            const edit = new vscode.WorkspaceEdit();
+                            const fullRange = new vscode.Range(
+                                doc.positionAt(0),
+                                doc.positionAt(doc.getText().length)
+                            );
+                            edit.replace(fileUri, fullRange, content);
+                            await vscode.workspace.applyEdit(edit);
+                            await doc.save();
+                        }
+                        vscode.window.showInformationMessage(`✅ Rolled back ${path.basename(fullPath)} to previous snapshot.`);
                     } else {
-                        vscode.window.showErrorMessage(`❌ No snapshots found for ${path.basename(message.filepath)}`);
+                        vscode.window.showErrorMessage(`❌ No snapshots found for ${path.basename(fullPath)}`);
                     }
                 }
             } else if (message.command === 'runAndCapture') {
@@ -437,12 +489,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
      * Applies 4-Tier matching logic to gracefully handle Search/Replace blocks
      * Tier 1: Exact Match, Tier 2: Normalized Match, Tier 3: Line-Anchor, Tier 4: Best-Effort UI
      */
-    private async applyPatchWithTiers(fileText: string, searchStr: string, replaceStr: string, filepath: string, isPreview: boolean = false): Promise<{ success: boolean, text: string }> {
+    private async applyPatchWithTiers(fileText: string, searchStr: string, replaceStr: string, filepath: string, isPreview: boolean = false): Promise<{ success: boolean, text: string, error?: string }> {
         // BUG FIX: Prevent Markdown backtick corruption if LLM hallucinates them inside SEARCH/REPLACE blocks
         if (!filepath.toLowerCase().endsWith('.md')) {
             // Strip leading ```lang and trailing ``` from both search and replace blocks
             searchStr = searchStr.replace(/^\s*```[a-zA-Z]*\r?\n/g, '').replace(/\r?\n```\s*$/g, '');
             replaceStr = replaceStr.replace(/^\s*```[a-zA-Z]*\r?\n/g, '').replace(/\r?\n```\s*$/g, '');
+        }
+
+        // Validate replacement content first - abort if lazy placeholders or accidental wipes are found
+        const val = DiffValidator.validateReplacementContent(replaceStr);
+        if (!val.valid) {
+            return { success: false, text: fileText, error: val.reason };
         }
 
         const patchResult = applyRobustSearchReplace(fileText, searchStr, replaceStr);
@@ -510,30 +568,52 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             console.error("Scout SEARCH Healer failed", e);
         }
 
-        // Tier 4: Diff Validator Guard - No Silent Appends
-        const validation = DiffValidator.validatePatch(fileText, searchStr);
-        if (isPreview) {
-            if (validation.safe) {
-                return { success: true, text: fileText + `\n\n/* ⚠️ AI APPENDED */\n${replaceStr}\n` };
-            } else {
-                return { success: false, text: `/* 🚫 BLOCKED: ${validation.reason} */\n` + fileText };
+        // Tier 4: AST Symbol Fallback (if targeting a function, class, or method)
+        try {
+            const symbolRegex = /(?:function|class|interface|type|const|let|var|def|async\s+function)\s+([a-zA-Z0-9_$]+)/;
+            const symMatch = searchStr.match(symbolRegex);
+            if (symMatch && symMatch[1]) {
+                const targetSymbolName = symMatch[1];
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders && workspaceFolders.length > 0) {
+                    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                    if (safeCheck.safe && fs.existsSync(safeCheck.resolvedPath)) {
+                        const uri = vscode.Uri.file(safeCheck.resolvedPath);
+                        const symbols: vscode.DocumentSymbol[] | undefined = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
+                        if (symbols && symbols.length > 0) {
+                            const findSymbol = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+                                for (const s of syms) {
+                                    if (s.name === targetSymbolName) return s;
+                                    if (s.children) { const c = findSymbol(s.children); if (c) return c; }
+                                }
+                            };
+                            const target = findSymbol(symbols);
+                            if (target) {
+                                const fileLines = fileText.split('\n');
+                                const startLine = target.range.start.line;
+                                const endLine = target.range.end.line;
+                                if (startLine >= 0 && endLine < fileLines.length) {
+                                    fileLines.splice(startLine, endLine - startLine + 1, ...replaceStr.split('\n'));
+                                    return { success: true, text: fileLines.join('\n') };
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            if (validation.safe) {
-                 return { success: true, text: fileText + `\n\n/* ⚠️ AI APPENDED */\n${replaceStr}\n` };
-            }
-
-            const userChoice = await vscode.window.showWarningMessage(
-                `Diff Mismatch in ${path.basename(filepath)}: ${validation.reason} Score: ${validation.score}%. Force append to file?`,
-                'Force Append', 'Reject'
-            );
-            
-            if (userChoice === 'Force Append') {
-                return { success: true, text: fileText + `\n\n/* ⚠️ AI FORCED APPEND (Mismatch) */\n${replaceStr}\n` };
-            }
+        } catch (e) {
+            console.warn("AST Symbol Fallback failed", e);
         }
 
-        return { success: false, text: fileText };
+        // Tier 5: Diff Validator Guard - Never silently append code to prevent file corruption
+        const validation = DiffValidator.validatePatch(fileText, searchStr);
+        const errorMsg = patchResult.error || validation.reason || `Search block could not be matched safely in ${path.basename(filepath)}. No changes were applied to prevent file corruption.`;
+        if (isPreview) {
+            return { success: false, text: `/* 🚫 BLOCKED: ${errorMsg} */\n` + fileText, error: errorMsg };
+        } else {
+            return { success: false, text: fileText, error: errorMsg };
+        }
     }
 
     private async handlePreviewDiff(fileInfo: any): Promise<void> {
@@ -633,7 +713,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             // Note: message isn't passed here as this method is called via fallback, but let's assume agentMode is false for now
             // if we need it we can update the signature later.
             const category = PromptClassifier.classifyPrompt(text);
-            const systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, false, category);
+            const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
+            const systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, false, category, repoMap);
             TokenAccountant.measureSystemPrompt(systemInstruction);
             let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, false, workspaceRoot);
 
@@ -753,7 +834,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     } else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) {
                         mainClient = new LocalOllamaClient(mainBrain.model, 'https://api.openai.com', keyStr);
                     } else {
-                        mainClient = new GeminiCloudClient([keyStr], mainBrain.model || 'gemini-1.5-pro', timeout);
+                        const activeKeys = keyStr ? [keyStr] : keys;
+                        mainClient = new GeminiCloudClient(activeKeys, mainBrain.model || 'gemini-1.5-pro', timeout, maxOutputTokens);
                     }
                 }
             } else {
@@ -765,7 +847,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     if (keyStr.startsWith('gsk_')) mainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
                     else if (keyStr.startsWith('sk-or-')) mainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
                     else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) mainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
-                    else mainClient = new GeminiCloudClient(keys, model, timeout);
+                    else mainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
                 }
             }
             
@@ -782,7 +864,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             // Build system instruction
             const promptCategory = PromptClassifier.classifyPrompt(message.text);
-            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory);
+            const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
+            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap);
             
             // Task Planner Injection
             if (workspaceRoot) {
@@ -931,6 +1014,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             ];
 
+            // Add Terminal Command execution tool
+            const executeTerminalTool: any = {
+                name: "execute_terminal_command",
+                description: "Requests execution of a terminal shell command (e.g. npm test, npm install, build scripts). The command will be displayed transparently in the UI for user review and approval before running in the Integrated Terminal.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        command: { type: "string", description: "The exact terminal command to execute." },
+                        explanation: { type: "string", description: "A brief reason why this command needs to be executed." }
+                    },
+                    required: ["command"]
+                }
+            };
+            tools[0].functionDeclarations.push(executeTerminalTool);
+
             if (message.includeWebSearch || message.gameMode) {
                 const searchWebTool: any = {
                     name: "search_web",
@@ -958,14 +1056,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             const filteredTools = PromptClassifier.filterTools(promptCategory, tools);
 
+            let consecutiveReadCount = 0;
+            const readFilesThisTurn = new Set<string>();
+
             const onToolCall = async (functionCall: any) => {
                 if (functionCall.name === 'read_multiple_files') {
+                    // Maximum of 3 consecutive read actions before forcing a synthesis or plan turn
+                    if (consecutiveReadCount >= 3) {
+                        return "Throttling Limit: You have reached the limit of 3 consecutive file read operations. You must now synthesize your findings, present a concrete plan, or output your code changes before requesting further file reads.";
+                    }
+                    consecutiveReadCount++;
+
                     const filepaths = functionCall.args?.filepaths;
                     if (!filepaths || !Array.isArray(filepaths) || !workspaceRoot) return "Error: No filepaths array or workspace.";
                     
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'read_multiple_files',
+                        title: 'Inspecting Files',
+                        data: { count: filepaths.length, files: filepaths.slice(0, 3).map(f => path.basename(f)).join(', ') }
+                    });
+                    
                     let combinedResult = '';
                     for (const filepath of filepaths) {
-                        const fullPath = path.join(workspaceRoot, filepath);
+                        const normalizedKey = filepath.trim().replace(/\\/g, '/');
+                        if (readFilesThisTurn.has(normalizedKey)) {
+                            combinedResult += `\n--- File: ${filepath} [CACHED / ALREADY INSPECTED] ---\n(File content was already provided earlier in this turn. Please use the previously retrieved context.)\n`;
+                            continue;
+                        }
+                        readFilesThisTurn.add(normalizedKey);
+
+                        const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                        if (!safeCheck.safe) {
+                            combinedResult += `\n--- File: ${filepath} (Blocked: Path resolves outside workspace) ---\n`;
+                            continue;
+                        }
+                        const fullPath = safeCheck.resolvedPath;
+
                         if (fs.existsSync(fullPath)) {
                             let content = fs.readFileSync(fullPath, 'utf8');
                             if (estimateTokens(content) > 3000) {
@@ -997,7 +1124,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         }
                     }
                     return combinedResult;
-                } else if (functionCall.name === 'update_architecture_context') {
+                } else {
+                    consecutiveReadCount = 0;
+                }
+
+                if (functionCall.name === 'update_architecture_context') {
                     if (!workspaceRoot) return "Error: No workspace.";
                     const content = functionCall.args?.content || '';
                     const archPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
@@ -1010,7 +1141,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 } else if (functionCall.name === 'search_codebase') {
                     if (!this.ragEngine) return "Search engine not initialized.";
                     const query = functionCall.args?.query || '';
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🧠 RAG Search: Querying "${query}"...` });
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'search_codebase',
+                        title: 'Searching Codebase',
+                        data: { query: query }
+                    });
                     
                     let results;
                     const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_tool', [], query) : null;
@@ -1053,7 +1189,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     // Bug Fix: Strip markdown backticks injected by LLM before replacing AST
                     newCode = newCode.replace(/^```[a-zA-Z]*\r?\n/, '').replace(/\r?\n```$/, '');
                     
-                    const fullPath = path.join(workspaceRoot, filepath);
+                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                    if (!safeCheck.safe) return safeCheck.error || `Invalid path: ${filepath}`;
+                    const fullPath = safeCheck.resolvedPath;
                     if (!fs.existsSync(fullPath)) return `File not found: ${filepath}`;
                     try {
                         const uri = vscode.Uri.file(fullPath);
@@ -1152,6 +1290,16 @@ ${JSON.stringify(assets, null, 2)}
                         }
                         return `Error: You requested '${assetType}', but only 'texture' is currently supported. Use primitive Three.js shapes and apply textures to them.`;
                     } catch (e: any) { return `Asset Download Error: ${e.message}`; }
+                } else if (functionCall.name === 'execute_terminal_command') {
+                    const cmd = functionCall.args?.command;
+                    const explanation = functionCall.args?.explanation || 'AI requested terminal execution';
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'execute_terminal_command',
+                        title: 'Terminal Command Requested',
+                        data: { command: cmd, explanation: explanation }
+                    });
+                    return `Command '${cmd}' has been displayed to the user in the UI for review and execution.`;
                 }
                 return `Unknown tool: ${functionCall.name}`;
             };
@@ -1190,18 +1338,19 @@ ${JSON.stringify(assets, null, 2)}
             // Job 2: Session Summarizer (Micro-Task)
             if (message.advancedMode && workspaceRoot) {
                 const config = getAgentConfig(workspaceRoot);
-                if (config?.supportBrain?.model) {
+                const supportBrain = config?.supportBrain;
+                if (supportBrain && supportBrain.model) {
                     (async () => {
                         try {
                             const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
                             let scoutClient;
-                            if (config.supportBrain.providerType === 'local') {
-                                scoutClient = new LocalOllamaClient(config.supportBrain.model || 'llama-3.1-8b-instant', config.supportBrain.endpoint || 'http://127.0.0.1:11434', config.supportBrain.apiKey);
+                            if (supportBrain.providerType === 'local') {
+                                scoutClient = new LocalOllamaClient(supportBrain.model || 'llama-3.1-8b-instant', supportBrain.endpoint || 'http://127.0.0.1:11434', supportBrain.apiKey);
                             } else {
-                                const keyStr = config.supportBrain.apiKey?.trim() || '';
-                                if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.groq.com/openai', keyStr);
-                                else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.openai.com', keyStr);
-                                else scoutClient = new GeminiCloudClient([keyStr], config.supportBrain.model || 'gemini-1.5-flash', 60);
+                                const keyStr = supportBrain.apiKey?.trim() || '';
+                                if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(supportBrain.model, 'https://api.groq.com/openai', keyStr);
+                                else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(supportBrain.model, 'https://api.openai.com', keyStr);
+                                else scoutClient = new GeminiCloudClient([keyStr], supportBrain.model || 'gemini-1.5-flash', 60);
                             }
                             const summaryPrompt = `Summarize this AI coding response in exactly 1 sentence (max 20 words). Focus on: what file was changed, what was added/fixed.\n\nResponse:\n${cleanResponseText.substring(0, 1000)}`;
                             const summaryResult = await scoutClient.complete(summaryPrompt);
@@ -1586,13 +1735,12 @@ RULES FOR USING CONTEXT:
             }
 
             for (const [filepath, contents] of Object.entries(fileGroups)) {
-                const fullPath = path.join(workspaceRoot, filepath);
-                const fileUri = vscode.Uri.file(fullPath);
-                
-                const dir = path.dirname(fullPath);
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
+                const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, true);
+                if (!safeCheck.safe) {
+                    throw new Error(safeCheck.error || `Security / Guard violation: '${filepath}' is outside workspace boundary.`);
                 }
+                const fullPath = safeCheck.resolvedPath;
+                const fileUri = vscode.Uri.file(fullPath);
 
                 let fileText = '';
                 if (fs.existsSync(fullPath)) {
@@ -1620,7 +1768,7 @@ RULES FOR USING CONTEXT:
                             if (patchResult.success) {
                                 fileText = patchResult.text;
                             } else {
-                                throw new Error(`Could not find the specified search block in ${filepath}. Ensure the code exactly matches the file context.`);
+                                throw new Error(patchResult.error || `Could not find the specified search block in ${filepath}. Ensure the code exactly matches the file context.`);
                             }
                         }
                         // Removed old Scout Regex Fallback -> Replaced by Job 1 SEARCH Healer
@@ -1649,6 +1797,10 @@ RULES FOR USING CONTEXT:
                         if (blockMatch && blockMatch[1]) {
                             cleanContent = blockMatch[1].trim();
                         }
+                        const val = DiffValidator.validateReplacementContent(cleanContent);
+                        if (!val.valid) {
+                            throw new Error(`Validation failed for ${filepath}: ${val.reason}`);
+                        }
                         fileText = cleanContent;
                     }
                 }
@@ -1668,7 +1820,8 @@ RULES FOR USING CONTEXT:
             
             // Save snapshots for all modified files before applying the atomic edit
             for (const filepath of Object.keys(fileGroups)) {
-                const fullPath = path.join(workspaceRoot, filepath);
+                const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                const fullPath = safeCheck.safe ? safeCheck.resolvedPath : path.join(workspaceRoot, filepath);
                 if (fs.existsSync(fullPath)) {
                     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
                     FileVersioning.saveSnapshot(workspaceRoot, fullPath, document.getText());

@@ -54,17 +54,127 @@
         .markdown-body ol { list-style-type: decimal; padding-left: 20px; margin-bottom: 8px; }
         .markdown-body a { color: #ff007f; text-decoration: underline; }
         .markdown-body blockquote { border-left: 2px solid #9d4edd; padding-left: 8px; color: #94a3b8; }
-        .markdown-body think {
-            display: block;
-            font-size: 0.85em;
-            color: #8B949E;
-            border-left: 2px solid #8B949E;
-            padding-left: 0.75rem;
-            margin-top: 0.5rem;
-            margin-bottom: 0.5rem;
-            font-style: italic;
-            background-color: rgba(139, 148, 158, 0.05);
-            border-radius: 0 4px 4px 0;
+        /* Interactive Modern Thinking Accordion */
+        .thinking-accordion {
+            background: rgba(18, 24, 38, 0.7);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            border-radius: 8px;
+            margin: 8px 0 12px 0;
+            overflow: hidden;
+            transition: all 0.2s ease-in-out;
+        }
+        .thinking-accordion:hover {
+            border-color: rgba(56, 189, 248, 0.4);
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.08);
+        }
+        .thinking-accordion summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #94a3b8;
+            cursor: pointer;
+            user-select: none;
+            list-style: none;
+            transition: color 0.15s ease;
+        }
+        .thinking-accordion summary::-webkit-details-marker {
+            display: none;
+        }
+        .thinking-accordion summary:hover {
+            color: #38bdf8;
+        }
+        .thinking-accordion .thinking-content {
+            padding: 10px 12px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #94a3b8;
+            background: rgba(10, 14, 23, 0.85);
+            border-top: 1px solid rgba(56, 189, 248, 0.15);
+            font-family: 'Consolas', monospace;
+            max-height: 250px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .thinking-arrow {
+            transition: transform 0.2s ease;
+        }
+        .thinking-accordion[open] .thinking-arrow {
+            transform: rotate(180deg);
+        }
+        /* Changed Files Artifact Card */
+        .file-change-card {
+            background: linear-gradient(135deg, rgba(20, 28, 45, 0.95), rgba(15, 23, 42, 0.98));
+            border: 1px solid rgba(0, 240, 255, 0.25);
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-top: 10px;
+            box-shadow: 0 4px 16px rgba(0, 240, 255, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .file-change-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            transition: all 0.15s ease;
+        }
+        .file-change-item:hover {
+            background: rgba(0, 240, 255, 0.06);
+            border-color: rgba(0, 240, 255, 0.3);
+        }
+        .file-code-accordion {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 6px;
+            background: rgba(10, 14, 23, 0.6);
+        }
+        .file-code-accordion summary {
+            padding: 6px 10px;
+            font-size: 10px;
+            color: #94a3b8;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .file-code-accordion summary:hover {
+            color: #38bdf8;
+        }
+        /* Tool Calling UI Card & Status Pill */
+        .tool-call-card {
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(236, 72, 153, 0.35);
+            border-radius: 10px;
+            padding: 8px 12px;
+            margin: 6px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            box-shadow: 0 4px 14px rgba(236, 72, 153, 0.08);
+            animation: fadeIn 0.2s ease-in-out;
+        }
+        .tool-call-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 9999px;
+            font-size: 10px;
+            font-family: monospace;
+            color: #38bdf8;
         }
         /* @Mention Popup — fully static CSS, no Tailwind */
         #at-mention-popup {
@@ -961,6 +1071,60 @@
             return files;
         }
 
+        function renderThinkingAccordion(rawText, isStreaming = false) {
+            let processed = rawText;
+            
+            // Match completed <think>...</think> blocks
+            const completedThinkRegex = /<think>([\s\S]*?)<\/think>/gi;
+            processed = processed.replace(completedThinkRegex, (match, thinkContent) => {
+                const cleanContent = escapeHtml(thinkContent.trim());
+                if (!cleanContent) return '';
+                return `
+                    <details class="thinking-accordion my-2">
+                        <summary>
+                            <span class="flex items-center gap-1.5 text-cyan-400">
+                                <span>🧠</span>
+                                <span>Thinking Process</span>
+                            </span>
+                            <svg class="thinking-arrow w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </summary>
+                        <div class="thinking-content">${cleanContent}</div>
+                    </details>
+                `;
+            });
+
+            // Match in-progress <think> tag while streaming
+            if (isStreaming) {
+                const openThinkMatch = processed.match(/<think>([\s\S]*)$/i);
+                if (openThinkMatch) {
+                    const activeThinkingContent = escapeHtml(openThinkMatch[1].trim());
+                    const liveAccordion = `
+                        <details class="thinking-accordion my-2" open>
+                            <summary>
+                                <span class="flex items-center gap-1.5 text-cyan-400">
+                                    <span class="animate-spin">⚙️</span>
+                                    <span class="animate-pulse">Thinking in progress...</span>
+                                </span>
+                                <svg class="thinking-arrow w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </summary>
+                            <div class="thinking-content">${activeThinkingContent || '<em class="text-slate-500">Analyzing problem space & planning actions...</em>'}</div>
+                        </details>
+                    `;
+                    processed = processed.replace(/<think>[\s\S]*$/i, liveAccordion);
+                }
+            } else {
+                // If not streaming, strip any unclosed think tag
+                processed = processed.replace(/<think>[\s\S]*$/i, '');
+            }
+
+            processed = processed.replace(/<\/think>/gi, '');
+            return processed;
+        }
+
         function appendAiMessage(text, usage, timestamp) {
             removeThinking();
             const msgDiv = document.createElement('div');
@@ -975,12 +1139,11 @@
                 </button>`;
             }
             
-            let displayString = text;
-            displayString = displayString.replace(/<think>[\s\S]*?<\/think>/gi, '');
+            const formattedContent = renderThinkingAccordion(text, false);
             
             const textDiv = document.createElement('div');
             textDiv.className = 'text-xs select-text whitespace-pre-wrap leading-relaxed markdown-body';
-            textDiv.innerHTML = marked.parse(displayString);
+            textDiv.innerHTML = marked.parse(formattedContent);
             
             bubbleDiv.appendChild(textDiv);
             
@@ -990,59 +1153,112 @@
             const files = extractFiles(text);
             if (files && files.length > 0) {
                 const actionContainerDiv = document.createElement('div');
-                actionContainerDiv.className = 'flex flex-col gap-1.5 pt-3 border-t border-cyber-border/45 mt-2';
+                actionContainerDiv.className = 'file-change-card';
                 
+                const cardHeader = document.createElement('div');
+                cardHeader.className = 'flex items-center justify-between border-b border-cyan-500/20 pb-2 mb-1';
+                cardHeader.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm">📁</span>
+                        <span class="text-xs font-semibold text-cyan-300">Modified Files (${files.length})</span>
+                    </div>
+                    <span class="text-[10px] text-slate-400 font-mono">Review & Apply</span>
+                `;
+                actionContainerDiv.appendChild(cardHeader);
+
                 files.forEach(file => {
+                    const fileName = file.filepath.split(/[/\\]/).pop();
+                    const fileItemDiv = document.createElement('div');
+                    fileItemDiv.className = 'file-change-item flex-col sm:flex-row gap-2';
+
+                    const fileMeta = document.createElement('div');
+                    fileMeta.className = 'flex items-center gap-2 min-w-0';
+                    fileMeta.innerHTML = `
+                        <span class="text-xs text-cyan-400 font-mono">📄</span>
+                        <div class="flex flex-col truncate">
+                            <span class="text-xs font-medium text-slate-200 truncate" title="${file.filepath}">${fileName}</span>
+                            <span class="text-[10px] text-slate-400 truncate">${file.filepath}</span>
+                        </div>
+                    `;
+
                     const btnContainer = document.createElement('div');
-                    btnContainer.className = 'flex gap-2 w-full';
+                    btnContainer.className = 'flex items-center gap-1.5 shrink-0 self-end sm:self-auto';
+
+                    const previewBtn = document.createElement('button');
+                    previewBtn.className = 'bg-slate-800/90 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 text-[10px] font-medium py-1 px-2.5 rounded transition-all cursor-pointer flex items-center gap-1 shadow-sm';
+                    previewBtn.innerHTML = `👁️ Diff`;
 
                     const btn = document.createElement('button');
-                    btn.className = 'apply-diff-btn flex-1 bg-cyan-600/90 hover:bg-cyan-500 text-white text-[10px] font-bold py-1 px-2 rounded shadow-[0_0_8px_rgba(0,255,255,0.3)] transition-all cursor-pointer flex items-center justify-center gap-1';
-                    btn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath}`;
-                    
+                    btn.className = 'apply-diff-btn bg-cyber-neonCyan hover:bg-cyan-400 text-slate-950 text-[10px] font-bold py-1 px-3 rounded shadow-[0_0_10px_rgba(0,240,255,0.3)] transition-all cursor-pointer flex items-center gap-1';
+                    btn.innerHTML = `⚡ Apply`;
+
                     const rejectBtn = document.createElement('button');
-                    rejectBtn.className = 'bg-slate-700/80 hover:bg-red-600/90 text-slate-300 hover:text-white text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer flex items-center justify-center gap-1';
-                    rejectBtn.innerHTML = `<svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg> Reject`;
+                    rejectBtn.className = 'bg-slate-800 hover:bg-red-500/80 text-slate-400 hover:text-white text-[10px] py-1 px-2 rounded transition-all cursor-pointer flex items-center';
+                    rejectBtn.innerHTML = `✕`;
+
+                    const undoBtn = document.createElement('button');
+                    undoBtn.className = 'bg-slate-800 hover:bg-yellow-600 text-slate-200 text-[10px] font-medium py-1 px-2.5 rounded transition-all cursor-pointer items-center gap-1 shadow-sm hidden';
+                    undoBtn.innerHTML = `↩️ Undo`;
 
                     btn.addEventListener('click', () => {
                         vscode.postMessage({ command: 'applyWorkspaceEdits', files: [file] });
-                        btn.innerHTML = `✔️ Applied ${file.filepath}`;
-                        btn.classList.remove('bg-cyan-600/90', 'hover:bg-cyan-500');
-                        btn.classList.add('bg-green-600/90');
+                        btn.innerHTML = `✔️ Applied`;
+                        btn.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                        btn.classList.add('bg-green-600/90', 'text-white');
                         btn.disabled = true;
                         rejectBtn.classList.add('hidden');
+                        previewBtn.classList.add('hidden');
                         undoBtn.classList.remove('hidden');
                         undoBtn.classList.add('flex');
                     });
 
-                    const undoBtn = document.createElement('button');
-                    undoBtn.className = 'bg-slate-700/80 hover:bg-yellow-600/90 text-slate-300 hover:text-white text-[10px] font-bold py-1 px-2 rounded transition-all cursor-pointer items-center justify-center gap-1 hidden';
-                    undoBtn.innerHTML = `↩️ Undo`;
                     undoBtn.addEventListener('click', () => {
                         vscode.postMessage({ command: 'rollbackFile', filepath: file.filepath });
                         undoBtn.innerHTML = `✔️ Reverted`;
+                        undoBtn.classList.add('opacity-50');
                         undoBtn.disabled = true;
                     });
 
-                    rejectBtn.addEventListener('click', () => {
-                        btnContainer.style.opacity = '0.4';
-                        btnContainer.style.pointerEvents = 'none';
-                        btn.innerHTML = `❌ Rejected`;
-                        btn.classList.replace('bg-cyan-600/90', 'bg-slate-600');
+                    previewBtn.addEventListener('click', () => {
+                        vscode.postMessage({ command: 'previewDiff', file: file });
                     });
 
+                    rejectBtn.addEventListener('click', () => {
+                        fileItemDiv.style.opacity = '0.4';
+                        fileItemDiv.style.pointerEvents = 'none';
+                        btn.innerHTML = `❌ Rejected`;
+                    });
+
+                    btnContainer.appendChild(previewBtn);
                     btnContainer.appendChild(btn);
                     btnContainer.appendChild(undoBtn);
                     btnContainer.appendChild(rejectBtn);
-                    actionContainerDiv.appendChild(btnContainer);
+
+                    fileItemDiv.appendChild(fileMeta);
+                    fileItemDiv.appendChild(btnContainer);
+                    actionContainerDiv.appendChild(fileItemDiv);
+
+                    const codeAccordion = document.createElement('details');
+                    codeAccordion.className = 'file-code-accordion';
+                    const summary = document.createElement('summary');
+                    summary.innerHTML = `<span>View code payload (${file.content.split('\\n').length} lines)</span> <span class="text-xs text-slate-500">▾</span>`;
+                    const codePre = document.createElement('pre');
+                    codePre.className = 'text-[10px] p-2 overflow-x-auto text-slate-300 font-mono bg-black/40 max-h-48';
+                    codePre.textContent = file.content;
+                    codeAccordion.appendChild(summary);
+                    codeAccordion.appendChild(codePre);
+                    actionContainerDiv.appendChild(codeAccordion);
                 });
 
                 if (files.length > 1) {
                     const allBtn = document.createElement('button');
-                    allBtn.className = 'bg-slate-700/80 hover:bg-slate-600 text-slate-200 text-[9px] font-bold py-1 px-2 rounded transition-all cursor-pointer text-center mt-1';
-                    allBtn.innerText = 'Apply All Files';
+                    allBtn.className = 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs py-2 px-3 rounded-lg transition-all cursor-pointer text-center mt-2 shadow-[0_0_12px_rgba(0,240,255,0.25)] flex items-center justify-center gap-1.5';
+                    allBtn.innerHTML = `✨ APPLY ALL ${files.length} FILES`;
                     allBtn.addEventListener('click', () => {
                         vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
+                        allBtn.innerHTML = `✔️ ALL FILES APPLIED`;
+                        allBtn.classList.add('opacity-50');
+                        allBtn.disabled = true;
                     });
                     actionContainerDiv.appendChild(allBtn);
                 }
@@ -1245,14 +1461,7 @@
 
             currentStreamText += text;
             
-            let displayString = currentStreamText;
-            displayString = displayString.replace(/<think>[\s\S]*?<\/think>/gi, '');
-            const openThinkMatch = displayString.match(/<think>[\s\S]*$/i);
-            if (openThinkMatch) {
-                displayString = displayString.replace(/<think>[\s\S]*$/i, '<em class="text-slate-500 animate-pulse text-[10px]">&gt; Analyzing...</em>\n');
-            }
-            displayString = displayString.replace(/<\/think>/gi, ''); // Strip any stray closing tags
-            // Removed run_command logic; standard bash blocks are used instead
+            const displayString = renderThinkingAccordion(currentStreamText, !done);
             currentStreamTextDiv.innerHTML = marked.parse(displayString);
             
             // Add copy buttons in real-time as blocks are rendered (DELETED, done at end)
@@ -1268,30 +1477,63 @@
                 const files = extractFiles(cleanStreamText);
                 if (files && files.length > 0) {
                     const actionContainerDiv = document.createElement('div');
-                    actionContainerDiv.className = 'flex flex-col gap-1.5 pt-3 border-t border-cyber-border/45 mt-2';
+                    actionContainerDiv.className = 'file-change-card';
                     
+                    const cardHeader = document.createElement('div');
+                    cardHeader.className = 'flex items-center justify-between border-b border-cyan-500/20 pb-2 mb-1';
+                    cardHeader.innerHTML = `
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm">📁</span>
+                            <span class="text-xs font-semibold text-cyan-300">Modified Files (${files.length})</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 font-mono">Review & Apply</span>
+                    `;
+                    actionContainerDiv.appendChild(cardHeader);
+
                     files.forEach(file => {
+                        const fileName = file.filepath.split(/[/\\]/).pop();
+                        const fileExt = fileName.includes('.') ? fileName.split('.').pop() : '';
+                        
+                        const fileItemDiv = document.createElement('div');
+                        fileItemDiv.className = 'file-change-item flex-col sm:flex-row gap-2';
+
+                        const fileMeta = document.createElement('div');
+                        fileMeta.className = 'flex items-center gap-2 min-w-0';
+                        fileMeta.innerHTML = `
+                            <span class="text-xs text-cyan-400 font-mono">📄</span>
+                            <div class="flex flex-col truncate">
+                                <span class="text-xs font-medium text-slate-200 truncate" title="${file.filepath}">${fileName}</span>
+                                <span class="text-[10px] text-slate-400 truncate">${file.filepath}</span>
+                            </div>
+                        `;
+
                         const btnContainer = document.createElement('div');
-                        btnContainer.className = 'flex flex-wrap gap-2 w-full mt-1';
+                        btnContainer.className = 'flex items-center gap-1.5 shrink-0 self-end sm:self-auto';
+
+                        const previewBtn = document.createElement('button');
+                        previewBtn.className = 'bg-slate-800/90 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 text-[10px] font-medium py-1 px-2.5 rounded transition-all cursor-pointer flex items-center gap-1 shadow-sm';
+                        previewBtn.innerHTML = `👁️ Diff`;
+                        previewBtn.title = "Side-by-side Diff Preview";
 
                         const btn = document.createElement('button');
-                        btn.className = 'apply-diff-btn flex-1 min-w-[120px] bg-cyber-neonCyan hover:bg-blue-500 text-white text-[11px] font-medium py-1.5 px-3 rounded-lg shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5';
-                        btn.innerHTML = `<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath.split(/[/\\]/).pop()}`;
-                        
-                        const previewBtn = document.createElement('button');
-                        previewBtn.className = 'bg-cyber-border hover:bg-slate-500 text-slate-200 text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm';
-                        previewBtn.innerHTML = `👁️ Preview`;
+                        btn.className = 'apply-diff-btn bg-cyber-neonCyan hover:bg-cyan-400 text-slate-950 text-[10px] font-bold py-1 px-3 rounded shadow-[0_0_10px_rgba(0,240,255,0.3)] transition-all cursor-pointer flex items-center gap-1';
+                        btn.innerHTML = `⚡ Apply`;
+                        btn.title = `Directly apply edits to ${file.filepath}`;
 
                         const rejectBtn = document.createElement('button');
-                        rejectBtn.className = 'bg-cyber-border hover:bg-cyber-neonPink text-slate-200 hover:text-white text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm';
-                        rejectBtn.innerHTML = `<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg> Reject`;
+                        rejectBtn.className = 'bg-slate-800 hover:bg-red-500/80 text-slate-400 hover:text-white text-[10px] py-1 px-2 rounded transition-all cursor-pointer flex items-center';
+                        rejectBtn.innerHTML = `✕`;
+                        rejectBtn.title = "Reject changes";
+
+                        const undoBtn = document.createElement('button');
+                        undoBtn.className = 'bg-slate-800 hover:bg-yellow-600 text-slate-200 text-[10px] font-medium py-1 px-2.5 rounded transition-all cursor-pointer items-center gap-1 shadow-sm hidden';
+                        undoBtn.innerHTML = `↩️ Undo`;
 
                         btn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'applyWorkspaceEdits', files: [file] });
                             btn.innerHTML = `✔️ Applied`;
-                            btn.dataset.originalHtml = `<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg> Apply to ${file.filepath.split(/[/\\]/).pop()}`;
-                            btn.classList.remove('bg-cyber-neonCyan', 'hover:bg-blue-500');
-                            btn.classList.add('bg-green-600/90', 'processing-apply');
+                            btn.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                            btn.classList.add('bg-green-600/90', 'text-white');
                             btn.disabled = true;
                             rejectBtn.classList.add('hidden');
                             previewBtn.classList.add('hidden');
@@ -1299,9 +1541,6 @@
                             undoBtn.classList.add('flex');
                         });
 
-                        const undoBtn = document.createElement('button');
-                        undoBtn.className = 'bg-cyber-border hover:bg-yellow-600 text-slate-200 text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer items-center justify-center gap-1.5 shadow-sm hidden';
-                        undoBtn.innerHTML = `↩️ Undo`;
                         undoBtn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'rollbackFile', filepath: file.filepath });
                             undoBtn.innerHTML = `✔️ Reverted`;
@@ -1314,35 +1553,48 @@
                         });
 
                         rejectBtn.addEventListener('click', () => {
-                            btnContainer.style.opacity = '0.4';
-                            btnContainer.style.pointerEvents = 'none';
+                            fileItemDiv.style.opacity = '0.4';
+                            fileItemDiv.style.pointerEvents = 'none';
                             btn.innerHTML = `❌ Rejected`;
-                            btn.classList.replace('bg-cyan-600/90', 'bg-slate-600');
                         });
 
+                        btnContainer.appendChild(previewBtn);
                         btnContainer.appendChild(btn);
                         btnContainer.appendChild(undoBtn);
-                        btnContainer.appendChild(previewBtn);
                         btnContainer.appendChild(rejectBtn);
-                        actionContainerDiv.appendChild(btnContainer);
+
+                        fileItemDiv.appendChild(fileMeta);
+                        fileItemDiv.appendChild(btnContainer);
+                        actionContainerDiv.appendChild(fileItemDiv);
+
+                        // Clean collapsible code preview so chat is not clogged
+                        const codeAccordion = document.createElement('details');
+                        codeAccordion.className = 'file-code-accordion';
+                        const summary = document.createElement('summary');
+                        summary.innerHTML = `<span>View code payload (${file.content.split('\\n').length} lines)</span> <span class="text-xs text-slate-500">▾</span>`;
+                        const codePre = document.createElement('pre');
+                        codePre.className = 'text-[10px] p-2 overflow-x-auto text-slate-300 font-mono bg-black/40 max-h-48';
+                        codePre.textContent = file.content;
+                        codeAccordion.appendChild(summary);
+                        codeAccordion.appendChild(codePre);
+                        actionContainerDiv.appendChild(codeAccordion);
                     });
 
                     if (files.length > 1) {
                         const allBtn = document.createElement('button');
-                        allBtn.className = 'bg-cyber-neonCyan hover:bg-blue-500 text-white text-[11px] font-medium py-1.5 px-3 rounded-lg transition-all cursor-pointer text-center mt-2 shadow-sm w-full';
-                        allBtn.innerText = '✨ APPLY ALL CHANGES';
+                        allBtn.className = 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs py-2 px-3 rounded-lg transition-all cursor-pointer text-center mt-2 shadow-[0_0_12px_rgba(0,240,255,0.25)] flex items-center justify-center gap-1.5';
+                        allBtn.innerHTML = `✨ APPLY ALL ${files.length} FILES`;
                         allBtn.addEventListener('click', () => {
                             vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
-                            allBtn.innerText = '✔️ ALL APPLIED';
+                            allBtn.innerHTML = `✔️ ALL FILES APPLIED`;
                             allBtn.classList.add('opacity-50');
+                            allBtn.disabled = true;
                         });
                         actionContainerDiv.appendChild(allBtn);
                     }
                     
                     currentStreamBubbleDiv.appendChild(actionContainerDiv);
                 }
-
-                // Commands are now handled via standard bash markdown blocks (handled by addCopyButtonsToCodeBlocks)
 
                 if (usage) {
                     const usageDiv = document.createElement('div');
@@ -1372,6 +1624,96 @@
                 </div>
             `;
             chatContainer.appendChild(msgDiv);
+            scrollToBottom();
+        }
+
+        function renderToolCallCard(toolName, title, data) {
+            removeThinking();
+            const cardDiv = document.createElement('div');
+            cardDiv.className = 'flex justify-start w-full my-2 animate-fade-in';
+            
+            let innerHtml = '';
+            if (toolName === 'execute_terminal_command') {
+                const cmd = escapeHtml(data.command || '');
+                const exp = escapeHtml(data.explanation || '');
+                innerHtml = `
+                    <div class="tool-call-card max-w-[95%] w-full">
+                        <div class="flex items-center justify-between border-b border-pink-500/20 pb-1.5">
+                            <span class="flex items-center gap-1.5 text-xs font-semibold text-pink-400">
+                                <span>🛠️</span>
+                                <span>Terminal Command Request</span>
+                            </span>
+                            <span class="text-[9px] font-mono text-slate-400">Review & Execute</span>
+                        </div>
+                        ${exp ? `<p class="text-[11px] text-slate-300 italic">${exp}</p>` : ''}
+                        <div class="flex flex-col gap-1.5 mt-1">
+                            <input type="text" class="tool-cmd-input bg-black/60 border border-pink-500/30 rounded px-2.5 py-1.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400 w-full" value="${cmd}" />
+                            <div class="flex items-center gap-2 justify-end mt-1">
+                                <button class="tool-reject-btn px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-[10px] font-semibold transition-all cursor-pointer">
+                                    Reject
+                                </button>
+                                <button class="tool-approve-btn px-3 py-1 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white rounded text-[10px] font-bold tracking-wide transition-all shadow-[0_0_10px_rgba(236,72,153,0.3)] cursor-pointer flex items-center gap-1">
+                                    ▶ Approve & Run in Terminal
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (toolName === 'read_multiple_files') {
+                innerHtml = `
+                    <div class="tool-call-pill">
+                        <span>🔍</span>
+                        <span>Inspected ${data.count} file(s): <strong class="text-white">${escapeHtml(data.files)}</strong></span>
+                    </div>
+                `;
+            } else if (toolName === 'search_codebase') {
+                innerHtml = `
+                    <div class="tool-call-pill">
+                        <span>🧠</span>
+                        <span>Searched codebase for: <em class="text-white">"${escapeHtml(data.query)}"</em></span>
+                    </div>
+                `;
+            } else {
+                innerHtml = `
+                    <div class="tool-call-pill">
+                        <span>⚡</span>
+                        <span>Tool: <strong class="text-white">${escapeHtml(toolName)}</strong></span>
+                    </div>
+                `;
+            }
+
+            cardDiv.innerHTML = innerHtml;
+
+            // Wire up interactive events for terminal approval
+            if (toolName === 'execute_terminal_command') {
+                const approveBtn = cardDiv.querySelector('.tool-approve-btn');
+                const rejectBtn = cardDiv.querySelector('.tool-reject-btn');
+                const input = cardDiv.querySelector('.tool-cmd-input');
+                const card = cardDiv.querySelector('.tool-call-card');
+
+                if (approveBtn && input) {
+                    approveBtn.addEventListener('click', () => {
+                        const finalCmd = input.value.trim();
+                        vscode.postMessage({ command: 'executeCommand', cmd: finalCmd });
+                        approveBtn.innerHTML = '✔️ Sent to Terminal';
+                        approveBtn.classList.replace('from-pink-600', 'from-green-600');
+                        approveBtn.classList.replace('to-purple-600', 'to-emerald-600');
+                        approveBtn.disabled = true;
+                        input.disabled = true;
+                        if (rejectBtn) rejectBtn.remove();
+                    });
+                }
+
+                if (rejectBtn && card) {
+                    rejectBtn.addEventListener('click', () => {
+                        card.style.opacity = '0.4';
+                        card.style.pointerEvents = 'none';
+                        rejectBtn.innerHTML = '❌ Rejected';
+                    });
+                }
+            }
+
+            chatContainer.appendChild(cardDiv);
             scrollToBottom();
         }
 
@@ -1409,6 +1751,8 @@
                 handleStreamChunk(message.text, message.done, message.usage);
             } else if (message.command === 'statusUpdate') {
                 appendSystemMessage(message.text.replace(/<[^>]*>/g, '')); // Strip HTML tags
+            } else if (message.command === 'toolCallEvent') {
+                renderToolCallCard(message.tool, message.title, message.data);
             } else if (message.command === 'restoreHistory') {
                 chatContainer.innerHTML = ''; // Clear current view
                 message.messages.forEach(msg => {

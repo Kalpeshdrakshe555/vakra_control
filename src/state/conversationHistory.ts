@@ -33,7 +33,18 @@ export class ConversationHistory {
     constructor(maxHistory: number = 20, workspaceRoot?: string) {
         this.maxHistory = maxHistory;
         if (workspaceRoot) {
-            this.savePath = path.join(workspaceRoot, '.chat-history.json');
+            const aiDir = path.join(workspaceRoot, '.ultra-light-ai');
+            if (!fs.existsSync(aiDir)) {
+                try { fs.mkdirSync(aiDir, { recursive: true }); } catch {}
+            }
+            this.savePath = path.join(aiDir, 'chat-history.json');
+            // Migration: check if legacy .chat-history.json exists at root
+            const legacyPath = path.join(workspaceRoot, '.chat-history.json');
+            if (!fs.existsSync(this.savePath) && fs.existsSync(legacyPath)) {
+                try {
+                    fs.copyFileSync(legacyPath, this.savePath);
+                } catch {}
+            }
             this.loadFromFile();
         }
     }

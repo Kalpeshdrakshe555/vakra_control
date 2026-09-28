@@ -16,7 +16,7 @@ export class SkeletonExpander {
                 const selection = editor.selection;
 
                 // If nothing is selected, we try to expand the current line, or the surrounding block
-                let rangeToExpand = selection;
+                let rangeToExpand: vscode.Range = selection;
                 if (selection.isEmpty) {
                     // Try to find the start and end of the block based on indentation
                     const curLine = document.lineAt(selection.active.line);

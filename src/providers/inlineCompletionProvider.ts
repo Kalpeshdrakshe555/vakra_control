@@ -1,19 +1,14 @@
 import * as vscode from 'vscode';
 import { GeminiCloudClient } from '../router/realClients';
 import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout } from '../config';
-import { globalRagEngine } from '../extension';
-
-/**
- * InlineCompletionItemProvider — Provides Copilot-style ghost text suggestions
- * as the user types. Triggers on typing pause with debounce.
- */
 export class InlineCompletionProvider implements vscode.InlineCompletionItemProvider {
     private debounceTimer: ReturnType<typeof setTimeout> | null = null;
     private lastRequestId = 0;
     private readonly debounceMs = 600;
 
     constructor(
-        private readonly outputChannel: vscode.OutputChannel
+        private readonly outputChannel: vscode.OutputChannel,
+        private readonly getRagEngine?: () => any
     ) {}
 
     async provideInlineCompletionItems(
@@ -85,9 +80,10 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
             // 🔥 RAG Context Injection: Fetch background context for the current line
             let ragContext = '';
             const textBeforeCursor = document.lineAt(position.line).text.substring(0, position.character).trim();
+            const ragEngine = this.getRagEngine ? this.getRagEngine() : null;
             
-            if (globalRagEngine && textBeforeCursor.length > 5) {
-                const results = globalRagEngine.search(textBeforeCursor, 1); // Get top 1 result to keep prompt minimal
+            if (ragEngine && textBeforeCursor.length > 5) {
+                const results = ragEngine.search(textBeforeCursor, 1); // Get top 1 result to keep prompt minimal
                 if (results && results.length > 0) {
                      ragContext = `\n// --- Workspace Reference: ${results[0].filepath} ---\n${results[0].content}\n// -----------------------------------\n`;
                 }

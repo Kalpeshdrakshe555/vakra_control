@@ -7,23 +7,26 @@ export class TerminalErrorInterceptor {
     private static timeoutMap: Map<vscode.Terminal, NodeJS.Timeout> = new Map();
 
     public static activate(context: vscode.ExtensionContext, sidebarProvider: SidebarProvider) {
-        // Fallback or exact check if API is available
-        const win = vscode.window as any;
-        if (typeof win.onDidWriteTerminalData === 'function') {
-            context.subscriptions.push(
-                win.onDidWriteTerminalData((e: { terminal: vscode.Terminal, data: string }) => {
-                    this.handleTerminalData(e.terminal, e.data, sidebarProvider);
-                })
-            );
+        try {
+            const win = vscode.window as any;
+            if (win && 'onDidWriteTerminalData' in win && typeof win.onDidWriteTerminalData === 'function') {
+                context.subscriptions.push(
+                    win.onDidWriteTerminalData((e: { terminal: vscode.Terminal, data: string }) => {
+                        this.handleTerminalData(e.terminal, e.data, sidebarProvider);
+                    })
+                );
 
-            context.subscriptions.push(
-                vscode.window.onDidCloseTerminal((terminal: vscode.Terminal) => {
-                    this.terminalBuffers.delete(terminal);
-                    const timeout = this.timeoutMap.get(terminal);
-                    if (timeout) clearTimeout(timeout);
-                    this.timeoutMap.delete(terminal);
-                })
-            );
+                context.subscriptions.push(
+                    vscode.window.onDidCloseTerminal((terminal: vscode.Terminal) => {
+                        this.terminalBuffers.delete(terminal);
+                        const timeout = this.timeoutMap.get(terminal);
+                        if (timeout) clearTimeout(timeout);
+                        this.timeoutMap.delete(terminal);
+                    })
+                );
+            }
+        } catch {
+            // Proposed API terminalDataWriteEvent is restricted in stable VS Code; safe fallback to copySelection
         }
     }
 

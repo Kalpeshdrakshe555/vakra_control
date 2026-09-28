@@ -3,7 +3,13 @@ import * as cp from 'child_process';
 import * as os from 'os';
 
 export class TerminalCapture {
-    private static outputChannel = vscode.window.createOutputChannel('Ultra Light AI Terminal');
+    private static _outputChannel: vscode.OutputChannel | null = null;
+    private static get outputChannel(): vscode.OutputChannel {
+        if (!this._outputChannel) {
+            this._outputChannel = vscode.window.createOutputChannel('Ultra Light AI Terminal');
+        }
+        return this._outputChannel;
+    }
     private static lastOutput: string = '';
 
     public static async runAndCapture(command: string, workspaceRoot: string): Promise<string> {

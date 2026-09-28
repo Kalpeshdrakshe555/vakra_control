@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BM25 } from './bm25';
-import { chunkCodeFile, CodeChunk } from './codeIndexer';
+import { chunkCodeFile, chunkCodeFileAsync, CodeChunk } from './codeIndexer';
 import { ProjectScanner } from '../indexer/projectScanner';
 
 // Bug 7 Fix: Synonym map for common code terms
@@ -92,7 +92,7 @@ export class RagEngine {
                     if (content.length > 100000) continue;
 
                     const relativePath = path.relative(this.workspaceRoot, file.fsPath);
-                    const fileChunks = chunkCodeFile(relativePath, content);
+                    const fileChunks = await chunkCodeFileAsync(relativePath, content, file);
                     
                     const isEntryPoint = profile?.entryPoints.includes(relativePath.replace(/\\/g, '/')) || false;
                     
@@ -184,7 +184,8 @@ export class RagEngine {
                 snippetLines = lines.slice(start, end);
             }
 
-            const absoluteStart = chunk.startLine + (lines.length - snippetLines.length > 0 ? Math.max(0, matchingLineIndices[0] - 6) : 0);
+            const matchOffset = matchingLineIndices.length > 0 ? Math.max(0, matchingLineIndices[0] - 6) : 0;
+            const absoluteStart = chunk.startLine + (lines.length - snippetLines.length > 0 ? matchOffset : 0);
             const header = `// ${chunk.filepath} (L${absoluteStart}–, ${chunk.type}: ${chunk.name})`;
             return {
                 filepath: chunk.filepath,
@@ -209,7 +210,7 @@ export class RagEngine {
             const content = await fs.promises.readFile(filePath, 'utf8');
             if (content.length > 100000) return;
             
-            const newChunks = chunkCodeFile(relativePath, content);
+            const newChunks = await chunkCodeFileAsync(relativePath, content, vscode.Uri.file(filePath));
             this.chunks.push(...newChunks);
             
         // Bug 2 Fix: Debounce BM25 rebuild with correct boost scores

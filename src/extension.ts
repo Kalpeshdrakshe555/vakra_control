@@ -21,22 +21,19 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine('Activating "ultra-light-ai" extension...');
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-        outputChannel.appendLine('Error: No active workspace folder open. Extension activation aborted.');
-        return;
+    const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : '';
+
+    if (workspaceRoot) {
+        // Generate `.agent-config.json` template if it doesn't exist
+        ensureAgentConfig(workspaceRoot);
     }
 
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
-
-    // Generate `.agent-config.json` template if it doesn't exist
-    ensureAgentConfig(workspaceRoot);
-
     // Instantiate State Machine
-    const stateMachine = new StateMachine(workspaceRoot);
+    const stateMachine = new StateMachine(workspaceRoot || undefined);
 
-    const keys = getGeminiApiKeys(workspaceRoot, context.extensionUri.fsPath);
-    const model = getGeminiModel(workspaceRoot);
-    const timeout = getGeminiTimeout(workspaceRoot);
+    const keys = getGeminiApiKeys(workspaceRoot || undefined, context.extensionUri.fsPath);
+    const model = getGeminiModel(workspaceRoot || undefined);
+    const timeout = getGeminiTimeout(workspaceRoot || undefined);
 
     // Instantiate Real API Client
     const geminiClient = new GeminiCloudClient(keys, model, timeout);
@@ -44,27 +41,29 @@ export function activate(context: vscode.ExtensionContext) {
     // Instantiate default fallback engine router
     const defaultRouter = new EngineRouter([geminiClient], stateMachine);
 
-    // Initialize RAG Engine
-    globalRagEngine = new RagEngine(workspaceRoot);
-    
-    // BUG FIX: Run in background with a slight delay to prevent Extension Host from hanging on large projects
-    setTimeout(() => {
-        globalRagEngine?.buildIndex().catch(err => outputChannel.appendLine(`RAG Indexing Error: ${err}`));
-    }, 5000); 
+    // Initialize RAG Engine if workspace exists
+    if (workspaceRoot) {
+        globalRagEngine = new RagEngine(workspaceRoot);
+        
+        // Run in background with delay to prevent Extension Host from hanging
+        setTimeout(() => {
+            globalRagEngine?.buildIndex().catch(err => outputChannel.appendLine(`RAG Indexing Error: ${err}`));
+        }, 5000); 
 
-    // Setup file watcher for RAG
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
-    context.subscriptions.push(watcher);
-    const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-    const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
-    const safeUpdateRag = (uri: vscode.Uri) => {
-        const fp = uri.fsPath.replace(/\\/g, '/');
-        if (combinedIgnores.some(folder => fp.includes(`/${folder}/`) || fp.endsWith(`/${folder}`))) return;
-        globalRagEngine?.updateFile(uri.fsPath);
-    };
-    watcher.onDidChange(safeUpdateRag);
-    watcher.onDidCreate(safeUpdateRag);
-    watcher.onDidDelete(safeUpdateRag);
+        // Setup file watcher for RAG
+        const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
+        context.subscriptions.push(watcher);
+        const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
+        const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+        const safeUpdateRag = (uri: vscode.Uri) => {
+            const fp = uri.fsPath.replace(/\\/g, '/');
+            if (combinedIgnores.some(folder => fp.includes(`/${folder}/`) || fp.endsWith(`/${folder}`))) return;
+            globalRagEngine?.updateFile(uri.fsPath);
+        };
+        watcher.onDidChange(safeUpdateRag);
+        watcher.onDidCreate(safeUpdateRag);
+        watcher.onDidDelete(safeUpdateRag);
+    }
 
     // (Background AST Indexer removed: replaced by in-stream micro-tasks via Scout)
 
@@ -87,9 +86,13 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider('ultra-light-ai-sidebar', sidebarProvider)
     );
 
-    // Initialize Terminal Error Interceptor
-    const { TerminalErrorInterceptor } = require('./features/terminalInterceptor');
-    TerminalErrorInterceptor.activate(context, sidebarProvider);
+    // Initialize Terminal Error Interceptor (safely guarded for proposed API access)
+    try {
+        const { TerminalErrorInterceptor } = require('./features/terminalInterceptor');
+        TerminalErrorInterceptor.activate(context, sidebarProvider);
+    } catch (err) {
+        outputChannel.appendLine(`TerminalErrorInterceptor skipped: ${err}`);
+    }
 
     // Initialize Skeleton Expander
     const { SkeletonExpander } = require('./features/skeletonExpander');
@@ -102,7 +105,7 @@ export function activate(context: vscode.ExtensionContext) {
     // ──────────────────────────────────────────────────────────────────────
     // INLINE COMPLETION PROVIDER (Copilot-style ghost text)
     // ──────────────────────────────────────────────────────────────────────
-    const inlineProvider = new InlineCompletionProvider(outputChannel);
+    const inlineProvider = new InlineCompletionProvider(outputChannel, () => globalRagEngine);
     context.subscriptions.push(
         vscode.languages.registerInlineCompletionItemProvider(
             { pattern: '**' },
