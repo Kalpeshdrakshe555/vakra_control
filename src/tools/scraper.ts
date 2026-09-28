@@ -62,21 +62,41 @@ export async function searchWeb(query: string): Promise<string> {
         const html = await response.text();
         
         const results: {url: string, snippet: string}[] = [];
-        // A more lenient regex to capture result blocks in DuckDuckGo HTML
-        const resultRegex = /<a class="result__snippet[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-        let match;
-        while ((match = resultRegex.exec(html)) !== null && results.length < 3) {
-            let url = match[1];
-            // Unescape DuckDuckGo redirect url
+
+        // Strategy 1: Standard result__snippet
+        const resultRegex1 = /<a class="result__snippet[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+        // Strategy 2: result__url or result__a links
+        const resultRegex2 = /<a class="result__url"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+        // Strategy 3: any link with uddg parameter
+        const resultRegex3 = /href="([^"]*uddg=[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+        const processMatch = (rawUrl: string, rawSnippet: string) => {
+            let url = rawUrl;
             if (url.includes('uddg=')) {
                 try {
-                    const params = new URLSearchParams(url.split('?')[1]);
+                    const params = new URLSearchParams(url.includes('?') ? url.split('?')[1] : url);
                     url = decodeURIComponent(params.get('uddg') || url);
                 } catch { /* ignore */ }
             }
-            const snippet = match[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            if (!url.includes('duckduckgo.com')) {
-                results.push({url, snippet});
+            if (url.startsWith('//')) url = 'https:' + url;
+            const snippet = rawSnippet.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            if (url.startsWith('http') && !url.includes('duckduckgo.com') && !results.some(r => r.url === url)) {
+                results.push({ url, snippet });
+            }
+        };
+
+        let match;
+        while ((match = resultRegex1.exec(html)) !== null && results.length < 3) {
+            processMatch(match[1], match[2]);
+        }
+        if (results.length < 3) {
+            while ((match = resultRegex2.exec(html)) !== null && results.length < 3) {
+                processMatch(match[1], match[2]);
+            }
+        }
+        if (results.length < 3) {
+            while ((match = resultRegex3.exec(html)) !== null && results.length < 3) {
+                processMatch(match[1], match[2]);
             }
         }
         
