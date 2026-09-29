@@ -86,11 +86,10 @@ export class TokenAccountant {
     ): number {
         const sysPromptTokens = this.systemPromptTokens > -1 ? this.systemPromptTokens : 2500;
         
-        // Use user-provided maxTokens, but ensure we don't exceed free tier limits if not set
+        // Strict Enforcement: Bound total budget strictly to user-configured maxContextTokens
         const effectiveMax = maxTokens;
         
         const used = sysPromptTokens + historyTokens + userPromptTokens;
-        // If remaining is less than 500, we skip context injection (budget exhausted)
-        return Math.max(0, effectiveMax - used - 500); // 500 token safety buffer
+        return Math.max(0, effectiveMax - used - 200); // 200 token safety buffer
     }
 }
