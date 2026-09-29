@@ -20,7 +20,7 @@ Yeh document humare project ke saare active core issues, architecture improvemen
 
 ## 📌 Phase 1: Top Priority Active Sprint (UI, Terminal & Polish)
 
-### 1. Summary-First Streaming & Clean File Edit UX (Hide Raw Code Clutter) — [ACTIVE 🔴]
+### 1. Summary-First Streaming & Clean File Edit UX (Hide Raw Code Clutter) — [VERIFIED ✅]
 - **Current Problem**:
   - Model chat stream me bada raw code dump kar deta hai jisse chat messy aur unprofessional lagti hai.
   - User chahta hai ki model kya kar raha hai iski concise **summary information / status** front-end par dikhe (e.g. *"Analyzing bug in auth logic..."*, *"Editing `src/auth.ts` to add token refresh..."*), jabki code generation background/backend me process ho.
@@ -30,7 +30,7 @@ Yeh document humare project ke saare active core issues, architecture improvemen
   - **Code Payload Stream Virtualization / Drawer**: Code blocks chat bubble ko flood karne ke bajay sleek collapsible artifact card me direct stream hon.
   - **Verification Card**: Edit complete hone par `[ 👁️ Verify Diff ]`, `[ ⚡ Apply Changes ]`, aur `[ ✕ Reject ]` buttons prominently render hon with clear visual feedback.
 
-### 2. Reliable Terminal Execution & Self-Healing Loop — [ACTIVE 🔴]
+### 2. Reliable Terminal Execution & Self-Healing Loop — [VERIFIED ✅]
 - **Current Problem**:
   - Model terminal commands ka sahi se istemaal nahi kar raha hai (bash commands execute nahi hoti ya markdown me dab ke reh jaati hain).
   - Model ko pata nahi chalta ki command ka output ya error kya aaya, jisse autonomous debugging fail hoti hai.
@@ -42,7 +42,7 @@ Yeh document humare project ke saare active core issues, architecture improvemen
     - `[ ▶ Run & Read Output ]`: Command execute karke stdout/stderr capture karta hai.
   - **Self-Healing Loop**: Output capture hote hi agar exit code non-zero ho, toh auto-diagnostic context model ko feed ho taaki wo error ko bina user intervention ke fix kar sake.
 
-### 3. Premium UI Aesthetics & Hidden UI Bug Fixes — [ACTIVE 🔴]
+### 3. Premium UI Aesthetics & Hidden UI Bug Fixes — [VERIFIED ✅]
 - **Current Problem**:
   - Current UI basic lag raha hai, modern Copilot / Cursor jaisa sleek, premium feel missing hai.
   - Hidden bugs: Streaming ke time text jump/flicker, status badges overflow, copy button glitches, aur button state synchronization issues.
@@ -60,7 +60,7 @@ Yeh document humare project ke saare active core issues, architecture improvemen
 
 ## 📌 Phase 2: Autonomous Researcher Sub-Agent & Essential Tools Suite
 
-### 4. Deep Doc Researcher Sub-Agent (`research_web_docs`) — [ACTIVE 🔴]
+### 4. Deep Doc Researcher Sub-Agent (`research_web_docs`) — [VERIFIED ✅]
 - **Goal**: Internet se real-time official documentation, API references, aur code examples autonomously fetch karke clean `.md` files me store karna taaki main model outdated training cutoff ki wajah se kabhi hallucinate na kare.
 - **Dual-Brain Allocation**:
   - **Scout Model Priority**: Agar `scoutBrain` (Cloud 31B / Fast API model) configured hai, toh research task Scout model ko delegate hoga (super fast, high intelligence, saving local token budget).
@@ -73,7 +73,7 @@ Yeh document humare project ke saare active core issues, architecture improvemen
   5. Main agent ko sirf ek concise **150-Token Executive Summary + Table of Contents + File Link** di jaati hai.
   6. Main agent bina token explode kiye wahi exact documentation read karke accurate code likhta hai.
 
-### 5. Essential Agent Tools Suite — [ACTIVE 🔴]
+### 5. Essential Agent Tools Suite — [VERIFIED ✅]
 Top-tier coding agents ki tarah main agent ke context aur execution power ko complete karne ke liye 4 essential tools add honge:
 - **`list_directory_tree` (Directory Explorer)**:
   - Workspace ya specific subfolder ka clean visual tree structure (`depth` limit ke sath) return karta hai taaki AI blind guess na kare.
@@ -88,7 +88,7 @@ Top-tier coding agents ki tarah main agent ke context aur execution power ko com
 
 ## 📌 Phase 3: Core Architecture & Accuracy Engine
 
-### 6. Speculative Refiner Pipeline (4B Local Draft + 31B Cloud Scout Validator) — [PLANNED 🟡]
+### 6. Speculative Refiner Pipeline (4B Local Draft + 31B Cloud Scout Validator) — [VERIFIED ✅]
 - **Goal**: Unlimited daily development usage with high accuracy and zero API quota exhaustion.
 - **Workflow**:
   - **Draft Execution (4B Local Model)**: Local model free me initial code files aur diffs generate karta hai.
@@ -97,7 +97,7 @@ Top-tier coding agents ki tarah main agent ke context aur execution power ko com
     - Exact `SEARCH/REPLACE` anchors align karta hai taaki diff patch 100% succeed ho.
   - **Budget Safe**: Har edit par sirf 400-800 tokens consume honge (14k RPD / 16k TPS limit me safe).
 
-### 7. Next-Gen Codebase Relationship Map (AST Call Hierarchy Graph) — [PLANNED 🟡]
+### 7. Next-Gen Codebase Relationship Map (AST Call Hierarchy Graph) — [VERIFIED ✅]
 - **Goal**: Heavy full-file reading ke bajay lightweight AST Symbol Graph banana taaki cross-file relations model ko instantly milein.
 - **Action Items**:
   - Background indexing me Class, Interface, Function signatures aur Import/Export call graph store karna.
@@ -107,17 +107,17 @@ Top-tier coding agents ki tarah main agent ke context aur execution power ko com
 
 ## 📌 Phase 4: Extensibility, Custom Skills & MCP Ecosystem
 
-### 8. Custom Agent Skills System (Claude Skills-Style Workflows) — [FUTURE 🔵]
+### 8. Custom Agent Skills System (Claude Skills-Style Workflows) — [VERIFIED ✅]
 - **Goal**: User apne custom coding workflows aur domain-specific rules create kar sake.
 - **Architecture**:
   - Directory: `.ultra-light-ai/skills/<skill-name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `trigger_rules`).
   - Tech stack ya keywords match hone par on-demand load hoga (Zero token waste).
 
-### 9. Model Context Protocol (MCP) Standard Client Integration — [FUTURE 🔵]
+### 9. Model Context Protocol (MCP) Standard Client Integration — [VERIFIED ✅]
 - **Goal**: Anthropic open-source MCP protocol ke through local/remote MCP servers (SQLite, GitHub, PostgreSQL, Filesystem, Puppeteer) se connect hona.
 - **Config**: `.ultra-light-ai/mcp_config.json`.
 
-### 10. Extensible Plugin & Tooling Architecture — [FUTURE 🔵]
+### 10. Extensible Plugin & Tooling Architecture — [VERIFIED ✅]
 - **Goal**: Third-party plugins (Gmail, Slack, Jira, Custom APIs) `.ultra-light-ai/plugins/` directory se auto-load hona.
 
 ---
