@@ -21,6 +21,7 @@ import { FileVersioning } from '../operations/fileVersioning';
 import { TerminalCapture } from '../tools/terminalCapture';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { SessionMemory } from '../state/sessionMemory';
+import { SkillsManager } from '../features/skillsManager';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
@@ -367,14 +368,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
                 if (workspaceRoot && message.cmd) {
                     vscode.window.showInformationMessage(`Running: ${message.cmd}`);
-                    TerminalCapture.runAndCapture(message.cmd, workspaceRoot).then(output => {
+                    TerminalCapture.runAndCapture(message.cmd, workspaceRoot).then(res => {
                         this.postMessageToWebview({
                             command: 'statusUpdate',
-                            text: `Terminal Execution Complete. AI has read the output.`
+                            text: res.error
+                                ? `⚠️ Command failed (Exit Code: ${res.exitCode}). AI is analyzing output...`
+                                : `✅ Command output captured. AI reading output...`
                         });
+
+                        const healingPrompt = res.error
+                            ? `I ran command \`${message.cmd}\` and it failed with exit code ${res.exitCode}.\n\nOutput:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze this error and provide a fix.`
+                            : `I executed \`${message.cmd}\`. Output:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze the output.`;
+
                         this.postMessageToWebview({
                             command: 'injectChatAndSend',
-                            text: `I executed \`${message.cmd}\`. Please analyze the output and fix any errors.`
+                            text: healingPrompt
                         });
                     });
                 }
@@ -897,6 +905,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             
 
             
+            if (workspaceRoot) {
+                const skillsInstructions = SkillsManager.getMatchingSkillInstructions(message.text, workspaceRoot);
+                if (skillsInstructions) {
+                    systemInstruction += skillsInstructions;
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `✨ Activated custom workspace skill instructions.` });
+                }
+            }
+
             if (architectureContext) {
                 finalPrompt = architectureContext + '\n' + finalPrompt;
             }
@@ -1840,8 +1856,8 @@ RULES FOR USING CONTEXT:
                     });
 
                     try {
-                        const output = await TerminalCapture.runAndCapture(cmdToRun, workspaceRoot);
-                        if (output.includes('Exit Code:') && !output.includes('Exit Code: 0')) {
+                        const res = await TerminalCapture.runAndCapture(cmdToRun, workspaceRoot);
+                        if (res.error || res.exitCode !== 0) {
                             // Build failed! Auto-Rollback
                             vscode.window.showErrorMessage(`Build failed after patch. Rolling back and notifying AI.`);
                             
@@ -1855,7 +1871,7 @@ RULES FOR USING CONTEXT:
 
                             this.postMessageToWebview({
                                 command: 'injectChatAndSend',
-                                text: `The code you applied broke the build/tests. I have automatically rolled it back. Here is the error:\n<terminal_output>\n${output}\n</terminal_output>\nPlease fix the issue.`
+                                text: `The code you applied broke the build/tests. I have automatically rolled it back. Here is the error:\n<terminal_output>\n${res.output}\n</terminal_output>\nPlease fix the issue.`
                             });
                             return; // Halt further processing
                         } else {

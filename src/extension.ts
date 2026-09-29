@@ -9,6 +9,7 @@ import { InlineCompletionProvider } from './providers/inlineCompletionProvider';
 import { AiCodeActionProvider, registerCodeActionCommands } from './providers/codeActionProvider';
 import { AiHoverProvider } from './providers/hoverProvider';
 import { ensureAgentConfig, getGeminiApiKeys, getGeminiModel, getGeminiTimeout, setSecretStorage, saveSecureApiKey } from './config';
+import { ToolRegistry } from './tools/toolRegistry';
 import { RagEngine } from './rag/ragEngine';
 import * as fs from 'fs';
 import { extractSurgicalErrorContext } from './utils/terminalHeuristics';
@@ -83,6 +84,12 @@ export function activate(context: vscode.ExtensionContext) {
 
     if (workspaceRoot) {
         setupWorkspaceRag(workspaceRoot);
+    }
+
+    // Register Essential Developer Tools & Sub-Agent in ToolRegistry
+    ToolRegistry.registerEssentialTools();
+    if (workspaceRoot) {
+        ToolRegistry.loadWorkspacePlugins(workspaceRoot);
     }
 
     // (Background AST Indexer removed: replaced by in-stream micro-tasks via Scout)

@@ -2,6 +2,12 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as os from 'os';
 
+export interface TerminalExecutionResult {
+    output: string;
+    exitCode: number;
+    error: boolean;
+}
+
 export class TerminalCapture {
     private static _outputChannel: vscode.OutputChannel | null = null;
     private static get outputChannel(): vscode.OutputChannel {
@@ -12,7 +18,7 @@ export class TerminalCapture {
     }
     private static lastOutput: string = '';
 
-    public static async runAndCapture(command: string, workspaceRoot: string): Promise<string> {
+    public static async runAndCapture(command: string, workspaceRoot: string): Promise<TerminalExecutionResult> {
         this.outputChannel.show(true);
         this.outputChannel.appendLine(`\n> ${command}`);
         
@@ -21,6 +27,9 @@ export class TerminalCapture {
             
             cp.exec(command, { cwd: workspaceRoot, maxBuffer: 1024 * 1024, shell }, (error, stdout, stderr) => {
                 let fullOutput = '';
+                let exitCode = 0;
+                let isError = false;
+
                 if (stdout) {
                     fullOutput += stdout + '\n';
                     this.outputChannel.append(stdout);
@@ -30,8 +39,10 @@ export class TerminalCapture {
                     this.outputChannel.append(stderr);
                 }
                 if (error) {
-                    fullOutput += `Exit Code: ${error.code}\n`;
-                    this.outputChannel.appendLine(`Exit Code: ${error.code}`);
+                    exitCode = error.code ?? 1;
+                    isError = true;
+                    fullOutput += `Exit Code: ${exitCode}\n`;
+                    this.outputChannel.appendLine(`Exit Code: ${exitCode}`);
                 }
 
                 // Keep only last 100 lines
@@ -44,7 +55,7 @@ export class TerminalCapture {
                 }
 
                 this.lastOutput = truncatedOutput;
-                resolve(this.lastOutput);
+                resolve({ output: this.lastOutput, exitCode, error: isError });
             });
         });
     }

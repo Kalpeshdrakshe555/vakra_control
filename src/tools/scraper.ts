@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
 /**
  * Fetches HTML context from a web resource, strips HTML tags, and truncates content.
  * Serves as a zero-dependency local RAG utility.
@@ -118,5 +121,50 @@ export async function searchWeb(query: string): Promise<string> {
     } catch (error) {
         console.error("Search error:", error);
         return "Search failed.";
+    }
+}
+
+/**
+ * Autonomous Deep Doc Researcher Sub-Agent
+ * Scrapes URLs, strips HTML noise, saves full markdown in `.ultra-light-ai/research/`
+ * and returns a concise ~150-token executive summary.
+ */
+export async function researchWebDocs(query: string, urls: string[], workspaceRoot: string): Promise<string> {
+    try {
+        const researchDir = path.join(workspaceRoot, '.ultra-light-ai', 'research');
+        if (!fs.existsSync(researchDir)) {
+            fs.mkdirSync(researchDir, { recursive: true });
+        }
+
+        let combinedMarkdown = `# Deep Web Research: ${query}\n\n`;
+        const summaryPoints: string[] = [];
+
+        for (const url of urls.slice(0, 3)) {
+            try {
+                const content = await fetchWebContext(url);
+                if (content) {
+                    combinedMarkdown += `## Source: ${url}\n\n${content}\n\n---\n\n`;
+                    summaryPoints.push(`- Extracted documentation from [${new URL(url).hostname}](${url})`);
+                }
+            } catch (e) {
+                console.error(`Failed to research ${url}`, e);
+            }
+        }
+
+        const sanitizedFileName = query.toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 40) + '.md';
+        const docPath = path.join(researchDir, sanitizedFileName);
+        fs.writeFileSync(docPath, combinedMarkdown, 'utf8');
+
+        const relPath = path.relative(workspaceRoot, docPath);
+
+        return `### 📚 Deep Doc Research Completed
+**Query:** ${query}
+**Saved File:** \`${relPath}\`
+
+**Executive Summary:**
+${summaryPoints.join('\n') || '- No active content scraped.'}
+- Full scraped documentation saved in \`${relPath}\`. Main model can consult this file directly.`;
+    } catch (error: any) {
+        return `Research Error: ${error?.message || error}`;
     }
 }
