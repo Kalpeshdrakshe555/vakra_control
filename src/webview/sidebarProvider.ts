@@ -4,7 +4,6 @@ import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
 import { applyDiffToActiveFile, applyRobustSearchReplace, resolveSafeWorkspacePath } from '../operations/diffPatcher';
 import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, ensureAgentConfig, AgentConfig } from '../config';
-import { GameRunnerPanel } from './gameRunnerPanel';
 import { ConversationHistory } from '../state/conversationHistory';
 import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
 import { skeletonizeFile, generateStructuralRepoMap } from '../utils/astSkeletonizer';
@@ -157,13 +156,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 await this.handleApplyWorkspaceEdits(message);
             } else if (message.command === 'openConfig') {
                 this.handleOpenConfig();
-            } else if (message.command === 'playGame') {
-                const gamePath = path.join(this._workspaceRoot, 'index.html');
-                if (fs.existsSync(gamePath)) {
-                    GameRunnerPanel.createOrShow(this._extensionUri, gamePath, this._workspaceRoot);
-                } else {
-                    vscode.window.showErrorMessage('No index.html found in the workspace root to play! Please ask the AI to generate the game first.');
-                }
+
             } else if (message.command === 'newChat') {
                 this.conversationHistory.clear();
                 if (this._onResetCb) {
@@ -902,9 +895,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             TokenAccountant.measureSystemPrompt(systemInstruction);
             let finalPrompt = await this.buildPrompt(message.text, false, false /* Disable hardcoded search */, false, workspaceRoot);
             
-            if (message.gameMode) {
-                systemInstruction += `\n[GAME DEV MODE ACTIVE]: You are an expert Game Developer. You can use your tools to download free CC0 3D models and textures from the internet without API keys. Only use procedural code if you can't find the asset. DO NOT load remote URLs in Three.js, ALWAYS download them first using download_free_internet_asset.`;
-            }
+
             
             if (architectureContext) {
                 finalPrompt = architectureContext + '\n' + finalPrompt;
@@ -1048,29 +1039,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             };
             tools[0].functionDeclarations.push(executeTerminalTool);
 
-            if (message.includeWebSearch || message.gameMode) {
+            if (message.includeWebSearch) {
                 const searchWebTool: any = {
                     name: "search_web",
                     description: "Searches the internet for information, documentation, or code examples when you do not know the answer. ONLY use this when you explicitly need external information.",
                     parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
                 };
                 tools[0].functionDeclarations.push(searchWebTool);
-            }
-
-            if (message.gameMode) {
-                const downloadAssetTool: any = {
-                    name: "download_free_internet_asset",
-                    description: "Searches the internet for a free texture, downloads it into the workspace /assets folder, and returns the local file path. Note: 3D models are not supported yet, only textures.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            searchQuery: { type: "string", description: "What texture you are looking for (e.g., 'wood', 'marble')" },
-                            assetType: { type: "string", enum: ["texture"] }
-                        },
-                        required: ["searchQuery", "assetType"]
-                    }
-                };
-                tools[0].functionDeclarations.push(downloadAssetTool);
             }
 
             const filteredTools = PromptClassifier.filterTools(promptCategory, tools);
@@ -1281,34 +1256,7 @@ ${JSON.stringify(assets, null, 2)}
                     } catch (e: any) {
                         return `Web Search Error: ${e.message}`;
                     }
-                } else if (functionCall.name === 'download_free_internet_asset') {
-                    if (!workspaceRoot) return "Error: No workspace.";
-                    const { searchQuery, assetType } = functionCall.args;
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `📦 Fetching Asset: ${searchQuery}` });
-                    try {
-                        const assetsDir = path.join(workspaceRoot, 'assets');
-                        if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir);
-                        if (assetType === 'texture') {
-                            const res = await fetch(`https://api.polyhaven.com/assets?search=${encodeURIComponent(searchQuery)}`);
-                            const data: any = await res.json();
-                            const textureKeys = Object.keys(data).filter(k => data[k].type === 1);
-                            if (textureKeys.length > 0) {
-                                const assetId = textureKeys[0];
-                                const url = `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/${assetId}/${assetId}_diff_2k.jpg`;
-                                const dest = path.join(assetsDir, `${assetId}.jpg`);
-                                const file = fs.createWriteStream(dest);
-                                await new Promise((resolve, reject) => {
-                                    require('https').get(url, (response: any) => {
-                                        response.pipe(file);
-                                        file.on('finish', () => { file.close(); resolve(true); });
-                                    }).on('error', (e: any) => { fs.unlink(dest, ()=>{}); reject(e); });
-                                });
-                                return `Success! Texture downloaded to: ./assets/${assetId}.jpg`;
-                            }
-                            return "Error: Asset not found on PolyHaven. Try a different search term like 'wood' or 'metal'.";
-                        }
-                        return `Error: You requested '${assetType}', but only 'texture' is currently supported. Use primitive Three.js shapes and apply textures to them.`;
-                    } catch (e: any) { return `Asset Download Error: ${e.message}`; }
+
                 } else if (functionCall.name === 'execute_terminal_command') {
                     const cmd = functionCall.args?.command;
                     const explanation = functionCall.args?.explanation || 'AI requested terminal execution';
@@ -1950,16 +1898,7 @@ RULES FOR USING CONTEXT:
                 const doc = await vscode.workspace.openTextDocument(firstFile);
                 await vscode.window.showTextDocument(doc);
 
-                // Auto-launch Game Runner if an HTML file was generated/edited
-                if (firstFile.endsWith('.html') || fs.existsSync(path.join(workspaceRoot, 'index.html'))) {
-                    const gamePath = firstFile.endsWith('.html') ? firstFile : path.join(workspaceRoot, 'index.html');
-                    setTimeout(() => {
-                        try {
-                            const { GameRunnerPanel } = require('./gameRunnerPanel');
-                            GameRunnerPanel.createOrShow(this._extensionUri, gamePath, workspaceRoot);
-                        } catch(e) { console.error("Auto-launch GameRunner failed", e); }
-                    }, 800); // slight delay to let VS Code save/format
-                }
+
             }
 
             this.postMessageToWebview({

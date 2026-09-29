@@ -211,22 +211,6 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Play Game
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ultra-light-ai.playGame', async () => {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (workspaceFolders && workspaceFolders.length > 0) {
-                const workspaceRoot = workspaceFolders[0].uri.fsPath;
-                const gamePath = path.join(workspaceRoot, 'index.html');
-                if (fs.existsSync(gamePath)) {
-                    const { GameRunnerPanel } = require('./webview/gameRunnerPanel');
-                    GameRunnerPanel.createOrShow(context.extensionUri, gamePath, workspaceRoot);
-                } else {
-                    vscode.window.showErrorMessage('No index.html found in the workspace root to play!');
-                }
-            }
-        })
-    );
 
     // Command: New Chat
     context.subscriptions.push(

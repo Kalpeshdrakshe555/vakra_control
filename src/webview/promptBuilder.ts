@@ -12,22 +12,22 @@ export class PromptBuilder {
      * Builds the system instruction dynamically based on modes and project context.
      */
     public static buildSystemInstruction(
-        config: AgentConfig | null, 
-        workspaceRoot?: string, 
-        isAgentMode: boolean = false, 
+        config: AgentConfig | null,
+        workspaceRoot?: string,
+        isAgentMode: boolean = false,
         isArchitectMode: boolean = false,
         taskCategory: 'ui' | 'backend' | 'info' | 'general' = 'general',
         structuralRepoMap?: string
     ): string {
-        let systemInstruction = config?.systemInstructions || 
+        let systemInstruction = config?.systemInstructions ||
             'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks.';
-        
+
         systemInstruction = systemInstruction.replace(/Provide the complete code file content so it can be directly applied\.?/g, '').trim();
 
         if (structuralRepoMap && structuralRepoMap.trim().length > 0) {
             systemInstruction += `\n\n### WORKSPACE STRUCTURAL REPO MAP ###\nYou have direct structural awareness of the project files and signatures below. Use this map to know where classes, methods, and files live without making blind multi-file read calls:\n${structuralRepoMap}\n`;
         }
-        
+
         systemInstruction += `
 You are an expert debugger and 10x developer. Always think step-by-step before making changes.
 When modifying existing code, DO NOT rewrite the entire file unless asked. Use Search and Replace blocks to patch specific lines or functions.
@@ -35,11 +35,7 @@ Format the blocks exactly like this:
 
 **\`src/filepath.ext\`**
 \`\`\`language
-<<<<<<< SEARCH
-exact code to be replaced
-=======
 new updated code
->>>>>>> REPLACE
 \`\`\`
 
 CRITICAL ANCHOR RULES (MANDATORY FOR SEARCH/REPLACE):
@@ -59,17 +55,6 @@ Suppose you want to update a calculation function in \`src/pricing.ts\`:
 
 **\`src/pricing.ts\`**
 \`\`\`typescript
-<<<<<<< SEARCH
-// Calculate subtotal and tax
-export function calculateTotal(items: Item[]): number {
-    let total = 0;
-    for (const item of items) {
-        total += item.price;
-    }
-    return total;
-}
-export function formatCurrency(val: number): string {
-=======
 // Calculate subtotal and tax
 export function calculateTotal(items: Item[], discountPercent: number = 0): number {
     let total = 0;
@@ -79,7 +64,6 @@ export function calculateTotal(items: Item[], discountPercent: number = 0): numb
     return total * (1 - discountPercent / 100);
 }
 export function formatCurrency(val: number): string {
->>>>>>> REPLACE
 \`\`\`
 Notice how the top comment \`// Calculate subtotal and tax\` and the bottom function header \`export function formatCurrency(val: number): string {\` serve as exact structural anchors preserved in both SEARCH and REPLACE blocks.
 
@@ -95,7 +79,7 @@ ANTI-HALLUCINATION RULES:
 5. If you output your thought process (e.g., in <think> tags), keep it strictly as plain text without file headers or code blocks.
 6. When suggesting Terminal commands, ALWAYS wrap them in standard \`\`\`bash blocks.`;
 
-            systemInstruction += `\nIf the user provides a short 2-3 line request for a new feature or project, first analyze the context, create a step-by-step plan, and then execute it. 
+        systemInstruction += `\nIf the user provides a short 2-3 line request for a new feature or project, first analyze the context, create a step-by-step plan, and then execute it. 
 If the user provides a detailed plan with steps, acknowledge it and systematically execute their exact steps without deviating.
 When suggesting terminal commands, ALWAYS wrap them in \`\`\`bash code blocks so the user can execute them.`;
 
@@ -143,7 +127,7 @@ PROJECT NAMING RULE: When creating Django/Flask/Rails projects, the project fold
 
         if (isAgentMode) {
             systemInstruction += `\n[ARCHITECT MODE ACTIVE]: You are a senior software architect. Provide clear, step-by-step implementations.`;
-            
+
             if (workspaceRoot) {
                 const profile = ProjectScanner.getProfile(workspaceRoot);
                 if (profile && profile.framework) {
@@ -154,7 +138,7 @@ PROJECT NAMING RULE: When creating Django/Flask/Rails projects, the project fold
                 }
             }
         }
-        
+
         // Add Project-specific rules
         if (workspaceRoot) {
             const profile = ProjectScanner.getProfile(workspaceRoot);
@@ -169,13 +153,13 @@ PROJECT NAMING RULE: When creating Django/Flask/Rails projects, the project fold
 
             const agentRulesPath = path.join(workspaceRoot, '.agentrules');
             const cursorRulesPath = path.join(workspaceRoot, '.cursorrules');
-            
+
             if (fs.existsSync(agentRulesPath)) {
                 systemInstruction += `\n\n### PROJECT RULES ###\nYou MUST strictly follow these project rules defined by the user:\n${fs.readFileSync(agentRulesPath, 'utf8')}\n`;
             } else if (fs.existsSync(cursorRulesPath)) {
                 systemInstruction += `\n\n### PROJECT RULES ###\nYou MUST strictly follow these project rules defined by the user:\n${fs.readFileSync(cursorRulesPath, 'utf8')}\n`;
             }
-            
+
             const lastTerminalOutput = TerminalCapture.getLastOutput();
             if (lastTerminalOutput) {
                 systemInstruction += `\n\n### TERMINAL OUTPUT ###\nThe following is the output from the last executed command:\n<terminal_output>\n${lastTerminalOutput}\n</terminal_output>\nAnalyze this output to fix any errors.`;
