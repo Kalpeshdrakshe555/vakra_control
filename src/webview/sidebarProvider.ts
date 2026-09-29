@@ -1,4 +1,4 @@
-﻿import * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
@@ -22,12 +22,15 @@ import { TerminalCapture } from '../tools/terminalCapture';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { SessionMemory } from '../state/sessionMemory';
 import { SkillsManager } from '../features/skillsManager';
+import { ToolRegistry } from '../tools/toolRegistry';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private conversationHistory: ConversationHistory;
     private currentStreamAbortController: AbortController | null = null;
     private currentSeqOp: any = null; // Store reference to cancel Architect queue
+    private isTerminalSessionAutoApproved: boolean = false;
+    private pendingTerminalResolvers: Map<string, (result: string) => void> = new Map();
     private _onStartCb?: any;
     private _onResetCb?: any;
 
@@ -364,25 +367,84 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         vscode.window.showErrorMessage(`❌ No snapshots found for ${path.basename(fullPath)}`);
                     }
                 }
+            } else if (message.command === 'resolveTerminalApproval') {
+                const { callId, action, cmd } = message;
+                const finalCmd = (cmd || '').trim();
+                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || this._workspaceRoot || '';
+
+                if (action === 'always') {
+                    this.isTerminalSessionAutoApproved = true;
+                }
+
+                const resolver = this.pendingTerminalResolvers.get(callId);
+                if (resolver) {
+                    this.pendingTerminalResolvers.delete(callId);
+                    if (action === 'skip') {
+                        resolver(`[COMMAND SKIPPED BY USER]\nCommand: '${finalCmd}' was skipped. Please adjust your plan or ask the user how to proceed.`);
+                    } else {
+                        vscode.window.showInformationMessage(`Running: ${finalCmd}`);
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `⚡ Running: ${finalCmd}...`
+                        });
+                        TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
+                            this.postMessageToWebview({
+                                command: 'statusUpdate',
+                                text: res.error ? `⚠️ Command finished (Exit Code: ${res.exitCode})` : `✅ Command completed (Exit Code: 0)`
+                            });
+                            const outputFeedback = `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'} - Exit Code: ${res.exitCode}]\nCommand: \`${finalCmd}\`\nOutput:\n\`\`\`\n${res.output || '(No output)'}\n\`\`\`\nNext step: ${res.error ? 'Analyze this error traceback and provide the exact fix.' : 'If you just scaffolded a project or app, you MUST use list_directory_tree first to verify the disk layout before editing files.'}`;
+                            resolver(outputFeedback);
+                        });
+                    }
+                } else if (action !== 'skip' && finalCmd && workspaceRoot) {
+                    // Fallback execution if no promise was actively waiting
+                    TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
+                        const feedbackPrompt = res.error
+                            ? `[TERMINAL EXECUTION FAILED - Exit Code: ${res.exitCode}]\nCommand: \`${finalCmd}\`\nOutput:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze this error output, explain what caused the failure, and provide the exact fix.`
+                            : `[TERMINAL EXECUTION SUCCESS - Exit Code: 0]\nCommand: \`${finalCmd}\`\nOutput:\n\`\`\`\n${res.output || 'Done.'}\n\`\`\`\n\nNext Step: If you just scaffolded a project or app (e.g. startproject, startapp, create-*), you MUST use 'list_directory_tree' first to verify the exact on-disk directory layout before editing any files. Otherwise, proceed with the next planned step.`;
+                        this.postMessageToWebview({
+                            command: 'injectChatAndSend',
+                            text: feedbackPrompt
+                        });
+                    });
+                }
             } else if (message.command === 'runAndCapture') {
+                if (message.autoApproveSession) {
+                    this.isTerminalSessionAutoApproved = true;
+                }
                 const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
                 if (workspaceRoot && message.cmd) {
+                    const isDaemon = TerminalCapture.isDaemonCommand(message.cmd);
+                    if (isDaemon) {
+                        this.handleRunInTerminal(message.cmd);
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `🚀 Started dev server in terminal: ${message.cmd}`
+                        });
+                        const serverFeedback = `[DEV SERVER STARTED]\nCommand: \`${message.cmd}\` is running in the background terminal.\nPlease use 'check_localhost_health' to verify if the server is responding, and inform the user of the live URL.`;
+                        this.postMessageToWebview({
+                            command: 'injectChatAndSend',
+                            text: serverFeedback
+                        });
+                        return;
+                    }
+
                     vscode.window.showInformationMessage(`Running: ${message.cmd}`);
                     TerminalCapture.runAndCapture(message.cmd, workspaceRoot).then(res => {
                         this.postMessageToWebview({
                             command: 'statusUpdate',
                             text: res.error
                                 ? `⚠️ Command failed (Exit Code: ${res.exitCode}). AI is analyzing output...`
-                                : `✅ Command output captured. AI reading output...`
+                                : `✅ Command completed (Exit Code: 0). AI reading output...`
                         });
 
-                        const healingPrompt = res.error
-                            ? `I ran command \`${message.cmd}\` and it failed with exit code ${res.exitCode}.\n\nOutput:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze this error and provide a fix.`
-                            : `I executed \`${message.cmd}\`. Output:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze the output.`;
+                        const feedbackPrompt = res.error
+                            ? `[TERMINAL EXECUTION FAILED - Exit Code: ${res.exitCode}]\nCommand: \`${message.cmd}\`\nOutput:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze this error output, explain what caused the failure, and provide the exact fix.`
+                            : `[TERMINAL EXECUTION SUCCESS - Exit Code: 0]\nCommand: \`${message.cmd}\`\nOutput:\n\`\`\`\n${res.output || 'Done.'}\n\`\`\`\n\nNext Step: If you just scaffolded a project or app (e.g. startproject, startapp, create-*), you MUST use 'list_directory_tree' first to verify the exact on-disk directory layout before editing any files. Otherwise, proceed with the next planned step.`;
 
                         this.postMessageToWebview({
                             command: 'injectChatAndSend',
-                            text: healingPrompt
+                            text: feedbackPrompt
                         });
                     });
                 }
@@ -559,19 +621,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const workspaceFolders = vscode.workspace.workspaceFolders;
             if (workspaceFolders && workspaceFolders.length > 0) {
                 const config = require('../config').getAgentConfig(workspaceFolders[0].uri.fsPath);
-                if (config?.supportBrain?.model) {
+                const brain = config?.supportBrain?.model ? config.supportBrain : config?.mainBrain;
+                if (brain?.model) {
                     const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
                     let scoutClient;
-                    if (config.supportBrain.providerType === 'local') {
-                        scoutClient = new LocalOllamaClient(config.supportBrain.model || 'llama-3.1-8b-instant', config.supportBrain.endpoint || 'http://127.0.0.1:11434', config.supportBrain.apiKey);
+                    if (brain.providerType === 'local') {
+                        scoutClient = new LocalOllamaClient(brain.model || 'llama-3.1-8b-instant', brain.endpoint || 'http://127.0.0.1:11434', brain.apiKey);
                     } else {
-                        const keyStr = config.supportBrain.apiKey?.trim() || '';
-                        if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.groq.com/openai', keyStr);
-                        else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(config.supportBrain.model, 'https://api.openai.com', keyStr);
-                        else scoutClient = new GeminiCloudClient([keyStr], config.supportBrain.model || 'gemini-1.5-flash', 60);
+                        const keyStr = brain.apiKey?.trim() || '';
+                        if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(brain.model, 'https://api.groq.com/openai', keyStr);
+                        else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(brain.model, 'https://api.openai.com', keyStr);
+                        else scoutClient = new GeminiCloudClient([keyStr], brain.model || 'gemini-1.5-flash', 60);
                     }
                     
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🩺 Scout Healer: Attempting to fix broken SEARCH block in ${path.basename(filepath)}...` });
+                    this.postMessageToWebview({ command: 'statusUpdate', text: `🩺 Auto-Healer: Attempting to fix broken SEARCH block in ${path.basename(filepath)}...` });
                     
                     const healerPrompt = `The AI generated a SEARCH block to edit a file, but it doesn't match the file exactly.\n\nBroken SEARCH block:\n\`\`\`\n${searchStr}\n\`\`\`\n\nActual file content (first 200 lines):\n\`\`\`\n${fileText.split('\n').slice(0, 200).join('\n')}\n\`\`\`\n\nReturn ONLY the corrected SEARCH block that perfectly matches the actual file content. Do NOT include markdown fences, just the exact raw text lines that need to be replaced. Do not explain.`;
                     
@@ -870,6 +933,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     else mainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
                 }
             }
+            const configuredTemp = typeof config?.temperature === 'number' 
+                ? config.temperature 
+                : (typeof mainBrain?.temperature === 'number' ? mainBrain.temperature : 0.4);
+            if (mainClient) {
+                mainClient.temperature = configuredTemp;
+            }
             
             const client = mainClient;
 
@@ -978,7 +1047,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             this.currentStreamAbortController = new AbortController();
 
-            const tools = [
+            const tools: any[] = [
                 {
                     functionDeclarations: [
                         {
@@ -1054,6 +1123,64 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             };
             tools[0].functionDeclarations.push(executeTerminalTool);
+
+            // Essential Agent & Research Tools
+            tools[0].functionDeclarations.push(
+                {
+                    name: "research_web_docs",
+                    description: "Autonomous Deep Researcher: Gathers official live documentation, API references, and verified code patterns from the web. Strips noise and saves a full reference guide to .ultra-light-ai/research/<topic>.md while returning an executive summary.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            query: { type: "string", description: "The specific topic or library API to research, e.g. 'Next.js 15 Server Actions' or 'Tailwind v4 theme'" },
+                            urls: { type: "array", items: { type: "string" }, description: "Optional specific documentation URLs to scrape" }
+                        },
+                        required: ["query"]
+                    }
+                },
+                {
+                    name: "list_directory_tree",
+                    description: "Returns the workspace directory tree up to a given depth. Use this to understand the project structure without guessing file paths.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            dir: { type: "string", description: "Optional subfolder path relative to workspace root (defaults to root)" },
+                            depth: { type: "number", description: "Tree depth limit (default 2, max 4)" }
+                        }
+                    }
+                },
+                {
+                    name: "get_code_diagnostics",
+                    description: "Inspects active Language Server (LSP) compiler errors and red squiggles in a target file or workspace. Use this to verify your changes or inspect compilation issues without running terminal commands.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            filepath: { type: "string", description: "Target file path relative to workspace root (leave empty for workspace-wide errors)" }
+                        }
+                    }
+                },
+                {
+                    name: "get_symbol_outline",
+                    description: "Returns the AST outline of classes, methods, functions, and interfaces for a file without reading all lines. Saves tokens when exploring large files.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            filepath: { type: "string", description: "Target file path relative to workspace root" }
+                        },
+                        required: ["filepath"]
+                    }
+                },
+                {
+                    name: "check_localhost_health",
+                    description: "Pings a local dev server port (e.g. 3000, 5173, 8000, 8080) to verify if the server is running and responding.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            port: { type: "number", description: "Local port number (default 3000)" }
+                        }
+                    }
+                }
+            );
 
             if (message.includeWebSearch) {
                 const searchWebTool: any = {
@@ -1274,15 +1401,114 @@ ${JSON.stringify(assets, null, 2)}
                     }
 
                 } else if (functionCall.name === 'execute_terminal_command') {
-                    const cmd = functionCall.args?.command;
+                    const cmd = (functionCall.args?.command || '').trim();
                     const explanation = functionCall.args?.explanation || 'AI requested terminal execution';
+                    if (!cmd) return 'Error: No command provided to execute_terminal_command.';
+
+                    const isDaemon = TerminalCapture.isDaemonCommand(cmd);
+                    if (isDaemon) {
+                        this.handleRunInTerminal(cmd);
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `🚀 Background dev server started: ${cmd}`
+                        });
+                        return `[DEV SERVER STARTED]\nCommand '${cmd}' has been launched in the background terminal.\nYou can use 'check_localhost_health' to verify if the server is responding, and inform the user of the live URL.`;
+                    }
+
+                    if (this.isTerminalSessionAutoApproved) {
+                        this.postMessageToWebview({
+                            command: 'toolCallEvent',
+                            tool: 'execute_terminal_command',
+                            title: 'Terminal Command (Session Auto-Approved)',
+                            data: { command: cmd, explanation: explanation }
+                        });
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: `⚡ Auto-running: ${cmd}...`
+                        });
+                        const res = await TerminalCapture.runAndCapture(cmd, workspaceRoot || this._workspaceRoot || '');
+                        this.postMessageToWebview({
+                            command: 'statusUpdate',
+                            text: res.error ? `⚠️ Command finished (Exit Code: ${res.exitCode})` : `✅ Command completed (Exit Code: 0)`
+                        });
+                        return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'} - Exit Code: ${res.exitCode}]\nCommand: \`${cmd}\`\nOutput:\n\`\`\`\n${res.output || '(No output)'}\n\`\`\`\nNext step: ${res.error ? 'Analyze this error traceback and provide the exact fix.' : 'If you just scaffolded a project or app, use list_directory_tree to verify the disk layout before editing files.'}`;
+                    }
+
+                    // Interactive approval requested: post card to webview and await user response
+                    const callId = 'cmd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
                     this.postMessageToWebview({
                         command: 'toolCallEvent',
                         tool: 'execute_terminal_command',
                         title: 'Terminal Command Requested',
-                        data: { command: cmd, explanation: explanation }
+                        data: { command: cmd, explanation: explanation, callId: callId }
                     });
-                    return `Command '${cmd}' has been displayed to the user in the UI for review and execution.`;
+
+                    return await new Promise<string>((resolve) => {
+                        const timer = setTimeout(() => {
+                            if (this.pendingTerminalResolvers.has(callId)) {
+                                this.pendingTerminalResolvers.delete(callId);
+                                resolve(`[COMMAND TIMEOUT]\nTerminal command '${cmd}' execution timed out waiting for user confirmation.`);
+                            }
+                        }, 180000);
+
+                        this.pendingTerminalResolvers.set(callId, (result: string) => {
+                            clearTimeout(timer);
+                            resolve(result);
+                        });
+                    });
+
+                } else if (functionCall.name === 'research_web_docs') {
+                    const query = functionCall.args?.query || 'Documentation';
+                    const urls = functionCall.args?.urls || [];
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'research_web_docs',
+                        title: 'Deep Doc Research',
+                        data: { query: query }
+                    });
+                    const { researchWebDocs } = require('../tools/scraper');
+                    return await researchWebDocs(query, urls, workspaceRoot || '');
+
+                } else if (functionCall.name === 'list_directory_tree') {
+                    const dir = functionCall.args?.dir || '.';
+                    const depth = functionCall.args?.depth || 2;
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'list_directory_tree',
+                        title: 'Directory Tree',
+                        data: { dir: dir, depth: depth }
+                    });
+                    return await ToolRegistry.executeTool('list_directory_tree', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
+
+                } else if (functionCall.name === 'get_code_diagnostics') {
+                    const filepath = functionCall.args?.filepath;
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'get_code_diagnostics',
+                        title: 'LSP Compiler Diagnostics',
+                        data: { filepath: filepath || 'Workspace' }
+                    });
+                    return await ToolRegistry.executeTool('get_code_diagnostics', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
+
+                } else if (functionCall.name === 'get_symbol_outline') {
+                    const filepath = functionCall.args?.filepath;
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'get_symbol_outline',
+                        title: 'AST Symbol Outline',
+                        data: { filepath: filepath }
+                    });
+                    return await ToolRegistry.executeTool('get_symbol_outline', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
+
+                } else if (functionCall.name === 'check_localhost_health') {
+                    const port = functionCall.args?.port || 3000;
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'check_localhost_health',
+                        title: 'Checking Dev Server Health',
+                        data: { port: port }
+                    });
+                    return await ToolRegistry.executeTool('check_localhost_health', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
                 }
                 return `Unknown tool: ${functionCall.name}`;
             };
@@ -2013,32 +2239,20 @@ RULES FOR USING CONTEXT:
         
         const isScaffold = scaffoldPatterns.some(pattern => pattern.test(command));
 
-        if (isScaffold) {
-            this.postMessageToWebview({
-                command: 'streamChunk',
-                text: `\n\n> 🏗️ **PROJECT SCAFFOLD DETECTED**\n> The AI has prepared a setup command:\n> \`\`\`bash\n> ${command}\n> \`\`\`\n> *⚠️ Command placed in terminal. Press Enter in terminal to execute it. Once it finishes, reply "done" to let the AI continue coding.*`,
-                done: false
-            });
-            vscode.window.showWarningMessage('🏗️ Scaffold Command Detected. Please run it in the terminal, wait for it to finish, and then reply to AI.');
-        } else {
-            // Action Block UI Interceptor added
-            this.postMessageToWebview({
-                command: 'streamChunk',
-                text: `\n\n> 🤖 **AI Wants to Execute:**\n> \`\`\`bash\n> ${command}\n> \`\`\`\n> *Command placed in terminal. Review and press Enter to execute.*`,
-                done: false
-            });
-        }
+        this.postMessageToWebview({
+            command: 'statusUpdate',
+            text: isScaffold ? `🏗️ Scaffold command placed in terminal.` : `⚡ Running command: ${command.length > 60 ? command.substring(0, 57) + '...' : command}`
+        });
         
         let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI');
         if (!terminal) {
             terminal = vscode.window.createTerminal('Ultra Light AI');
         }
         terminal.show();
-        // Set addNewLine to false so the user can edit the command before hitting enter
         // BUG FIX: Join multiline commands with '&&' so they don't break when stripped of newlines
         const safeCommand = command.trim().split(/\r?\n/).filter(line => line.trim().length > 0).join(' && ');
-        terminal.sendText(safeCommand, false);
-        vscode.window.showInformationMessage('Command placed in terminal. Edit it if needed, then press Enter.');
+        terminal.sendText(safeCommand, true);
+        vscode.window.showInformationMessage('Command executed in terminal.');
     }
 
     /**

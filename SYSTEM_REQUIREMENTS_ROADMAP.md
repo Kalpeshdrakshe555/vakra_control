@@ -58,6 +58,62 @@ Yeh document humare project ke saare active core issues, architecture improvemen
 
 ---
 
+## 🚨 Evening Sprint: Immediate Fixes for Reported Bugs [ACTIVE 🔴]
+
+### Issue 1: Raw HTML Tag Leak in Chat Body — [VERIFIED ✅]
+- **Status**: Fixed via DOM Placeholder Pipeline (`renderMarkdownWithCustomWidgets`). Markdown parsing is completely isolated from custom widgets, preventing raw tags from escaping.
+
+### Issue 2: Blind Hallucinated File Reads Without Prior Planning — [VERIFIED ✅]
+- **Status**: Fixed. Prompt enforces directory verification before any file reads, forbidding made-up paths.
+
+### Issue 3: Missing Human Communication / Intent Transparency — [VERIFIED ✅]
+- **Status**: Fixed. Intent transparency rule requires model to state its reason in 1-2 conversational sentences before calling tools.
+
+### Issue 4: Word-by-Word Streaming Stalled / Not Progressively Visible — [VERIFIED ✅]
+- **Status**: Fixed. Continuous streaming (`stream: stream`) enabled across all tool iterations in `LocalOllamaClient` and `GeminiCloudClient`.
+
+### Issue 5: Architect Mode Premature Code Dumping & Scaffold Desynchronization — [VERIFIED ✅]
+- **Status**: Fixed. Implemented Turn 1 Hard Stop (Scaffolding only in Turn 1, no application code files until scaffolding is confirmed).
+
+### Issue 6: UI Markdown Tag Collisions & Stray "COPY" Injections — [VERIFIED ✅]
+- **Status**: Fixed. Injected custom widgets after markdown parsing; prevented copy button injection into thinking accordion and drawer payloads.
+
+### Issue 7: Tri-Choice Terminal Permission UX (Frictionless Automation) — [VERIFIED ✅]
+- **Status**: Fixed. Interactive Tri-Choice card (`Allow for Now`, `Skip`, `Allow All for Session`) with `⚡ Apply Selection` button.
+
+### Issue 8: Closed-Loop Execution (Verify & Execute — Anti-Blind Loop) — [VERIFIED ✅]
+- **Status**: Fixed & Fully Closed-Loop.
+  - Interactive Tri-Choice card emits with unique `callId`; pauses tool execution using an asynchronous `Promise`.
+  - When user selects `Allow for Now`, `Skip`, or `Allow All for Session`, `resolveTerminalApproval` executes via `TerminalCapture.runAndCapture`, formats exit code + last 15 lines of stdout/stderr, and resolves the tool promise directly into the LLM context.
+  - In `LocalOllamaClient` and `GeminiCloudClient`, added `extractTextToolCalls` parser to intercept and execute text-formatted tool calls like `search_web(...)` and `execute_terminal_command(...)`, eliminating plaintext tool command leakage.
+  - Enabled **Single Brain Auto-Healer**: When `supportBrain` is absent, `mainBrain` automatically kicks in to repair slightly mismatched SEARCH blocks.
+  - Updated `extractFiles` in `ui.html` and 1-shot SEARCH/REPLACE prompt in `promptBuilder.ts` with explicit `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` syntax.
+
+### Issue 9: Interactive Architectural Discovery (Clarification Questions First)
+- **Problem**: Complex project request aate hi model direct blind assumptions le kar blueprint banane lagta hai, jisse wrong libraries ya unwanted templates generate ho jaate hain.
+- **Solution Architecture**:
+  - Architect Mode me model blueprint se pehle 2-3 focused clarification questions puchega (e.g. Database preference, authentication type, styling framework).
+  - User ke answers confirm hone ke baad hi step-by-step verified development plan shuru karega.
+
+### Issue 10: Dynamic Temperature & Behavior Controls in Settings
+- **Problem**: Model ka temperature `realClients.ts` me `0.7` hardcoded hai. Coding aur search/replace diffs ke liye ye bohot high hai, jisse hallucination aur anchor mismatch hota hai.
+- **Solution Architecture**:
+  - Extension settings panel me interactive **Temperature Slider (`0.0` se `1.0`)** aur **Behavior Presets Dropdown**:
+    - `🎯 Strict Coder (0.1)`: Bug fixes, Search/Replace diffs, deterministic syntax (Zero hallucinations).
+    - `⚖️ Balanced Assistant (0.4)`: General explanations, refactoring, Q&A.
+    - `🎨 Creative Architect (0.7)`: UI design, naming ideas, architectural brainstorming.
+  - Value `config.json` me save hogi aur direct LLM API request payload me pass hogi.
+
+### Issue 11: Experiential Memory & Self-Learning Agent Loop (Hermes-Style Reflection)
+- **Problem**: Har naye session me model blank rehta hai aur wahi puraane mistakes ya wrong library versions dohrata hai jo user pehle bhi theek kar chuka hota hai.
+- **Solution Architecture**:
+  - **Self-Correction & Lesson Extractor**: Jab bhi user model ko correct kare ya error solve ho, model background me ek concise lesson extract karega:
+    `Mistake -> Solution / Project Convention`.
+  - **Persistent Local Vault**: Lessons `.ultra-light-ai/memory/learned_lessons.md` me structured format me save honge.
+  - **Dynamic Context Injection**: Agle sessions me user prompt ke matching keywords detect karke relevant lessons `promptBuilder.ts` ke through inject honge taaki model kabhi wahi galti dobara na kare.
+
+---
+
 ## 📌 Phase 2: Autonomous Researcher Sub-Agent & Essential Tools Suite
 
 ### 4. Deep Doc Researcher Sub-Agent (`research_web_docs`) — [VERIFIED ✅]
@@ -88,7 +144,7 @@ Top-tier coding agents ki tarah main agent ke context aur execution power ko com
 
 ## 📌 Phase 3: Core Architecture & Accuracy Engine
 
-### 6. Speculative Refiner Pipeline (4B Local Draft + 31B Cloud Scout Validator) — [VERIFIED ✅]
+### 6. Speculative Refiner Pipeline (4B Local Draft + 31B Cloud Scout Validator) — [ACTIVE 🔴]
 - **Goal**: Unlimited daily development usage with high accuracy and zero API quota exhaustion.
 - **Workflow**:
   - **Draft Execution (4B Local Model)**: Local model free me initial code files aur diffs generate karta hai.
@@ -97,7 +153,7 @@ Top-tier coding agents ki tarah main agent ke context aur execution power ko com
     - Exact `SEARCH/REPLACE` anchors align karta hai taaki diff patch 100% succeed ho.
   - **Budget Safe**: Har edit par sirf 400-800 tokens consume honge (14k RPD / 16k TPS limit me safe).
 
-### 7. Next-Gen Codebase Relationship Map (AST Call Hierarchy Graph) — [VERIFIED ✅]
+### 7. Next-Gen Codebase Relationship Map (AST Call Hierarchy Graph) — [ACTIVE 🔴]
 - **Goal**: Heavy full-file reading ke bajay lightweight AST Symbol Graph banana taaki cross-file relations model ko instantly milein.
 - **Action Items**:
   - Background indexing me Class, Interface, Function signatures aur Import/Export call graph store karna.
@@ -107,27 +163,30 @@ Top-tier coding agents ki tarah main agent ke context aur execution power ko com
 
 ## 📌 Phase 4: Extensibility, Custom Skills & MCP Ecosystem
 
-### 8. Custom Agent Skills System (Claude Skills-Style Workflows) — [VERIFIED ✅]
+### 8. Custom Agent Skills System (Claude Skills-Style Workflows) — [FOUNDATION VERIFIED ✅]
 - **Goal**: User apne custom coding workflows aur domain-specific rules create kar sake.
 - **Architecture**:
   - Directory: `.ultra-light-ai/skills/<skill-name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `trigger_rules`).
   - Tech stack ya keywords match hone par on-demand load hoga (Zero token waste).
+  - Default `code-reviewer` skill shipped under `.ultra-light-ai/skills/code-reviewer/SKILL.md`.
 
-### 9. Model Context Protocol (MCP) Standard Client Integration — [VERIFIED ✅]
+### 9. Model Context Protocol (MCP) Standard Client Integration — [PLANNED 🟡]
 - **Goal**: Anthropic open-source MCP protocol ke through local/remote MCP servers (SQLite, GitHub, PostgreSQL, Filesystem, Puppeteer) se connect hona.
 - **Config**: `.ultra-light-ai/mcp_config.json`.
+- **Status**: Config loader ready, MCP StdioClient transport integration pending.
 
-### 10. Extensible Plugin & Tooling Architecture — [VERIFIED ✅]
+### 10. Extensible Plugin & Tooling Architecture — [PLANNED 🟡]
 - **Goal**: Third-party plugins (Gmail, Slack, Jira, Custom APIs) `.ultra-light-ai/plugins/` directory se auto-load hona.
 
 ---
 
 ## 🎯 Implementation Priority Order
-1. **Milestone 1 (UI Top Priority)**: Summary-First Streaming & Clean File Edit Cards (Hide Raw Code Clutter)
-2. **Milestone 2 (Terminal)**: Reliable Terminal Execution Bridge & Self-Healing Loop
-3. **Milestone 3 (UI Polish)**: Premium Glassmorphic Aesthetics & Hidden UI Bug Fixes
-4. **Milestone 4 (Intelligence)**: Autonomous Doc Researcher Sub-Agent (Dual-Brain Scout/Primary)
-5. **Milestone 5 (Tools)**: Essential Agent Tools Suite (`list_directory_tree`, `get_code_diagnostics`, `get_symbol_outline`, `check_localhost_health`)
-6. **Milestone 6 (Refiner)**: Speculative Refiner Pipeline (4B Local + 31B Scout Validator)
-7. **Milestone 7 (Code Graph)**: Next-Gen Codebase Relationship Map (AST Call Hierarchy)
-8. **Milestone 8 (Extensibility)**: Custom Skills Engine, MCP Protocol & Plugin Integrations
+1. **Milestone 1 (UI Top Priority)**: Summary-First Streaming & Clean File Edit Cards — [COMPLETED & VERIFIED ✅]
+2. **Milestone 2 (Terminal)**: Reliable Terminal Execution Bridge & Self-Healing Loop — [COMPLETED & VERIFIED ✅]
+3. **Milestone 3 (UI Polish)**: Premium Glassmorphic Aesthetics & Hidden UI Bug Fixes — [COMPLETED & VERIFIED ✅]
+4. **Milestone 4 (Intelligence)**: Autonomous Doc Researcher Sub-Agent (`research_web_docs`) — [COMPLETED & VERIFIED ✅]
+5. **Milestone 5 (Tools)**: Essential Agent Tools Suite (`list_directory_tree`, `get_code_diagnostics`, `get_symbol_outline`, `check_localhost_health`) — [COMPLETED & VERIFIED ✅]
+6. **Milestone 6 (Skills)**: Custom Skills Engine (`.ultra-light-ai/skills/`) — [COMPLETED & VERIFIED ✅]
+7. **Milestone 7 (Refiner)**: Speculative Refiner Pipeline (4B Local + 31B Scout Validator) — [NEXT 🔴]
+8. **Milestone 8 (Code Graph)**: Next-Gen Codebase Relationship Map (AST Call Hierarchy) — [NEXT 🔴]
+9. **Milestone 9 (Extensibility)**: Full MCP Stdio Protocol Client Integration — [NEXT 🔴]

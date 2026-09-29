@@ -18,6 +18,10 @@ export class TerminalCapture {
     }
     private static lastOutput: string = '';
 
+    public static isDaemonCommand(command: string): boolean {
+        return /\b(runserver|vite|npm\s+run\s+dev|npm\s+start|yarn\s+dev|yarn\s+start|pnpm\s+dev|watch|serve|flask\s+run)\b/i.test(command.trim());
+    }
+
     public static async runAndCapture(command: string, workspaceRoot: string): Promise<TerminalExecutionResult> {
         this.outputChannel.show(true);
         this.outputChannel.appendLine(`\n> ${command}`);
@@ -25,7 +29,7 @@ export class TerminalCapture {
         return new Promise((resolve) => {
             const shell = os.platform() === 'win32' ? 'powershell.exe' : '/bin/bash';
             
-            cp.exec(command, { cwd: workspaceRoot, maxBuffer: 1024 * 1024, shell }, (error, stdout, stderr) => {
+            cp.exec(command, { cwd: workspaceRoot, maxBuffer: 1024 * 1024, timeout: 45000, shell }, (error, stdout, stderr) => {
                 let fullOutput = '';
                 let exitCode = 0;
                 let isError = false;
@@ -45,16 +49,16 @@ export class TerminalCapture {
                     this.outputChannel.appendLine(`Exit Code: ${exitCode}`);
                 }
 
-                // Keep only last 100 lines
-                const lines = fullOutput.trim().split('\n');
-                let truncatedOutput = '';
-                if (lines.length > 50) {
-                    truncatedOutput = '... (output truncated) ...\n' + lines.slice(-50).join('\n');
+                // Extract last 15 lines for concise, high-signal AI feedback
+                const lines = fullOutput.trim().split('\n').filter(l => l.trim().length > 0);
+                let conciseOutput = '';
+                if (lines.length > 15) {
+                    conciseOutput = lines.slice(-15).join('\n');
                 } else {
-                    truncatedOutput = fullOutput.trim();
+                    conciseOutput = fullOutput.trim();
                 }
 
-                this.lastOutput = truncatedOutput;
+                this.lastOutput = conciseOutput;
                 resolve({ output: this.lastOutput, exitCode, error: isError });
             });
         });

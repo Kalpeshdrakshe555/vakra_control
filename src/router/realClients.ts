@@ -1,5 +1,77 @@
 import { IEngine, CompletionResult, StreamChunk } from './IEngine';
 
+/**
+ * Fallback parser for models that emit tool calls in plain text syntax (e.g. search_web(query="..."), <tool_call>...).
+ */
+function extractTextToolCalls(text: string): Array<{ name: string; args: any; raw: string }> {
+    const results: Array<{ name: string; args: any; raw: string }> = [];
+    if (!text || typeof text !== 'string') return results;
+
+    // Pattern 1: Function call syntax: e.g. search_web(query="...") or execute_terminal_command(command="...")
+    const funcRegex = /\b(search_web|research_web_docs|execute_terminal_command|list_directory_tree|read_multiple_files|get_code_diagnostics|get_symbol_outline|check_localhost_health)\s*\(([\s\S]*?)\)/g;
+    let match;
+    while ((match = funcRegex.exec(text)) !== null) {
+        const toolName = match[1];
+        const rawArgs = match[2].trim();
+        let parsedArgs: any = {};
+
+        // Case A: JSON object inside parentheses, e.g. search_web({"query": "foo"})
+        if (rawArgs.startsWith('{') && rawArgs.endsWith('}')) {
+            try {
+                parsedArgs = JSON.parse(rawArgs);
+            } catch {}
+        }
+
+        // Case B: keyword arguments: query="foo", command="bar"
+        if (Object.keys(parsedArgs).length === 0 && rawArgs.length > 0) {
+            const kwRegex = /([a-zA-Z_0-9]+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\d+)|(\[[^\]]*\]))/g;
+            let kwMatch;
+            let foundKw = false;
+            while ((kwMatch = kwRegex.exec(rawArgs)) !== null) {
+                foundKw = true;
+                const paramName = kwMatch[1];
+                const strVal = kwMatch[2] !== undefined ? kwMatch[2] : kwMatch[3];
+                const numVal = kwMatch[4];
+                const arrVal = kwMatch[5];
+                if (strVal !== undefined) {
+                    parsedArgs[paramName] = strVal.replace(/\\"/g, '"').replace(/\\'/g, "'");
+                } else if (numVal !== undefined) {
+                    parsedArgs[paramName] = Number(numVal);
+                } else if (arrVal !== undefined) {
+                    try { parsedArgs[paramName] = JSON.parse(arrVal.replace(/'/g, '"')); } catch { parsedArgs[paramName] = arrVal; }
+                }
+            }
+            // Case C: Single string argument without parameter name: search_web("foo")
+            if (!foundKw) {
+                const singleStrMatch = rawArgs.match(/^["']([\s\S]*?)["']$/);
+                if (singleStrMatch) {
+                    if (toolName === 'search_web' || toolName === 'research_web_docs') parsedArgs = { query: singleStrMatch[1] };
+                    else if (toolName === 'execute_terminal_command') parsedArgs = { command: singleStrMatch[1] };
+                    else if (toolName === 'list_directory_tree') parsedArgs = { dir: singleStrMatch[1] };
+                    else if (toolName === 'get_code_diagnostics' || toolName === 'get_symbol_outline') parsedArgs = { filepath: singleStrMatch[1] };
+                }
+            }
+        }
+
+        if (toolName && Object.keys(parsedArgs).length > 0) {
+            results.push({ name: toolName, args: parsedArgs, raw: match[0] });
+        }
+    }
+
+    // Pattern 2: XML <tool_call>...</tool_call>
+    const xmlRegex = /<tool_call>([\s\S]*?)<\/tool_call>/g;
+    while ((match = xmlRegex.exec(text)) !== null) {
+        try {
+            const parsed = JSON.parse(match[1].trim());
+            if (parsed.name) {
+                results.push({ name: parsed.name, args: parsed.arguments || parsed.args || {}, raw: match[0] });
+            }
+        } catch {}
+    }
+
+    return results;
+}
+
 export class GeminiCloudClient implements IEngine {
     public readonly name = 'Cloud-Gemini';
     private currentKeyIndex = 0;
@@ -8,11 +80,14 @@ export class GeminiCloudClient implements IEngine {
     private timeoutMs: number;
     private maxTokens: number;
 
-    constructor(keys: string[], model: string, timeoutMs: number = 30000, maxTokens: number = 8000) {
+    public temperature: number = 0.4;
+
+    constructor(keys: string[], model: string, timeoutMs: number = 30000, maxTokens: number = 8000, temperature: number = 0.4) {
         this.keys = keys || [];
         this.model = model;
         this.timeoutMs = timeoutMs;
         this.maxTokens = maxTokens;
+        this.temperature = temperature;
     }
 
     /**
@@ -268,7 +343,7 @@ export class GeminiCloudClient implements IEngine {
                     parts: [{ text: systemInstruction }]
                 },
                 generationConfig: {
-                    temperature: 0.7,
+                    temperature: this.temperature,
                     topP: 0.95,
                     topK: 40,
                     maxOutputTokens: this.maxTokens
@@ -396,6 +471,13 @@ export class GeminiCloudClient implements IEngine {
                 throw new Error("All provided API keys have been exhausted or rate-limited.");
             }
 
+            if (!functionCallToExecute && onToolCall) {
+                const textCalls = extractTextToolCalls(fullText);
+                if (textCalls.length > 0) {
+                    functionCallToExecute = { name: textCalls[0].name, args: textCalls[0].args };
+                }
+            }
+
             if (functionCallToExecute && onToolCall) {
                 // Execute the tool locally
                 if (onChunk) onChunk({ text: `\n> *⚙️ AI is using tool: \`${functionCallToExecute.name}\`*\n`, done: false });
@@ -438,8 +520,11 @@ export class GeminiCloudClient implements IEngine {
  */
 export class LocalOllamaClient implements IEngine {
     public readonly name = 'Local-Model';
+    public temperature: number = 0.4;
 
-    constructor(private model: string = 'llama3', private endpoint: string = 'http://127.0.0.1:11434', private apiKey?: string) {}
+    constructor(private model: string = 'llama3', private endpoint: string = 'http://127.0.0.1:11434', private apiKey?: string, temperature: number = 0.4) {
+        this.temperature = temperature;
+    }
 
     public async complete(prompt: string): Promise<CompletionResult> {
         return this.completeWithHistory('', [], prompt);
@@ -493,7 +578,8 @@ export class LocalOllamaClient implements IEngine {
             const requestBody: any = {
                 model: this.model,
                 messages: messages,
-                stream: (iteration === 0 || !onToolCall) ? stream : false // Only stream the final response
+                stream: stream,
+                temperature: this.temperature
             };
 
             // Only add tools on non-streaming or tool-loop iterations
@@ -586,6 +672,18 @@ export class LocalOllamaClient implements IEngine {
                     } catch (e) { console.error("Local stream buffer parse error", e); }
                 }
 
+                // If no structured tool calls were streamed, check for text-based tool calls in fullText
+                if (toolCallsAccumulator.length === 0 && onToolCall) {
+                    const textCalls = extractTextToolCalls(fullText);
+                    if (textCalls.length > 0) {
+                        toolCallsAccumulator = textCalls.map((tc, i) => ({
+                            id: `call_text_${i}`,
+                            name: tc.name,
+                            arguments: JSON.stringify(tc.args)
+                        }));
+                    }
+                }
+
                 // If tool calls were streamed, handle them
                 if (toolCallsAccumulator.length > 0 && onToolCall) {
                     messages.push({ role: 'assistant', content: null, tool_calls: toolCallsAccumulator.map((tc, i) => ({ id: tc.id || `call_${i}`, type: 'function', function: { name: tc.name, arguments: tc.arguments } })) });
@@ -620,10 +718,19 @@ export class LocalOllamaClient implements IEngine {
                         const data = JSON.parse(rawText);
                         const choice = data.choices?.[0];
                         
-                        // Check if the model wants to call tools
-                        if (choice?.finish_reason === 'tool_calls' || choice?.message?.tool_calls) {
-                            const toolCalls = choice.message.tool_calls;
-                            if (toolCalls && toolCalls.length > 0 && onToolCall) {
+                        // Check if the model wants to call tools (or fallback to text-based tool calls)
+                        let toolCalls = choice?.message?.tool_calls;
+                        if ((!toolCalls || toolCalls.length === 0) && onToolCall) {
+                            const textCalls = extractTextToolCalls(choice?.message?.content || fullText);
+                            if (textCalls.length > 0) {
+                                toolCalls = textCalls.map((tc, i) => ({
+                                    id: `call_text_${i}`,
+                                    type: 'function',
+                                    function: { name: tc.name, arguments: JSON.stringify(tc.args) }
+                                }));
+                            }
+                        }
+                        if (toolCalls && toolCalls.length > 0 && onToolCall) {
                                 // Add the assistant's tool call message to history
                                 messages.push(choice.message);
                                 
@@ -648,7 +755,6 @@ export class LocalOllamaClient implements IEngine {
                                 }
                                 continue; // Loop back for next API call with tool results
                             }
-                        }
                         
                         fullText = choice?.message?.content || '';
                     }

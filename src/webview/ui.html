@@ -104,6 +104,22 @@
         .thinking-accordion[open] .thinking-arrow {
             transform: rotate(180deg);
         }
+        /* Inline File Prepared / Streaming Chip */
+        .inline-file-chip {
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(20, 28, 45, 0.9));
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+            transition: all 0.2s ease;
+        }
+        .inline-file-chip:hover {
+            border-color: rgba(56, 189, 248, 0.5);
+            box-shadow: 0 4px 14px rgba(56, 189, 248, 0.15);
+        }
         /* Changed Files Artifact Card */
         .file-change-card {
             background: linear-gradient(135deg, rgba(20, 28, 45, 0.95), rgba(15, 23, 42, 0.98));
@@ -441,6 +457,32 @@
                 </div>
             </div>
 
+            <!-- Temperature & Behavior Control -->
+            <div class="p-3 bg-black/20 border border-cyber-neonCyan/20 rounded-xl space-y-3 mt-4">
+                <div class="flex items-center justify-between border-b border-cyber-neonCyan/20 pb-1 mb-2">
+                    <h3 class="text-cyber-neonCyan text-[10px] uppercase font-bold tracking-widest">🎛️ Model Temperature & Behavior</h3>
+                    <span id="temp-display-badge" class="text-[10px] font-mono font-bold text-cyber-neonCyan bg-cyan-950/60 border border-cyan-500/30 px-2 py-0.5 rounded">0.4 (Balanced)</span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="space-y-1.5">
+                        <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Behavior Preset</label>
+                        <select id="setting-behavior-preset" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 cursor-pointer shadow-sm text-xs">
+                            <option value="0.1" class="bg-cyber-panel text-white">🎯 Strict Coder (0.1 - Bug fixes & exact diffs)</option>
+                            <option value="0.4" selected class="bg-cyber-panel text-white">⚖️ Balanced Assistant (0.4 - Recommended)</option>
+                            <option value="0.7" class="bg-cyber-panel text-white">🎨 Creative Architect (0.7 - UI & Brainstorming)</option>
+                            <option value="custom" class="bg-cyber-panel text-white">🛠️ Custom Slider</option>
+                        </select>
+                    </div>
+                    <div class="space-y-1.5">
+                        <div class="flex justify-between items-center">
+                            <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Temperature</label>
+                            <span id="temp-slider-val" class="text-[10px] font-mono text-cyan-300">0.4</span>
+                        </div>
+                        <input type="range" id="setting-temperature" min="0.0" max="1.0" step="0.05" value="0.4" class="w-full accent-cyan-400 cursor-pointer">
+                    </div>
+                </div>
+            </div>
+
             <!-- Timeout & Instructions -->
             <div class="grid grid-cols-2 gap-3 mt-4">
                 <div class="space-y-1.5">
@@ -578,6 +620,7 @@
         const openRawConfigLink = document.getElementById('open-raw-config-link');
         
         let thinkingBubble = null;
+        let sessionAutoApproveTerminal = false;
         
         const modeSelectDropdown = document.getElementById('mode-select');
         const includeWebSearchCheckbox = document.getElementById('include-web-search');
@@ -602,9 +645,11 @@
             return `<pre><code class="hljs ${lang || ''}">${highlighted}</code></pre>`;
         };
 
-        // BUG FIX: Prevent AI from injecting raw HTML/CSS and breaking the Extension UI
-        renderer.html = function(html) {
-            return escapeHtml(html);
+        // Custom widgets are injected via placeholder tokens after markdown parsing;
+        // any untrusted raw HTML is escaped cleanly.
+        renderer.html = function(htmlObj) {
+            const raw = (typeof htmlObj === 'object' && htmlObj !== null) ? (htmlObj.text || '') : String(htmlObj || '');
+            return escapeHtml(raw);
         };
 
         marked.setOptions({
@@ -663,6 +708,48 @@
             }
         });
 
+        const tempSlider = document.getElementById('setting-temperature');
+        const tempValLabel = document.getElementById('temp-slider-val');
+        const tempBadge = document.getElementById('temp-display-badge');
+        const tempPreset = document.getElementById('setting-behavior-preset');
+
+        function updateTempDisplay(val) {
+            const num = parseFloat(val);
+            if (tempValLabel) tempValLabel.innerText = num.toFixed(2);
+            if (tempSlider) tempSlider.value = num;
+
+            if (tempBadge) {
+                if (num <= 0.2) {
+                    tempBadge.innerText = `${num.toFixed(2)} (Strict Coder)`;
+                    tempBadge.className = 'text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded';
+                } else if (num <= 0.5) {
+                    tempBadge.innerText = `${num.toFixed(2)} (Balanced)`;
+                    tempBadge.className = 'text-[10px] font-mono font-bold text-cyber-neonCyan bg-cyan-950/60 border border-cyan-500/30 px-2 py-0.5 rounded';
+                } else {
+                    tempBadge.innerText = `${num.toFixed(2)} (Creative)`;
+                    tempBadge.className = 'text-[10px] font-mono font-bold text-pink-400 bg-pink-950/60 border border-pink-500/30 px-2 py-0.5 rounded';
+                }
+            }
+        }
+
+        if (tempSlider && tempPreset) {
+            tempSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                updateTempDisplay(val);
+                if (val === 0.1) tempPreset.value = '0.1';
+                else if (val === 0.4) tempPreset.value = '0.4';
+                else if (val === 0.7) tempPreset.value = '0.7';
+                else tempPreset.value = 'custom';
+            });
+
+            tempPreset.addEventListener('change', (e) => {
+                const val = e.target.value;
+                if (val !== 'custom') {
+                    updateTempDisplay(parseFloat(val));
+                }
+            });
+        }
+
         // Submit Settings Form
         settingsForm.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -680,6 +767,7 @@
                     apiKey: document.getElementById('support-apiKey').value.trim(),
                     endpoint: document.getElementById('support-endpoint').value.trim()
                 },
+                temperature: parseFloat(tempSlider ? tempSlider.value : 0.4) || 0.4,
                 timeoutSeconds: parseInt(document.getElementById('setting-timeout').value, 10) || 60,
                 systemInstructions: document.getElementById('setting-instructions').value.trim(),
                 maxOutputTokens: parseInt(document.getElementById('setting-maxOutputTokens').value, 10) || 8192,
@@ -759,6 +847,15 @@
             }
 
             // Shared Settings
+            const temp = typeof config.temperature === 'number' ? config.temperature : (typeof config.mainBrain?.temperature === 'number' ? config.mainBrain.temperature : 0.4);
+            updateTempDisplay(temp);
+            if (tempPreset) {
+                if (Math.abs(temp - 0.1) < 0.01) tempPreset.value = '0.1';
+                else if (Math.abs(temp - 0.4) < 0.01) tempPreset.value = '0.4';
+                else if (Math.abs(temp - 0.7) < 0.01) tempPreset.value = '0.7';
+                else tempPreset.value = 'custom';
+            }
+
             document.getElementById('setting-timeout').value = config.providers?.cloud?.timeoutSeconds || config.timeoutSeconds || 60;
             document.getElementById('setting-instructions').value = config.systemInstructions || '';
             document.getElementById('setting-maxOutputTokens').value = config.contextLimits?.maxOutputTokens || config.maxTokens || 8192;
@@ -1056,6 +1153,20 @@
                         }
                         currentFilepath = null;
                     }
+                // Fallback for raw SEARCH/REPLACE blocks emitted without markdown code fences
+                if (text.includes('<<<<<<< SEARCH') && text.includes('>>>>>>> REPLACE')) {
+                    const rawSearchRegex = /(?:\*\*\`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\`?\*\*|File:\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+))?[\s\S]*?(<<<<<<<\s*SEARCH[\s\S]*?>>>>>>>\s*REPLACE)/g;
+                    let rawMatch;
+                    while ((rawMatch = rawSearchRegex.exec(text)) !== null) {
+                        const matchedPath = rawMatch[1] || rawMatch[2];
+                        const searchBlock = rawMatch[3];
+                        if (searchBlock && !files.some(f => f.content.includes(searchBlock))) {
+                            files.push({
+                                filepath: matchedPath || `active_file_${files.length + 1}.txt`,
+                                content: searchBlock
+                            });
+                        }
+                    }
                 }
             } catch (err) {
                 console.error("Error extracting files:", err);
@@ -1063,58 +1174,69 @@
             return files;
         }
 
-        function renderThinkingAccordion(rawText, isStreaming = false) {
+        function renderMarkdownWithCustomWidgets(rawText, isStreaming = false) {
+            const widgetMap = new Map();
+            let widgetCounter = 0;
+
             let processed = rawText;
-            
-            // Match completed <think>...</think> blocks
+
+            // 1. Process completed <think>...</think> blocks
             const completedThinkRegex = /<think>([\s\S]*?)<\/think>/gi;
             processed = processed.replace(completedThinkRegex, (match, thinkContent) => {
                 const cleanContent = escapeHtml(thinkContent.trim());
                 if (!cleanContent) return '';
-                return `
-                    <details class="thinking-accordion my-2">
-                        <summary>
-                            <span class="flex items-center gap-1.5 text-cyan-400">
-                                <span>🧠</span>
-                                <span>Thinking Process</span>
-                            </span>
-                            <svg class="thinking-arrow w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
-                            </svg>
-                        </summary>
-                        <div class="thinking-content">${cleanContent}</div>
-                    </details>
-                `;
+                const placeholder = `%%VAKRA_THINK_${widgetCounter++}%%`;
+                const widgetHtml = `<details class="thinking-accordion my-2"><summary><span class="flex items-center gap-1.5 text-cyan-400"><span>🧠</span><span>Thinking Process</span></span><svg class="thinking-arrow w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg></summary><div class="thinking-content">${cleanContent}</div></details>`;
+                widgetMap.set(placeholder, widgetHtml);
+                return `\n\n${placeholder}\n\n`;
             });
 
-            // Match in-progress <think> tag while streaming
+            // 2. Process active streaming <think> tag
             if (isStreaming) {
                 const openThinkMatch = processed.match(/<think>([\s\S]*)$/i);
                 if (openThinkMatch) {
                     const activeThinkingContent = escapeHtml(openThinkMatch[1].trim());
-                    const liveAccordion = `
-                        <details class="thinking-accordion my-2" open>
-                            <summary>
-                                <span class="flex items-center gap-1.5 text-cyan-400">
-                                    <span class="animate-spin">⚙️</span>
-                                    <span class="animate-pulse">Thinking in progress...</span>
-                                </span>
-                                <svg class="thinking-arrow w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
-                                </svg>
-                            </summary>
-                            <div class="thinking-content">${activeThinkingContent || '<em class="text-slate-500">Analyzing problem space & planning actions...</em>'}</div>
-                        </details>
-                    `;
-                    processed = processed.replace(/<think>[\s\S]*$/i, liveAccordion);
+                    const placeholder = `%%VAKRA_THINK_${widgetCounter++}%%`;
+                    const widgetHtml = `<details class="thinking-accordion my-2" open><summary><span class="flex items-center gap-1.5 text-cyan-400"><span class="animate-spin">⚙️</span><span class="animate-pulse">Thinking in progress...</span></span><svg class="thinking-arrow w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg></summary><div class="thinking-content">${activeThinkingContent || '<em class="text-slate-500">Analyzing problem space & planning actions...</em>'}</div></details>`;
+                    widgetMap.set(placeholder, widgetHtml);
+                    processed = processed.replace(/<think>[\s\S]*$/i, `\n\n${placeholder}\n\n`);
                 }
             } else {
-                // If not streaming, strip any unclosed think tag
                 processed = processed.replace(/<think>[\s\S]*$/i, '');
             }
-
             processed = processed.replace(/<\/think>/gi, '');
-            return processed;
+
+            // 3. Process code blocks destined for files into sleek progress chips
+            const fileBlockRegex = /(?:^|\n)(?:\*\*)?`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`?(?:\*\*)?\s*\n```(?:[a-zA-Z0-9_\-]+)?\n([\s\S]*?)(?:```|$)/g;
+            processed = processed.replace(fileBlockRegex, (match, filepath, codeContent) => {
+                const lines = match.trim().split('\n');
+                const secondLine = (lines[1] || '').toLowerCase();
+                if (secondLine.includes('bash') || secondLine.includes('shell') || secondLine.includes('sh') || secondLine.includes('powershell') || secondLine.includes('cmd')) {
+                    return match;
+                }
+                const isComplete = match.trim().endsWith('```');
+                const placeholder = `%%VAKRA_FILECHIP_${widgetCounter++}%%`;
+                let chipHtml = '';
+                if (isStreaming && !isComplete) {
+                    chipHtml = `<div class="inline-file-chip border border-cyan-500/30 text-xs text-slate-200"><div class="flex items-center gap-2"><span class="animate-spin text-cyan-400">⚙️</span><span>Writing edits for <code class="text-cyan-300 font-mono font-semibold">${escapeHtml(filepath)}</code></span></div><span class="text-[10px] font-mono text-cyan-400/80 animate-pulse">Streaming changes...</span></div>`;
+                } else {
+                    chipHtml = `<div class="inline-file-chip border border-emerald-500/30 text-xs text-slate-200"><div class="flex items-center gap-2"><span class="text-emerald-400">📄</span><span>Prepared changes for <code class="text-emerald-300 font-mono font-semibold">${escapeHtml(filepath)}</code></span></div><span class="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/30 font-semibold">Review Diff Below ↓</span></div>`;
+                }
+                widgetMap.set(placeholder, chipHtml);
+                return `\n\n${placeholder}\n\n`;
+            });
+
+            // 4. Safely parse markdown
+            let parsed = marked.parse(processed);
+
+            // 5. Replace placeholders back into parsed HTML
+            widgetMap.forEach((widgetHtml, placeholder) => {
+                const pWrapped = new RegExp('<p>\\s*' + placeholder + '\\s*<\\/p>', 'g');
+                parsed = parsed.replace(pWrapped, widgetHtml);
+                parsed = parsed.split(placeholder).join(widgetHtml);
+            });
+
+            return parsed;
         }
 
         function appendAiMessage(text, usage, timestamp) {
@@ -1131,11 +1253,9 @@
                 </button>`;
             }
             
-            const formattedContent = renderThinkingAccordion(text, false);
-            
             const textDiv = document.createElement('div');
-            textDiv.className = 'text-xs select-text whitespace-pre-wrap leading-relaxed markdown-body';
-            textDiv.innerHTML = marked.parse(formattedContent);
+            textDiv.className = 'text-xs select-text leading-relaxed markdown-body';
+            textDiv.innerHTML = renderMarkdownWithCustomWidgets(text, false);
             
             bubbleDiv.appendChild(textDiv);
             
@@ -1299,6 +1419,10 @@
         function addCopyButtonsToCodeBlocks(container) {
             const preElements = container.querySelectorAll('pre');
             preElements.forEach(pre => {
+                // Never inject copy buttons into thinking accordion or inside thinking content
+                if (pre.closest('.thinking-accordion') || pre.closest('.thinking-content') || pre.closest('.file-code-accordion')) {
+                    return;
+                }
                 pre.style.position = 'relative';
                 
                 // Identify language class
@@ -1446,7 +1570,7 @@
                 currentStreamBubbleDiv.className = 'max-w-[85%] bg-cyber-panel/50 border border-cyber-border/80 text-slate-200 rounded-2xl rounded-tl-none px-3.5 py-2.5 shadow-md flex flex-col gap-3';
                 
                 currentStreamTextDiv = document.createElement('div');
-                currentStreamTextDiv.className = 'text-xs select-text whitespace-pre-wrap leading-relaxed markdown-body';
+                currentStreamTextDiv.className = 'text-xs select-text leading-relaxed markdown-body';
                 
                 currentStreamBubbleDiv.appendChild(currentStreamTextDiv);
                 currentStreamMsgDiv.appendChild(currentStreamBubbleDiv);
@@ -1455,8 +1579,7 @@
 
             currentStreamText += text;
             
-            const displayString = renderThinkingAccordion(currentStreamText, !done);
-            currentStreamTextDiv.innerHTML = marked.parse(displayString);
+            currentStreamTextDiv.innerHTML = renderMarkdownWithCustomWidgets(currentStreamText, !done);
             
             // Add copy buttons in real-time as blocks are rendered (DELETED, done at end)
             
@@ -1629,30 +1752,63 @@
             let innerHtml = '';
             if (toolName === 'execute_terminal_command') {
                 const cmd = escapeHtml(data.command || '');
+                const rawCmd = data.command || '';
                 const exp = escapeHtml(data.explanation || '');
-                innerHtml = `
-                    <div class="tool-call-card max-w-[95%] w-full">
-                        <div class="flex items-center justify-between border-b border-pink-500/20 pb-1.5">
-                            <span class="flex items-center gap-1.5 text-xs font-semibold text-pink-400">
-                                <span>🛠️</span>
-                                <span>Terminal Command Request</span>
-                            </span>
-                            <span class="text-[9px] font-mono text-slate-400">Review & Execute</span>
-                        </div>
-                        ${exp ? `<p class="text-[11px] text-slate-300 italic">${exp}</p>` : ''}
-                        <div class="flex flex-col gap-1.5 mt-1">
-                            <input type="text" class="tool-cmd-input bg-black/60 border border-pink-500/30 rounded px-2.5 py-1.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400 w-full" value="${cmd}" />
-                            <div class="flex items-center gap-2 justify-end mt-1">
-                                <button class="tool-reject-btn px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-[10px] font-semibold transition-all cursor-pointer">
-                                    Reject
-                                </button>
-                                <button class="tool-approve-btn px-3 py-1 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white rounded text-[10px] font-bold tracking-wide transition-all shadow-[0_0_10px_rgba(236,72,153,0.3)] cursor-pointer flex items-center gap-1">
-                                    ▶ Approve & Run in Terminal
-                                </button>
+                const cardId = data.callId || ('cmd_' + Math.random().toString(36).substring(2, 9));
+                const isAutoApproved = data.isAutoApproved || sessionAutoApproveTerminal || (title && title.includes('Auto-Approved'));
+                
+                if (isAutoApproved) {
+                    innerHtml = `
+                        <div class="tool-call-card max-w-[95%] w-full border-purple-500/40">
+                            <div class="flex items-center justify-between border-b border-purple-500/20 pb-1.5">
+                                <span class="flex items-center gap-1.5 text-xs font-semibold text-purple-400">
+                                    <span>⚡</span>
+                                    <span>Terminal Command (Auto-Approved & Executing...)</span>
+                                </span>
+                                <span class="text-[9px] font-mono text-purple-300 bg-purple-950/50 px-2 py-0.5 rounded border border-purple-500/30">Session Permitted</span>
+                            </div>
+                            ${exp ? `<p class="text-[11px] text-slate-300 italic">${exp}</p>` : ''}
+                            <div class="font-mono text-xs bg-black/60 border border-purple-500/30 rounded p-2 text-cyan-300 mt-1">
+                                <code>$ ${cmd}</code>
                             </div>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else {
+                    innerHtml = `
+                        <div class="tool-call-card max-w-[95%] w-full">
+                            <div class="flex items-center justify-between border-b border-pink-500/20 pb-1.5">
+                                <span class="flex items-center gap-1.5 text-xs font-semibold text-pink-400">
+                                    <span>🛠️</span>
+                                    <span>Terminal Command Request</span>
+                                </span>
+                                <span class="text-[9px] font-mono text-slate-400">Review & Execute</span>
+                            </div>
+                            ${exp ? `<p class="text-[11px] text-slate-300 italic">${exp}</p>` : ''}
+                            <div class="flex flex-col gap-2 mt-1">
+                                <input type="text" class="tool-cmd-input bg-black/60 border border-pink-500/30 rounded px-2.5 py-1.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400 w-full" value="${cmd}" />
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pt-1 border-t border-slate-700/40">
+                                    <div class="flex items-center gap-3 text-[10px] text-slate-300">
+                                        <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                                            <input type="radio" name="term-perm-${cardId}" value="once" checked class="accent-pink-500 cursor-pointer" />
+                                            <span>Allow for Now</span>
+                                        </label>
+                                        <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                                            <input type="radio" name="term-perm-${cardId}" value="skip" class="accent-pink-500 cursor-pointer" />
+                                            <span>Skip</span>
+                                        </label>
+                                        <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                                            <input type="radio" name="term-perm-${cardId}" value="always" class="accent-pink-500 cursor-pointer" />
+                                            <span>Allow All (Session)</span>
+                                        </label>
+                                    </div>
+                                    <button class="tool-apply-btn px-3 py-1 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white rounded text-[10px] font-bold tracking-wide transition-all shadow-[0_0_10px_rgba(236,72,153,0.3)] cursor-pointer flex items-center gap-1 shrink-0 self-end sm:self-auto">
+                                        ⚡ Apply Selection
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
             } else if (toolName === 'read_multiple_files') {
                 innerHtml = `
                     <div class="tool-call-pill">
@@ -1665,6 +1821,41 @@
                     <div class="tool-call-pill">
                         <span>🧠</span>
                         <span>Searched codebase for: <em class="text-white">"${escapeHtml(data.query)}"</em></span>
+                    </div>
+                `;
+            } else if (toolName === 'research_web_docs') {
+                innerHtml = `
+                    <div class="tool-call-pill border-cyan-500/40 bg-cyan-950/20">
+                        <span>📚</span>
+                        <span>Deep Doc Research: <strong class="text-cyan-300">"${escapeHtml(data.query)}"</strong></span>
+                    </div>
+                `;
+            } else if (toolName === 'list_directory_tree') {
+                innerHtml = `
+                    <div class="tool-call-pill border-blue-500/40 bg-blue-950/20">
+                        <span>📁</span>
+                        <span>Exploring Tree: <strong class="text-blue-300">${escapeHtml(data.dir || '.')}</strong> (depth: ${data.depth || 2})</span>
+                    </div>
+                `;
+            } else if (toolName === 'get_code_diagnostics') {
+                innerHtml = `
+                    <div class="tool-call-pill border-yellow-500/40 bg-yellow-950/20">
+                        <span>🩺</span>
+                        <span>Compiler Diagnostics: <strong class="text-yellow-300">${escapeHtml(data.filepath || 'Workspace')}</strong></span>
+                    </div>
+                `;
+            } else if (toolName === 'get_symbol_outline') {
+                innerHtml = `
+                    <div class="tool-call-pill border-purple-500/40 bg-purple-950/20">
+                        <span>🧬</span>
+                        <span>AST Symbol Outline: <strong class="text-purple-300">${escapeHtml(data.filepath)}</strong></span>
+                    </div>
+                `;
+            } else if (toolName === 'check_localhost_health') {
+                innerHtml = `
+                    <div class="tool-call-pill border-emerald-500/40 bg-emerald-950/20">
+                        <span>⚡</span>
+                        <span>Ping Local Server: <strong class="text-emerald-300">localhost:${escapeHtml(String(data.port || 3000))}</strong></span>
                     </div>
                 `;
             } else {
@@ -1680,29 +1871,35 @@
 
             // Wire up interactive events for terminal approval
             if (toolName === 'execute_terminal_command') {
-                const approveBtn = cardDiv.querySelector('.tool-approve-btn');
-                const rejectBtn = cardDiv.querySelector('.tool-reject-btn');
+                const applyBtn = cardDiv.querySelector('.tool-apply-btn');
                 const input = cardDiv.querySelector('.tool-cmd-input');
                 const card = cardDiv.querySelector('.tool-call-card');
 
-                if (approveBtn && input) {
-                    approveBtn.addEventListener('click', () => {
+                if (applyBtn && input) {
+                    applyBtn.addEventListener('click', () => {
                         const finalCmd = input.value.trim();
-                        vscode.postMessage({ command: 'executeCommand', cmd: finalCmd });
-                        approveBtn.innerHTML = '✔️ Sent to Terminal';
-                        approveBtn.classList.replace('from-pink-600', 'from-green-600');
-                        approveBtn.classList.replace('to-purple-600', 'to-emerald-600');
-                        approveBtn.disabled = true;
-                        input.disabled = true;
-                        if (rejectBtn) rejectBtn.remove();
-                    });
-                }
+                        const selectedOption = cardDiv.querySelector('input[type="radio"]:checked')?.value || 'once';
 
-                if (rejectBtn && card) {
-                    rejectBtn.addEventListener('click', () => {
-                        card.style.opacity = '0.4';
-                        card.style.pointerEvents = 'none';
-                        rejectBtn.innerHTML = '❌ Rejected';
+                        if (selectedOption === 'skip') {
+                            card.style.opacity = '0.4';
+                            card.style.pointerEvents = 'none';
+                            applyBtn.innerHTML = '❌ Skipped';
+                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: cardId, action: 'skip', cmd: finalCmd });
+                        } else if (selectedOption === 'always') {
+                            sessionAutoApproveTerminal = true;
+                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: cardId, action: 'always', cmd: finalCmd });
+                            applyBtn.innerHTML = '⚡ Auto-Approved (Executing...)';
+                            applyBtn.classList.replace('from-pink-600', 'from-purple-600');
+                            applyBtn.disabled = true;
+                            input.disabled = true;
+                        } else {
+                            // Once
+                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: cardId, action: 'once', cmd: finalCmd });
+                            applyBtn.innerHTML = '⚡ Executing & Reading...';
+                            applyBtn.classList.replace('from-pink-600', 'from-cyan-600');
+                            applyBtn.disabled = true;
+                            input.disabled = true;
+                        }
                     });
                 }
             }

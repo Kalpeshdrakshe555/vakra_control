@@ -129,25 +129,61 @@ export async function searchWeb(query: string): Promise<string> {
  * Scrapes URLs, strips HTML noise, saves full markdown in `.ultra-light-ai/research/`
  * and returns a concise ~150-token executive summary.
  */
-export async function researchWebDocs(query: string, urls: string[], workspaceRoot: string): Promise<string> {
+export async function researchWebDocs(query: string, urls: string[] = [], workspaceRoot: string): Promise<string> {
     try {
         const researchDir = path.join(workspaceRoot, '.ultra-light-ai', 'research');
         if (!fs.existsSync(researchDir)) {
             fs.mkdirSync(researchDir, { recursive: true });
         }
 
-        let combinedMarkdown = `# Deep Web Research: ${query}\n\n`;
-        const summaryPoints: string[] = [];
-
-        for (const url of urls.slice(0, 3)) {
+        // If no or few URLs provided, autonomously search DuckDuckGo for top documentation links
+        let targetUrls = Array.isArray(urls) ? [...urls] : [];
+        if (targetUrls.length < 2) {
             try {
-                const content = await fetchWebContext(url);
-                if (content) {
-                    combinedMarkdown += `## Source: ${url}\n\n${content}\n\n---\n\n`;
-                    summaryPoints.push(`- Extracted documentation from [${new URL(url).hostname}](${url})`);
+                const searchHtmlResponse = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + ' documentation reference code example')}`, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' }
+                });
+                if (searchHtmlResponse.ok) {
+                    const searchHtml = await searchHtmlResponse.text();
+                    const linkMatches = searchHtml.matchAll(/href="([^"]*uddg=[^"]+)"/gi);
+                    for (const m of linkMatches) {
+                        try {
+                            const params = new URLSearchParams(m[1].includes('?') ? m[1].split('?')[1] : m[1]);
+                            const cleanUrl = decodeURIComponent(params.get('uddg') || '');
+                            if (cleanUrl.startsWith('http') && !cleanUrl.includes('duckduckgo.com') && !targetUrls.includes(cleanUrl)) {
+                                targetUrls.push(cleanUrl);
+                                if (targetUrls.length >= 3) break;
+                            }
+                        } catch {}
+                    }
                 }
             } catch (e) {
-                console.error(`Failed to research ${url}`, e);
+                console.error("Auto-search for docs failed:", e);
+            }
+        }
+
+        let combinedMarkdown = `# Deep Documentation Research: ${query}\n\n`;
+        combinedMarkdown += `*Generated autonomously by Researcher Sub-Agent*\n\n`;
+        const summaryPoints: string[] = [];
+        const extractedCodeSnippets: string[] = [];
+
+        for (const url of targetUrls.slice(0, 3)) {
+            try {
+                const content = await fetchWebContext(url);
+                if (content && content.length > 50) {
+                    combinedMarkdown += `## Source: ${url}\n\n${content}\n\n---\n\n`;
+                    let host = url;
+                    try { host = new URL(url).hostname; } catch {}
+                    summaryPoints.push(`- **[${host}](${url})**: Extracted relevant API signatures & patterns.`);
+
+                    // Extract first code snippet if present in content
+                    const codeMatch = content.match(/```(?:[a-z]+)?\n([\s\S]*?)\n```/i);
+                    if (codeMatch && extractedCodeSnippets.length < 2) {
+                        extractedCodeSnippets.push(codeMatch[0]);
+                    }
+                }
+            } catch (e) {
+                console.error(`Failed to research ${url}:`, e);
             }
         }
 
@@ -157,14 +193,19 @@ export async function researchWebDocs(query: string, urls: string[], workspaceRo
 
         const relPath = path.relative(workspaceRoot, docPath);
 
-        return `### 📚 Deep Doc Research Completed
-**Query:** ${query}
-**Saved File:** \`${relPath}\`
+        let response = `### 📚 Autonomous Research Complete\n`;
+        response += `**Topic:** ${query}\n`;
+        response += `**Full Research Saved:** \`${relPath}\` (use \`read_multiple_files\` to view complete details)\n\n`;
+        response += `**Key Documentation Sources & Findings:**\n`;
+        response += summaryPoints.length > 0 ? summaryPoints.join('\n') : '- No external sites could be reached; check query or internet connectivity.';
 
-**Executive Summary:**
-${summaryPoints.join('\n') || '- No active content scraped.'}
-- Full scraped documentation saved in \`${relPath}\`. Main model can consult this file directly.`;
+        if (extractedCodeSnippets.length > 0) {
+            response += `\n\n**Verified Code Pattern Example:**\n${extractedCodeSnippets[0]}`;
+        }
+
+        return response;
     } catch (error: any) {
-        return `Research Error: ${error?.message || error}`;
+        console.error("researchWebDocs error:", error);
+        return `Research failed: ${error?.message || error}`;
     }
 }

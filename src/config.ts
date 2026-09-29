@@ -233,6 +233,7 @@ export interface BrainConfig {
     model: string;
     apiKey: string;
     endpoint: string;
+    temperature?: number;
 }
 
 export interface AgentConfig {
@@ -247,6 +248,8 @@ export interface AgentConfig {
     mainBrain?: BrainConfig;
     supportBrain?: BrainConfig;
     advancedModeEnabled?: boolean;
+
+    temperature?: number; // 0.0 - 1.0 (default 0.4)
 
     contextLimits: { 
         maxTokens?: number; 

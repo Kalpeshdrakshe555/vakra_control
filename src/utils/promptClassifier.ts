@@ -32,13 +32,17 @@ export class PromptClassifier {
         
         switch (category) {
             case 'ui':
-                allowedNames = ['read_multiple_files', 'search_codebase', 'generate_ui_blueprint', 'search_web'];
+                allowedNames = ['read_multiple_files', 'search_codebase', 'generate_ui_blueprint', 'search_web', 'research_web_docs', 'list_directory_tree', 'check_localhost_health'];
                 break;
             case 'backend':
-                allowedNames = ['read_multiple_files', 'search_codebase', 'find_references', 'replace_symbol', 'update_architecture_context', 'search_web', 'execute_terminal_command'];
+                allowedNames = [
+                    'read_multiple_files', 'search_codebase', 'find_references', 'replace_symbol', 
+                    'update_architecture_context', 'search_web', 'execute_terminal_command',
+                    'research_web_docs', 'list_directory_tree', 'get_code_diagnostics', 'get_symbol_outline', 'check_localhost_health'
+                ];
                 break;
             case 'info':
-                allowedNames = ['read_multiple_files', 'search_codebase', 'search_web'];
+                allowedNames = ['read_multiple_files', 'search_codebase', 'search_web', 'research_web_docs', 'list_directory_tree', 'get_symbol_outline'];
                 break;
             case 'general':
             default:
