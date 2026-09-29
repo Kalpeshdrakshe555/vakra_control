@@ -13,12 +13,21 @@ export class FrameworkConventions {
 - Hooks: Custom hooks in 'src/hooks/'.
 - State: Redux/Context in 'src/store/' or 'src/context/'.`,
 
-        'django': `DJANGO ARCHITECTURE RULES:
+        'django': `DJANGO ARCHITECTURE & TEMPLATE RULES:
 - Handlers/Logic: Put views in 'views.py'.
 - Database Models: Define in 'models.py'.
-- Routing: Define URLs in 'urls.py'.
-- Templates: HTML files go in 'templates/'.
-- Static Files: CSS/JS go in 'static/'.`,
+- Routing: Define URLs in 'urls.py' and include app in project root 'urls.py'.
+- TEMPLATE NAMESPACING (CRITICAL FOR DJANGO):
+  App templates MUST be nested inside an app-named directory:
+  '<app_name>/templates/<app_name>/<template_name>.html'
+  Example for 'catalog' app:
+  * In views.py: render(request, 'catalog/product_list.html')
+  * File on disk MUST be: 'catalog/templates/catalog/product_list.html'
+  * DO NOT place directly at 'catalog/templates/product_list.html' (this causes TemplateDoesNotExist: catalog/product_list.html).
+- Project-level Templates: If using a root 'templates/' folder, ensure 'settings.py' has:
+  TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [BASE_DIR / 'templates'], 'APP_DIRS': True, ...}]
+- App Registration: Ensure '<app_name>' is listed in INSTALLED_APPS in 'settings.py'.
+- Static Files: Put in '<app_name>/static/<app_name>/'.`,
 
         'express': `EXPRESS ARCHITECTURE RULES:
 - API Routes: Define in 'src/routes/'.

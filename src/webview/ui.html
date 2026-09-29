@@ -1138,14 +1138,55 @@
                             }
                         }
                     } else if (token.type === 'code') {
-                        const lang = token.lang ? token.lang.toLowerCase() : '';
-                        if (['bash', 'sh', 'shell', 'cmd', 'powershell', 'bat', 'txt', 'log'].includes(lang)) {
+                        const rawLang = token.lang ? token.lang.trim() : '';
+                        const langLower = rawLang.toLowerCase();
+                        if (['bash', 'sh', 'shell', 'cmd', 'powershell', 'bat', 'txt', 'log'].some(b => langLower === b || langLower.startsWith(b + ' '))) {
                             currentFilepath = null;
                             continue;
                         }
 
-                        // Only create a file card if there is a detected filepath OR it is an explicit SEARCH block
-                        if (currentFilepath || token.text.includes('<<<<<<< SEARCH') || token.text.includes('// full code here')) {
+                        // Check if code fence header specifies the file (e.g. ```python:catalog/views.py or ```python filename="catalog/views.py")
+                        if (!currentFilepath && rawLang) {
+                            const fenceMatch = /(?:[:\s]|(?:filename|path)=["']?)([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)/i.exec(rawLang);
+                            if (fenceMatch) {
+                                currentFilepath = fenceMatch[1];
+                            }
+                        }
+
+                        // Check if the first line of the code content specifies the file (e.g. # catalog/views.py)
+                        if (!currentFilepath && token.text) {
+                            const firstLine = token.text.split('\n')[0].trim();
+                            const commentMatch = /^(?:#|\/\/|\/\*|<!--)\s*(?:File:?\s*)?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)/i.exec(firstLine);
+                            if (commentMatch) {
+                                currentFilepath = commentMatch[1];
+                            }
+                        }
+
+                        // Validate that the code payload contains actual code, not just a reading comment/monologue
+                        const isRealCodePayload = (payload) => {
+                            if (!payload || typeof payload !== 'string') return false;
+                            const trimmed = payload.trim();
+                            if (!trimmed) return false;
+                            if (trimmed.includes('<<<<<<< SEARCH') && trimmed.includes('>>>>>>> REPLACE')) return true;
+                            
+                            const lines = trimmed.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                            if (lines.length === 0) return false;
+                            
+                            // Check if all lines are comments
+                            const allComments = lines.every(l =>
+                                l.startsWith('#') || l.startsWith('//') || l.startsWith('/*') || l.startsWith('*') || l.startsWith('<!--')
+                            );
+                            if (allComments && lines.length < 5) return false;
+                            
+                            // Check for reading/inspecting monologue phrases
+                            if (/^(?:#|\/\/|\/\*|<!--)\s*(?:I am reading|Reading|Let me read|Checking|Inspecting|Verifying)\b/i.test(lines[0])) {
+                                return false;
+                            }
+                            return true;
+                        };
+
+                        // Only create a file card if there is a detected filepath OR it is an explicit SEARCH block, AND it is real code
+                        if ((currentFilepath || token.text.includes('<<<<<<< SEARCH') || token.text.includes('// full code here')) && isRealCodePayload(token.text)) {
                             files.push({ 
                                 filepath: currentFilepath || `active_file_${files.length + 1}.txt`, 
                                 content: token.text 
@@ -1153,6 +1194,8 @@
                         }
                         currentFilepath = null;
                     }
+                }
+
                 // Fallback for raw SEARCH/REPLACE blocks emitted without markdown code fences
                 if (text.includes('<<<<<<< SEARCH') && text.includes('>>>>>>> REPLACE')) {
                     const rawSearchRegex = /(?:\*\*\`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\`?\*\*|File:\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+))?[\s\S]*?(<<<<<<<\s*SEARCH[\s\S]*?>>>>>>>\s*REPLACE)/g;
@@ -1278,6 +1321,7 @@
                 `;
                 actionContainerDiv.appendChild(cardHeader);
 
+                const applyButtonsList = [];
                 files.forEach(file => {
                     const fileName = file.filepath.split(/[/\\]/).pop();
                     const fileItemDiv = document.createElement('div');
@@ -1303,6 +1347,7 @@
                     const btn = document.createElement('button');
                     btn.className = 'apply-diff-btn bg-cyber-neonCyan hover:bg-cyan-400 text-slate-950 text-[10px] font-bold py-1 px-3 rounded shadow-[0_0_10px_rgba(0,240,255,0.3)] transition-all cursor-pointer flex items-center gap-1';
                     btn.innerHTML = `⚡ Apply`;
+                    applyButtonsList.push(btn);
 
                     const rejectBtn = document.createElement('button');
                     rejectBtn.className = 'bg-slate-800 hover:bg-red-500/80 text-slate-400 hover:text-white text-[10px] py-1 px-2 rounded transition-all cursor-pointer flex items-center';
@@ -1362,17 +1407,64 @@
                     actionContainerDiv.appendChild(codeAccordion);
                 });
 
-                if (files.length > 1) {
-                    const allBtn = document.createElement('button');
-                    allBtn.className = 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs py-2 px-3 rounded-lg transition-all cursor-pointer text-center mt-2 shadow-[0_0_12px_rgba(0,240,255,0.25)] flex items-center justify-center gap-1.5';
-                    allBtn.innerHTML = `✨ APPLY ALL ${files.length} FILES`;
-                    allBtn.addEventListener('click', () => {
-                        vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
-                        allBtn.innerHTML = `✔️ ALL FILES APPLIED`;
-                        allBtn.classList.add('opacity-50');
-                        allBtn.disabled = true;
+                const footerRow = document.createElement('div');
+                footerRow.className = 'flex flex-wrap items-center gap-2 mt-2 pt-1 border-t border-cyan-500/10';
+
+                const allBtn = document.createElement('button');
+                allBtn.className = 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-[11px] py-1.5 px-3 rounded-lg transition-all cursor-pointer text-center shadow-[0_0_12px_rgba(0,240,255,0.25)] flex items-center justify-center gap-1.5';
+                allBtn.innerHTML = `✨ APPLY ALL (${files.length})`;
+                allBtn.addEventListener('click', () => {
+                    vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
+                    allBtn.innerHTML = `✔️ ALL FILES APPLIED`;
+                    allBtn.classList.add('opacity-50');
+                    allBtn.disabled = true;
+                    applyButtonsList.forEach(b => {
+                        b.innerHTML = `✔️ Applied`;
+                        b.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                        b.classList.add('bg-green-600/90', 'text-white');
+                        b.disabled = true;
                     });
-                    actionContainerDiv.appendChild(allBtn);
+                });
+                footerRow.appendChild(allBtn);
+
+                if (!sessionAutoApproveTerminal) {
+                    const sessionBtn = document.createElement('button');
+                    sessionBtn.className = 'bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-500/40 text-[10px] font-medium py-1 px-2.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 shadow-sm';
+                    sessionBtn.innerHTML = `⚡ Allow All (Session)`;
+                    sessionBtn.title = "Auto-approve all file edits and terminal commands for this entire project session";
+                    sessionBtn.addEventListener('click', () => {
+                        sessionAutoApproveTerminal = true;
+                        vscode.postMessage({ command: 'resolveTerminalApproval', action: 'always' });
+                        vscode.postMessage({ command: 'applyWorkspaceEdits', files: files, autoProceed: true });
+                        sessionBtn.innerHTML = `✔️ Session Auto-Active`;
+                        sessionBtn.disabled = true;
+                        sessionBtn.classList.add('opacity-50');
+                        allBtn.innerHTML = `✔️ ALL FILES AUTO-APPLIED`;
+                        allBtn.disabled = true;
+                        allBtn.classList.add('opacity-50');
+                        applyButtonsList.forEach(b => {
+                            b.innerHTML = `✔️ Auto-Applied`;
+                            b.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                            b.classList.add('bg-green-600/90', 'text-white');
+                            b.disabled = true;
+                        });
+                    });
+                    footerRow.appendChild(sessionBtn);
+                }
+
+                actionContainerDiv.appendChild(footerRow);
+
+                if (sessionAutoApproveTerminal) {
+                    vscode.postMessage({ command: 'applyWorkspaceEdits', files: files, autoProceed: true });
+                    allBtn.innerHTML = `✔️ ALL FILES AUTO-APPLIED`;
+                    allBtn.disabled = true;
+                    allBtn.classList.add('opacity-50');
+                    applyButtonsList.forEach(b => {
+                        b.innerHTML = `✔️ Auto-Applied`;
+                        b.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                        b.classList.add('bg-green-600/90', 'text-white');
+                        b.disabled = true;
+                    });
                 }
                 
                 bubbleDiv.appendChild(actionContainerDiv);
@@ -1480,9 +1572,9 @@
                         runAllBtn.className = 'bg-gradient-to-r from-pink-700/80 to-purple-700/80 hover:from-pink-600 hover:to-purple-600 text-white border border-pink-600/50 rounded px-2 py-1 text-[9px] font-bold font-mono tracking-wider cursor-pointer shadow-sm text-center w-full mt-0.5';
                         runAllBtn.innerHTML = '⚡ RUN ALL STEPS';
                         runAllBtn.addEventListener('click', () => {
-                            vscode.postMessage({ command: 'runInTerminal', text: code });
-                            runAllBtn.innerHTML = '✅ ALL SENT';
-                            runAllBtn.classList.add('opacity-50');
+                            vscode.postMessage({ command: 'runAndCapture', cmd: code, autoApproveSession: true });
+                            runAllBtn.innerHTML = '⚡ RUNNING & READING...';
+                            runAllBtn.classList.add('opacity-75');
                         });
                         stepsContainer.appendChild(runAllBtn);
                         
@@ -1493,11 +1585,11 @@
                         terminalActions.className = 'flex gap-1';
 
                         const runBtn = document.createElement('button');
-                        runBtn.className = 'bg-pink-900/80 hover:bg-pink-600 text-pink-100 border border-pink-700/50 hover:border-pink-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
+                        runBtn.className = 'bg-pink-900/80 hover:bg-pink-600 text-pink-100 border border-pink-700/50 hover:border-pink-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-80 hover:opacity-100 transition-all cursor-pointer shadow-sm';
                         runBtn.innerHTML = '▶ RUN';
                         
                         const runAndCaptureBtn = document.createElement('button');
-                        runAndCaptureBtn.className = 'bg-cyan-900/80 hover:bg-cyan-600 text-cyan-100 border border-cyan-700/50 hover:border-cyan-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-60 hover:opacity-100 transition-all cursor-pointer shadow-sm';
+                        runAndCaptureBtn.className = 'bg-cyan-900/80 hover:bg-cyan-600 text-cyan-100 border border-cyan-700/50 hover:border-cyan-500 rounded px-2 py-0.5 text-[9px] font-bold tracking-wider font-mono opacity-80 hover:opacity-100 transition-all cursor-pointer shadow-sm';
                         runAndCaptureBtn.innerHTML = '▶ RUN & READ';
 
                         const rejectCmdBtn = document.createElement('button');
@@ -1505,17 +1597,11 @@
                         rejectCmdBtn.innerHTML = '❌ REJECT';
 
                         runBtn.addEventListener('click', () => {
-                            vscode.postMessage({ command: 'runInTerminal', text: code });
-                            runBtn.innerHTML = 'STARTED!';
-                            runBtn.classList.replace('bg-pink-900/80', 'bg-green-600/90');
+                            vscode.postMessage({ command: 'runAndCapture', cmd: code, autoApproveSession: true });
+                            runBtn.innerHTML = 'RUNNING...';
+                            runBtn.classList.replace('bg-pink-900/80', 'bg-cyan-600/90');
                             rejectCmdBtn.classList.add('hidden');
                             runAndCaptureBtn.classList.add('hidden');
-                            setTimeout(() => { 
-                                runBtn.innerHTML = '▶ RUN'; 
-                                runBtn.classList.replace('bg-green-600/90', 'bg-pink-900/80');
-                                rejectCmdBtn.classList.remove('hidden');
-                                runAndCaptureBtn.classList.remove('hidden');
-                            }, 2000);
                         });
                         
                         runAndCaptureBtn.addEventListener('click', () => {
@@ -1607,6 +1693,7 @@
                     `;
                     actionContainerDiv.appendChild(cardHeader);
 
+                    const applyButtonsList = [];
                     files.forEach(file => {
                         const fileName = file.filepath.split(/[/\\]/).pop();
                         const fileExt = fileName.includes('.') ? fileName.split('.').pop() : '';
@@ -1636,6 +1723,7 @@
                         btn.className = 'apply-diff-btn bg-cyber-neonCyan hover:bg-cyan-400 text-slate-950 text-[10px] font-bold py-1 px-3 rounded shadow-[0_0_10px_rgba(0,240,255,0.3)] transition-all cursor-pointer flex items-center gap-1';
                         btn.innerHTML = `⚡ Apply`;
                         btn.title = `Directly apply edits to ${file.filepath}`;
+                        applyButtonsList.push(btn);
 
                         const rejectBtn = document.createElement('button');
                         rejectBtn.className = 'bg-slate-800 hover:bg-red-500/80 text-slate-400 hover:text-white text-[10px] py-1 px-2 rounded transition-all cursor-pointer flex items-center';
@@ -1697,17 +1785,64 @@
                         actionContainerDiv.appendChild(codeAccordion);
                     });
 
-                    if (files.length > 1) {
-                        const allBtn = document.createElement('button');
-                        allBtn.className = 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs py-2 px-3 rounded-lg transition-all cursor-pointer text-center mt-2 shadow-[0_0_12px_rgba(0,240,255,0.25)] flex items-center justify-center gap-1.5';
-                        allBtn.innerHTML = `✨ APPLY ALL ${files.length} FILES`;
-                        allBtn.addEventListener('click', () => {
-                            vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
-                            allBtn.innerHTML = `✔️ ALL FILES APPLIED`;
-                            allBtn.classList.add('opacity-50');
-                            allBtn.disabled = true;
+                    const footerRow = document.createElement('div');
+                    footerRow.className = 'flex flex-wrap items-center gap-2 mt-2 pt-1 border-t border-cyan-500/10';
+
+                    const allBtn = document.createElement('button');
+                    allBtn.className = 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-[11px] py-1.5 px-3 rounded-lg transition-all cursor-pointer text-center shadow-[0_0_12px_rgba(0,240,255,0.25)] flex items-center justify-center gap-1.5';
+                    allBtn.innerHTML = `✨ APPLY ALL (${files.length})`;
+                    allBtn.addEventListener('click', () => {
+                        vscode.postMessage({ command: 'applyWorkspaceEdits', files: files });
+                        allBtn.innerHTML = `✔️ ALL FILES APPLIED`;
+                        allBtn.classList.add('opacity-50');
+                        allBtn.disabled = true;
+                        applyButtonsList.forEach(b => {
+                            b.innerHTML = `✔️ Applied`;
+                            b.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                            b.classList.add('bg-green-600/90', 'text-white');
+                            b.disabled = true;
                         });
-                        actionContainerDiv.appendChild(allBtn);
+                    });
+                    footerRow.appendChild(allBtn);
+
+                    if (!sessionAutoApproveTerminal) {
+                        const sessionBtn = document.createElement('button');
+                        sessionBtn.className = 'bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-500/40 text-[10px] font-medium py-1 px-2.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 shadow-sm';
+                        sessionBtn.innerHTML = `⚡ Allow All (Session)`;
+                        sessionBtn.title = "Auto-approve all file edits and terminal commands for this entire project session";
+                        sessionBtn.addEventListener('click', () => {
+                            sessionAutoApproveTerminal = true;
+                            vscode.postMessage({ command: 'resolveTerminalApproval', action: 'always' });
+                            vscode.postMessage({ command: 'applyWorkspaceEdits', files: files, autoProceed: true });
+                            sessionBtn.innerHTML = `✔️ Session Auto-Active`;
+                            sessionBtn.disabled = true;
+                            sessionBtn.classList.add('opacity-50');
+                            allBtn.innerHTML = `✔️ ALL FILES AUTO-APPLIED`;
+                            allBtn.disabled = true;
+                            allBtn.classList.add('opacity-50');
+                            applyButtonsList.forEach(b => {
+                                b.innerHTML = `✔️ Auto-Applied`;
+                                b.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                                b.classList.add('bg-green-600/90', 'text-white');
+                                b.disabled = true;
+                            });
+                        });
+                        footerRow.appendChild(sessionBtn);
+                    }
+
+                    actionContainerDiv.appendChild(footerRow);
+
+                    if (sessionAutoApproveTerminal) {
+                        vscode.postMessage({ command: 'applyWorkspaceEdits', files: files, autoProceed: true });
+                        allBtn.innerHTML = `✔️ ALL FILES AUTO-APPLIED`;
+                        allBtn.disabled = true;
+                        allBtn.classList.add('opacity-50');
+                        applyButtonsList.forEach(b => {
+                            b.innerHTML = `✔️ Auto-Applied`;
+                            b.classList.remove('bg-cyber-neonCyan', 'hover:bg-cyan-400', 'text-slate-950');
+                            b.classList.add('bg-green-600/90', 'text-white');
+                            b.disabled = true;
+                        });
                     }
                     
                     currentStreamBubbleDiv.appendChild(actionContainerDiv);
@@ -1755,6 +1890,7 @@
                 const rawCmd = data.command || '';
                 const exp = escapeHtml(data.explanation || '');
                 const cardId = data.callId || ('cmd_' + Math.random().toString(36).substring(2, 9));
+                cardDiv.id = 'term-card-' + cardId;
                 const isAutoApproved = data.isAutoApproved || sessionAutoApproveTerminal || (title && title.includes('Auto-Approved'));
                 
                 if (isAutoApproved) {
@@ -1762,15 +1898,16 @@
                         <div class="tool-call-card max-w-[95%] w-full border-purple-500/40">
                             <div class="flex items-center justify-between border-b border-purple-500/20 pb-1.5">
                                 <span class="flex items-center gap-1.5 text-xs font-semibold text-purple-400">
-                                    <span>⚡</span>
-                                    <span>Terminal Command (Auto-Approved & Executing...)</span>
+                                    <span class="animate-pulse">⚡</span>
+                                    <span>Terminal Command</span>
                                 </span>
-                                <span class="text-[9px] font-mono text-purple-300 bg-purple-950/50 px-2 py-0.5 rounded border border-purple-500/30">Session Permitted</span>
+                                <span class="term-status-badge text-[9px] font-mono text-purple-300 bg-purple-950/50 px-2 py-0.5 rounded border border-purple-500/30">Auto-Approved (Running...)</span>
                             </div>
                             ${exp ? `<p class="text-[11px] text-slate-300 italic">${exp}</p>` : ''}
                             <div class="font-mono text-xs bg-black/60 border border-purple-500/30 rounded p-2 text-cyan-300 mt-1">
                                 <code>$ ${cmd}</code>
                             </div>
+                            <div class="term-output-container mt-2 hidden font-mono text-[10px] bg-black/80 border border-slate-700/60 rounded p-2 text-slate-300 max-h-40 overflow-y-auto whitespace-pre-wrap"></div>
                         </div>
                     `;
                 } else {
@@ -1781,7 +1918,7 @@
                                     <span>🛠️</span>
                                     <span>Terminal Command Request</span>
                                 </span>
-                                <span class="text-[9px] font-mono text-slate-400">Review & Execute</span>
+                                <span class="term-status-badge text-[9px] font-mono text-slate-400">Review & Execute</span>
                             </div>
                             ${exp ? `<p class="text-[11px] text-slate-300 italic">${exp}</p>` : ''}
                             <div class="flex flex-col gap-2 mt-1">
@@ -1805,6 +1942,7 @@
                                         ⚡ Apply Selection
                                     </button>
                                 </div>
+                                <div class="term-output-container mt-2 hidden font-mono text-[10px] bg-black/80 border border-slate-700/60 rounded p-2 text-slate-300 max-h-40 overflow-y-auto whitespace-pre-wrap"></div>
                             </div>
                         </div>
                     `;
@@ -1871,6 +2009,7 @@
 
             // Wire up interactive events for terminal approval
             if (toolName === 'execute_terminal_command') {
+                const targetCardId = data.callId || (cardDiv.id ? cardDiv.id.replace('term-card-', '') : '');
                 const applyBtn = cardDiv.querySelector('.tool-apply-btn');
                 const input = cardDiv.querySelector('.tool-cmd-input');
                 const card = cardDiv.querySelector('.tool-call-card');
@@ -1884,17 +2023,17 @@
                             card.style.opacity = '0.4';
                             card.style.pointerEvents = 'none';
                             applyBtn.innerHTML = '❌ Skipped';
-                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: cardId, action: 'skip', cmd: finalCmd });
+                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: targetCardId, action: 'skip', cmd: finalCmd });
                         } else if (selectedOption === 'always') {
                             sessionAutoApproveTerminal = true;
-                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: cardId, action: 'always', cmd: finalCmd });
+                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: targetCardId, action: 'always', cmd: finalCmd });
                             applyBtn.innerHTML = '⚡ Auto-Approved (Executing...)';
                             applyBtn.classList.replace('from-pink-600', 'from-purple-600');
                             applyBtn.disabled = true;
                             input.disabled = true;
                         } else {
                             // Once
-                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: cardId, action: 'once', cmd: finalCmd });
+                            vscode.postMessage({ command: 'resolveTerminalApproval', callId: targetCardId, action: 'once', cmd: finalCmd });
                             applyBtn.innerHTML = '⚡ Executing & Reading...';
                             applyBtn.classList.replace('from-pink-600', 'from-cyan-600');
                             applyBtn.disabled = true;
@@ -1943,7 +2082,41 @@
             } else if (message.command === 'statusUpdate') {
                 appendSystemMessage(message.text.replace(/<[^>]*>/g, '')); // Strip HTML tags
             } else if (message.command === 'toolCallEvent') {
+                if (currentStreamMsgDiv) {
+                    currentStreamMsgDiv = null;
+                    currentStreamBubbleDiv = null;
+                    currentStreamTextDiv = null;
+                    currentStreamText = '';
+                }
                 renderToolCallCard(message.tool, message.title, message.data);
+            } else if (message.command === 'terminalCommandCompleted') {
+                const card = document.getElementById('term-card-' + message.callId);
+                if (card) {
+                    const badge = card.querySelector('.term-status-badge');
+                    if (badge) {
+                        if (message.error) {
+                            badge.className = 'term-status-badge text-[9px] font-mono text-red-300 bg-red-950/70 px-2 py-0.5 rounded border border-red-500/50 flex items-center gap-1';
+                            badge.innerHTML = `<span>❌</span><span>Failed (Exit Code: ${message.exitCode})</span>`;
+                        } else {
+                            badge.className = 'term-status-badge text-[9px] font-mono text-emerald-300 bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-500/50 flex items-center gap-1';
+                            badge.innerHTML = `<span>✅</span><span>Success (Exit Code: 0)</span>`;
+                        }
+                    }
+                    const outDiv = card.querySelector('.term-output-container');
+                    if (outDiv) {
+                        outDiv.classList.remove('hidden');
+                        const outText = message.output ? escapeHtml(message.output) : '(No output returned)';
+                        outDiv.innerHTML = `<div class="text-[9px] ${message.error ? 'text-red-400 font-bold' : 'text-cyan-400 font-bold'} border-b border-slate-800 pb-1 mb-1">TERMINAL CONSOLE:</div><code class="text-slate-300">${outText}</code>`;
+                    }
+                    const applyBtn = card.querySelector('.tool-apply-btn');
+                    if (applyBtn) {
+                        applyBtn.innerHTML = message.error ? '⚠️ Completed with errors' : '✅ Executed';
+                        applyBtn.disabled = true;
+                        applyBtn.classList.add('opacity-50', 'pointer-events-none');
+                    }
+                    const inputs = card.querySelectorAll('input');
+                    inputs.forEach(inp => inp.disabled = true);
+                }
             } else if (message.command === 'restoreHistory') {
                 chatContainer.innerHTML = ''; // Clear current view
                 message.messages.forEach(msg => {

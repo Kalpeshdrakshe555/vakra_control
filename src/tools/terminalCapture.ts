@@ -28,39 +28,49 @@ export class TerminalCapture {
         
         return new Promise((resolve) => {
             const shell = os.platform() === 'win32' ? 'powershell.exe' : '/bin/bash';
-            
-            cp.exec(command, { cwd: workspaceRoot, maxBuffer: 1024 * 1024, timeout: 45000, shell }, (error, stdout, stderr) => {
-                let fullOutput = '';
-                let exitCode = 0;
-                let isError = false;
+            const safeCwd = (workspaceRoot && workspaceRoot.trim().length > 0)
+                ? workspaceRoot
+                : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd());
 
-                if (stdout) {
-                    fullOutput += stdout + '\n';
-                    this.outputChannel.append(stdout);
-                }
-                if (stderr) {
-                    fullOutput += stderr + '\n';
-                    this.outputChannel.append(stderr);
-                }
-                if (error) {
-                    exitCode = error.code ?? 1;
-                    isError = true;
-                    fullOutput += `Exit Code: ${exitCode}\n`;
-                    this.outputChannel.appendLine(`Exit Code: ${exitCode}`);
-                }
+            try {
+                cp.exec(command, { cwd: safeCwd, maxBuffer: 1024 * 1024, timeout: 30000, shell }, (error, stdout, stderr) => {
+                    let fullOutput = '';
+                    let exitCode = 0;
+                    let isError = false;
 
-                // Extract last 15 lines for concise, high-signal AI feedback
-                const lines = fullOutput.trim().split('\n').filter(l => l.trim().length > 0);
-                let conciseOutput = '';
-                if (lines.length > 15) {
-                    conciseOutput = lines.slice(-15).join('\n');
-                } else {
-                    conciseOutput = fullOutput.trim();
-                }
+                    if (stdout) {
+                        fullOutput += stdout + '\n';
+                        this.outputChannel.append(stdout);
+                    }
+                    if (stderr) {
+                        fullOutput += stderr + '\n';
+                        this.outputChannel.append(stderr);
+                    }
+                    if (error) {
+                        exitCode = error.code ?? 1;
+                        isError = true;
+                        fullOutput += `Exit Code: ${exitCode}\n`;
+                        this.outputChannel.appendLine(`Exit Code: ${exitCode}`);
+                    }
 
-                this.lastOutput = conciseOutput;
-                resolve({ output: this.lastOutput, exitCode, error: isError });
-            });
+                    // Extract last 15 lines for concise, high-signal AI feedback
+                    const lines = fullOutput.trim().split('\n').filter(l => l.trim().length > 0);
+                    let conciseOutput = '';
+                    if (lines.length > 15) {
+                        conciseOutput = lines.slice(-15).join('\n');
+                    } else {
+                        conciseOutput = fullOutput.trim();
+                    }
+
+                    this.lastOutput = conciseOutput || (isError ? `Execution failed with exit code ${exitCode}` : 'Command executed successfully (no output).');
+                    resolve({ output: this.lastOutput, exitCode, error: isError });
+                });
+            } catch (syncErr: any) {
+                const errMsg = syncErr?.message || String(syncErr);
+                this.outputChannel.appendLine(`Execution Exception: ${errMsg}`);
+                this.lastOutput = `Failed to spawn process: ${errMsg}`;
+                resolve({ output: this.lastOutput, exitCode: 1, error: true });
+            }
         });
     }
 

@@ -195,9 +195,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         // 2. Fallback: Detect files mentioned in modified blocks that might lack explicit backup
                         if (workspaceRoot) {
                             for (const msg of msgsToRevert) {
-                                const fileMatches = (msg.text || '').matchAll(/\*\*\`([^\`]+)\`\*\*/g);
+                                const fileMatches = (msg.text || '').matchAll(/(?:\*\*\`([^\`]+)\`\*\*|`([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`)/g);
                                 for (const m of fileMatches) {
-                                    const candidateRel = m[1];
+                                    const candidateRel = m[1] || m[2];
+                                    if (!candidateRel || candidateRel.includes(' ') || candidateRel.endsWith('.md')) continue;
                                     const fullPath = path.isAbsolute(candidateRel) ? candidateRel : path.join(workspaceRoot, candidateRel);
                                     if (!fileToOldestContent.has(fullPath)) {
                                         const snap = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
@@ -225,7 +226,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                                 hasEdits = true;
                                 revertedCount++;
                             } else {
-                                // Modified file -> Restore exact original state to disk & buffer
+                                // Modified file -> Restore exact original state directly to disk AND VS Code buffer
                                 try {
                                     fs.writeFileSync(filepath, content, 'utf8');
                                     let doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
@@ -238,8 +239,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                                             doc.positionAt(doc.getText().length)
                                         );
                                         revertEdit.replace(fileUri, fullRange, content);
-                                        hasEdits = true;
                                     }
+                                    hasEdits = true;
                                     revertedCount++;
                                 } catch (e) {
                                     console.error("Failed to restore file on rollback", filepath, e);
@@ -248,7 +249,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         }
 
                         if (hasEdits) {
-                            await vscode.workspace.applyEdit(revertEdit);
+                            try {
+                                await vscode.workspace.applyEdit(revertEdit);
+                            } catch (e) {
+                                console.warn("Workspace applyEdit skipped or failed during rollback", e);
+                            }
                             // Save any open documents to ensure zero unsaved dirty mismatch
                             for (const filepath of fileToOldestContent.keys()) {
                                 const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
@@ -388,6 +393,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             text: `⚡ Running: ${finalCmd}...`
                         });
                         TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
+                            if (workspaceRoot) {
+                                SessionMemory.recordCommand(workspaceRoot, finalCmd, !res.error);
+                            }
+                            this.postMessageToWebview({
+                                command: 'terminalCommandCompleted',
+                                callId: callId,
+                                exitCode: res.exitCode,
+                                error: res.error,
+                                output: res.output,
+                                commandText: finalCmd
+                            });
                             this.postMessageToWebview({
                                 command: 'statusUpdate',
                                 text: res.error ? `⚠️ Command finished (Exit Code: ${res.exitCode})` : `✅ Command completed (Exit Code: 0)`
@@ -807,28 +823,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const historyLimit = config?.contextLimits?.historyLength || 10;
             const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
 
-            // Check if we need to summarize due to length or token budget BEFORE blind trimming
-            if ((this.conversationHistory.length / 2 > historyLimit || this.conversationHistory.estimateTokens() > historyTokenLimit) 
-                && this.conversationHistory.length >= 6) {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🧠 Memory optimizing: Compressing older context to save tokens (Zero API cost)...`
-                });
-                try {
-                    // Local compression without API call. Keep slightly less than the limit to free space.
-                    const keepRecent = Math.max(2, Math.floor(historyLimit * 0.5));
-                    this.conversationHistory.localCompress(keepRecent);
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `✅ Context compressed locally (kept ${keepRecent} recent turns).` });
-                } catch (err) { console.error('Compression failed', err); }
-            }
-
-            // Trim history token budget as a failsafe
-            this.conversationHistory.trimToTokenBudget(historyTokenLimit);
-
-            // Use multi-turn API
-            const history = this.conversationHistory.getHistory(
-                historyLimit
-            );
+            // Resilient 2-Tier Memory: Preserves full UI history on disk while passing compressed context to LLM
+            const history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
 
             // Remove the last user message from history since we pass it separately
             const historyWithoutLast = history.slice(0, -1);
@@ -992,32 +988,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const historyLimit = config?.contextLimits?.historyLength || 10;
             const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
 
-            // SMART SUMMARIZER: Safely compress history if it exceeds user's limit OR token limit
-            if ((this.conversationHistory.length / 2 > historyLimit || this.conversationHistory.estimateTokens() > historyTokenLimit) 
-                && this.conversationHistory.length >= 6) {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🧠 Memory optimizing: Compressing older context to save tokens (Zero API cost)...`
-                });
-                try {
-                    // Local compression without API call. Keep slightly less than the limit to free space.
-                    const keepRecent = Math.max(2, Math.floor(historyLimit * 0.5));
-                    this.conversationHistory.localCompress(keepRecent);
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `✅ Context compressed locally (kept ${keepRecent} recent turns).`
-                    });
-                } catch (err) {
-                    console.error('Local compression failed', err);
-                }
-            }
-            
-            // Trim token budget as a failsafe
-            this.conversationHistory.trimToTokenBudget(historyTokenLimit);
-
-            let history = this.conversationHistory.getHistory(
-                historyLimit
-            );
+            // Resilient 2-Tier Memory: Preserves full UI history on disk while passing compressed context to LLM
+            let history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
 
             const historyWithoutLast = history.slice(0, -1);
             
@@ -1182,14 +1154,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             );
 
-            if (message.includeWebSearch) {
-                const searchWebTool: any = {
-                    name: "search_web",
-                    description: "Searches the internet for information, documentation, or code examples when you do not know the answer. ONLY use this when you explicitly need external information.",
-                    parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
-                };
-                tools[0].functionDeclarations.push(searchWebTool);
-            }
+            const searchWebTool: any = {
+                name: "search_web",
+                description: "Searches the internet for information, documentation, or code examples when you do not know the answer. ONLY use this when you explicitly need external information.",
+                parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
+            };
+            tools[0].functionDeclarations.push(searchWebTool);
 
             const filteredTools = PromptClassifier.filterTools(promptCategory, tools);
 
@@ -1257,7 +1227,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             }
                             if (!found) combinedResult += `\n--- File: ${filepath} (Not Found) ---\n`;
                         } else {
-                            combinedResult += `\n--- File: ${filepath} (Not Found) ---\n`;
+                            // Subdirectory fallback: search for target filename across workspace (e.g. urls.py -> ecommerce_project/urls.py)
+                            let resolvedAltPath: string | null = null;
+                            const targetBase = path.basename(filepath);
+                            const ignoreDirs = new Set(['node_modules', '.git', '.venv', 'env', '__pycache__', 'dist', 'build', '.ultra-light-ai']);
+                            
+                            const scanSubdirs = (currentDir: string, depth: number): string | null => {
+                                if (depth > 4) return null;
+                                try {
+                                    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+                                    for (const entry of entries) {
+                                        if (entry.isDirectory()) {
+                                            if (!ignoreDirs.has(entry.name)) {
+                                                const found = scanSubdirs(path.join(currentDir, entry.name), depth + 1);
+                                                if (found) return found;
+                                            }
+                                        } else if (entry.isFile()) {
+                                            if (entry.name.toLowerCase() === targetBase.toLowerCase()) {
+                                                return path.join(currentDir, entry.name);
+                                            }
+                                        }
+                                    }
+                                } catch { /* ignore */ }
+                                return null;
+                            };
+
+                            resolvedAltPath = scanSubdirs(workspaceRoot, 0);
+
+                            if (resolvedAltPath && fs.existsSync(resolvedAltPath)) {
+                                const relPath = path.relative(workspaceRoot, resolvedAltPath).replace(/\\/g, '/');
+                                let content = fs.readFileSync(resolvedAltPath, 'utf8');
+                                if (estimateTokens(content) > 3000) {
+                                    content = truncateToTokens(content, 3000) + '\n\n... (File truncated to stay within limits.)';
+                                }
+                                combinedResult += `\n--- File: ${relPath} (Auto-located from '${filepath}') ---\n${content}\n`;
+                            } else {
+                                combinedResult += `\n--- File: ${filepath} (Not Found in workspace. Use list_directory_tree to verify paths) ---\n`;
+                            }
                         }
                     }
                     return combinedResult;
@@ -1416,17 +1422,30 @@ ${JSON.stringify(assets, null, 2)}
                     }
 
                     if (this.isTerminalSessionAutoApproved) {
+                        const autoCallId = 'cmd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
                         this.postMessageToWebview({
                             command: 'toolCallEvent',
                             tool: 'execute_terminal_command',
                             title: 'Terminal Command (Session Auto-Approved)',
-                            data: { command: cmd, explanation: explanation }
+                            data: { command: cmd, explanation: explanation, callId: autoCallId, isAutoApproved: true }
                         });
                         this.postMessageToWebview({
                             command: 'statusUpdate',
                             text: `⚡ Auto-running: ${cmd}...`
                         });
-                        const res = await TerminalCapture.runAndCapture(cmd, workspaceRoot || this._workspaceRoot || '');
+                        const targetRoot = workspaceRoot || this._workspaceRoot || '';
+                        const res = await TerminalCapture.runAndCapture(cmd, targetRoot);
+                        if (targetRoot) {
+                            SessionMemory.recordCommand(targetRoot, cmd, !res.error);
+                        }
+                        this.postMessageToWebview({
+                            command: 'terminalCommandCompleted',
+                            callId: autoCallId,
+                            exitCode: res.exitCode,
+                            error: res.error,
+                            output: res.output,
+                            commandText: cmd
+                        });
                         this.postMessageToWebview({
                             command: 'statusUpdate',
                             text: res.error ? `⚠️ Command finished (Exit Code: ${res.exitCode})` : `✅ Command completed (Exit Code: 0)`
@@ -1544,41 +1563,45 @@ ${JSON.stringify(assets, null, 2)}
             const cleanResponseText = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
             this.conversationHistory.addMessage('model', cleanResponseText, result.usage);
 
-            // Job 2: Session Summarizer (Micro-Task)
-            if (message.advancedMode && workspaceRoot) {
+            // Job 2: Session Summarizer & Long-term Memory updater
+            if (workspaceRoot) {
                 const config = getAgentConfig(workspaceRoot);
-                const supportBrain = config?.supportBrain;
-                if (supportBrain && supportBrain.model) {
-                    (async () => {
-                        try {
+                const brainForSummary = config?.supportBrain?.model ? config.supportBrain : (config?.mainBrain?.model ? config.mainBrain : null);
+                (async () => {
+                    try {
+                        let recorded = false;
+                        if (brainForSummary && brainForSummary.model && brainForSummary.apiKey) {
                             const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
                             let scoutClient;
-                            if (supportBrain.providerType === 'local') {
-                                scoutClient = new LocalOllamaClient(supportBrain.model || 'llama-3.1-8b-instant', supportBrain.endpoint || 'http://127.0.0.1:11434', supportBrain.apiKey);
+                            if (brainForSummary.providerType === 'local') {
+                                scoutClient = new LocalOllamaClient(brainForSummary.model || 'llama-3.1-8b-instant', brainForSummary.endpoint || 'http://127.0.0.1:11434', brainForSummary.apiKey);
                             } else {
-                                const keyStr = supportBrain.apiKey?.trim() || '';
-                                if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(supportBrain.model, 'https://api.groq.com/openai', keyStr);
-                                else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(supportBrain.model, 'https://api.openai.com', keyStr);
-                                else scoutClient = new GeminiCloudClient([keyStr], supportBrain.model || 'gemini-1.5-flash', 60);
+                                const keyStr = brainForSummary.apiKey?.trim() || '';
+                                if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(brainForSummary.model, 'https://api.groq.com/openai', keyStr);
+                                else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(brainForSummary.model, 'https://api.openai.com', keyStr);
+                                else scoutClient = new GeminiCloudClient([keyStr], brainForSummary.model || 'gemini-1.5-flash', 60);
                             }
                             const summaryPrompt = `Summarize this AI coding response in exactly 1 sentence (max 20 words). Focus on: what file was changed, what was added/fixed.\n\nResponse:\n${cleanResponseText.substring(0, 1000)}`;
                             const summaryResult = await scoutClient.complete(summaryPrompt);
-                            SessionMemory.recordDecision(workspaceRoot, summaryResult.text.trim());
-                        } catch (e) {
-                            console.error("Scout Summarizer failed", e);
+                            if (summaryResult && summaryResult.text) {
+                                SessionMemory.recordDecision(workspaceRoot, summaryResult.text.trim());
+                                recorded = true;
+                            }
                         }
-                    })();
-                }
+                        if (!recorded) {
+                            // High-speed heuristic summary without API call
+                            const firstLine = message.text ? message.text.trim().split('\n')[0] : '';
+                            if (firstLine && firstLine.length > 5) {
+                                SessionMemory.recordDecision(workspaceRoot, `Task: ${firstLine.substring(0, 80)}`);
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Session Summarizer failed", e);
+                    }
+                })();
             }
 
-            // Removed complex JSON background queue. We now rely on conversational step-by-step.
-            if (message.architectMode) {
-                this.postMessageToWebview({
-                    command: 'streamChunk',
-                    text: `\n\n> 🏢 **Architect Mode:** Please review and click **Apply** on the files above. Reply with **"Next"** to continue building the project.`,
-                    done: true
-                });
-            }
+            // Conversational execution complete
 
         } catch (error: any) {
             this.currentStreamAbortController = null;
@@ -2132,21 +2155,38 @@ RULES FOR USING CONTEXT:
                 fs.appendFileSync(archPath, entry, 'utf8');
             }
 
-            // Save files automatically to prevent dirty state if needed, or let user decide.
-            vscode.window.showInformationMessage(`✨ Applied changes to ${message.files.length} files! (Use Ctrl+Z to undo)`);
+            // Explicitly save all applied files to disk to prevent dirty buffers and ensure CLI tools/terminal see them
+            for (const filepath of Object.keys(fileGroups)) {
+                const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                const fullPath = safeCheck.safe ? safeCheck.resolvedPath : path.join(workspaceRoot, filepath);
+                const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
+                if (openDoc && openDoc.isDirty) {
+                    await openDoc.save();
+                }
+            }
+
+            vscode.window.showInformationMessage(`✨ Applied & saved ${message.files.length} file(s)!`);
             
             if (createdFiles.length > 0) {
                 const firstFile = path.join(workspaceRoot, createdFiles[0]);
                 const doc = await vscode.workspace.openTextDocument(firstFile);
                 await vscode.window.showTextDocument(doc);
-
-
             }
 
             this.postMessageToWebview({
                 command: 'statusUpdate',
-                text: `✅ Created ${createdFiles.length} files: ${createdFiles.join(', ')}`
+                text: `✅ Saved ${createdFiles.length} file(s): ${createdFiles.join(', ')}`
             });
+
+            // Autonomous Closed-Loop Continuation:
+            // If session auto-approval is active, notify the AI that files are on disk and prompt next verification or milestone
+            if (message.autoProceed || this.isTerminalSessionAutoApproved) {
+                const filesList = createdFiles.map(f => `- \`${f}\``).join('\n');
+                this.postMessageToWebview({
+                    command: 'injectChatAndSend',
+                    text: `[SYSTEM: FILES SAVED TO DISK]\nSuccessfully applied and saved ${createdFiles.length} file(s) to workspace:\n${filesList}\n\nPlease run closed-loop verification (e.g. 'execute_terminal_command' with check, makemigrations, or tests) or proceed to the next component in your plan.`
+                });
+            }
         } catch (error: any) {
             vscode.window.showErrorMessage(`Failed to apply workspace edits: ${error?.message || error}`);
             this.postMessageToWebview({

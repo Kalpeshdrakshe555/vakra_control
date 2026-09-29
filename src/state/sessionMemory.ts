@@ -90,6 +90,19 @@ export class SessionMemory {
         this.save(workspaceRoot, mem);
     }
 
+    public static recordCommand(workspaceRoot: string, command: string, success: boolean) {
+        const mem = this.get(workspaceRoot) || this.init(workspaceRoot, 'Unknown', 'None');
+        const entry = `${success ? 'Executed' : 'Failed'}: \`${command.substring(0, 100)}\``;
+        if (!mem.keyDecisions.includes(entry)) {
+            mem.keyDecisions.push(entry);
+            if (mem.keyDecisions.length > MAX_DECISIONS) {
+                mem.keyDecisions = mem.keyDecisions.slice(-MAX_DECISIONS);
+            }
+        }
+        mem.updatedAt = Date.now();
+        this.save(workspaceRoot, mem);
+    }
+
     public static updateStep(workspaceRoot: string, step: number, total: number, taskDesc: string) {
         const mem = this.get(workspaceRoot) || this.init(workspaceRoot, 'Unknown', 'None');
         mem.currentStep = step;

@@ -45,6 +45,18 @@ export class DiffValidator {
             }
         }
 
+        // 3. Check for monologue comments masquerading as code (e.g. # I am reading...)
+        const lines = trimmed.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        const allComments = lines.length > 0 && lines.every(l =>
+            l.startsWith('#') || l.startsWith('//') || l.startsWith('/*') || l.startsWith('*') || l.startsWith('<!--')
+        );
+        if (allComments && (lines.length < 5 || /reading|inspecting|checking|verifying/i.test(trimmed))) {
+            return {
+                valid: false,
+                reason: "Replacement block appears to be an explanatory comment or monologue rather than executable code."
+            };
+        }
+
         return { valid: true };
     }
 

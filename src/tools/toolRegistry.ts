@@ -184,9 +184,9 @@ export class ToolRegistry {
 
     public static getAvailableToolsPrompt(): string {
         if (this.tools.size === 0) return '';
-        let prompt = `\n\n### PLUGINS & TOOLS ###\nYou have access to the following custom tools defined by the user. To use a tool, ask the user to run it, or if you have autonomous execution enabled, output \`@tool <tool_name> <args>\`.\n`;
+        let prompt = `\n\n### ADDITIONAL TOOLS & PLUGINS ###\nYou have access to the following function tools in this workspace. Call them using their function name with valid JSON arguments or standard function call syntax:\n`;
         for (const tool of this.tools.values()) {
-            prompt += `- **${tool.name}**: ${tool.description} | Args format: ${tool.parameters}\n`;
+            prompt += `- **${tool.name}**: ${tool.description} | Parameters: \`${tool.parameters}\`\n`;
         }
         return prompt;
     }

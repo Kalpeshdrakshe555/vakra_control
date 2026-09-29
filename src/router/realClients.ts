@@ -3,12 +3,207 @@ import { IEngine, CompletionResult, StreamChunk } from './IEngine';
 /**
  * Fallback parser for models that emit tool calls in plain text syntax (e.g. search_web(query="..."), <tool_call>...).
  */
+const KNOWN_TOOLS_LIST = [
+    'search_web',
+    'research_web_docs',
+    'execute_terminal_command',
+    'list_directory_tree',
+    'read_multiple_files',
+    'get_code_diagnostics',
+    'get_symbol_outline',
+    'check_localhost_health',
+    'update_architecture_context',
+    'generate_ui_blueprint'
+];
+const KNOWN_TOOLS_REGEX_STR = KNOWN_TOOLS_LIST.join('|');
+
+/**
+ * Universal fallback parser for models (Gemma, Llama, Qwen, etc.) that emit tool calls in plain text syntax:
+ * 1. Naked tool name followed by JSON:
+ *    list_directory_tree
+ *    { "dir": ".", "depth": 2 }
+ * 2. Embedded JSON tool object: { "name": "list_directory_tree", "arguments": {...} }
+ * 3. Function call syntax: search_web(query="...") or execute_terminal_command(command="...")
+ * 4. Tag syntax: <tool_call>...</tool_call>
+ * 5. Standalone ```bash blocks (auto-routed to execute_terminal_command)
+ */
+function tryParseJsonRelaxed(raw: string): any {
+    try {
+        return JSON.parse(raw);
+    } catch {
+        try {
+            const relaxed = raw
+                .replace(/,\s*([}\]])/g, '$1') // trailing commas
+                .replace(/([{,]\s*)([a-zA-Z_0-9]+)\s*:/g, '$1"$2":') // unquoted keys
+                .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"'); // single to double quotes
+            return JSON.parse(relaxed);
+        } catch {
+            return null;
+        }
+    }
+}
+
+function inferToolFromObject(obj: any): { name: string; args: any } | null {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+
+    // Explicit name or tool property
+    if (obj.name && KNOWN_TOOLS_LIST.includes(obj.name)) {
+        const clean = { ...(obj.arguments || obj.args || obj.parameters || obj) };
+        delete clean.name;
+        delete clean.tool;
+        return { name: obj.name, args: clean };
+    }
+    if (obj.tool && KNOWN_TOOLS_LIST.includes(obj.tool)) {
+        const clean = { ...(obj.arguments || obj.args || obj.parameters || obj) };
+        delete clean.name;
+        delete clean.tool;
+        return { name: obj.tool, args: clean };
+    }
+
+    // 1. read_multiple_files signature
+    if (obj.filepaths) {
+        const paths = Array.isArray(obj.filepaths) ? obj.filepaths : [String(obj.filepaths)];
+        return { name: 'read_multiple_files', args: { filepaths: paths } };
+    }
+    if (obj.files && Array.isArray(obj.files) && obj.files.length > 0 && typeof obj.files[0] === 'string') {
+        return { name: 'read_multiple_files', args: { filepaths: obj.files } };
+    }
+    if (obj.file_paths) {
+        const paths = Array.isArray(obj.file_paths) ? obj.file_paths : [String(obj.file_paths)];
+        return { name: 'read_multiple_files', args: { filepaths: paths } };
+    }
+    if (obj.filepath && !obj.newCode && !obj.symbolName && !obj.content && !obj.command) {
+        return { name: 'read_multiple_files', args: { filepaths: [String(obj.filepath)] } };
+    }
+
+    // 2. execute_terminal_command signature
+    if (obj.command || obj.cmd || obj.terminal_command || obj.shell_command) {
+        const cmd = obj.command || obj.cmd || obj.terminal_command || obj.shell_command;
+        return {
+            name: 'execute_terminal_command',
+            args: {
+                command: String(cmd),
+                explanation: obj.explanation || 'Executed command'
+            }
+        };
+    }
+
+    // 3. list_directory_tree signature
+    if (obj.dir !== undefined || obj.directory !== undefined || (obj.depth !== undefined && !obj.query)) {
+        return {
+            name: 'list_directory_tree',
+            args: {
+                dir: obj.dir || obj.directory || '.',
+                depth: typeof obj.depth === 'number' ? obj.depth : 2
+            }
+        };
+    }
+
+    // 4. research_web_docs signature
+    if (obj.query && (obj.urls || obj.url || obj.docs)) {
+        return {
+            name: 'research_web_docs',
+            args: {
+                query: String(obj.query),
+                urls: Array.isArray(obj.urls) ? obj.urls : (obj.url ? [String(obj.url)] : [])
+            }
+        };
+    }
+
+    // 5. search_web signature
+    if (obj.query || obj.search_query || obj.search) {
+        const q = obj.query || obj.search_query || obj.search;
+        return {
+            name: 'search_web',
+            args: { query: String(q) }
+        };
+    }
+
+    // 6. check_localhost_health signature
+    if (obj.port !== undefined && (obj.port === 3000 || obj.port === 8000 || obj.port === 5173 || obj.port === 8080 || typeof obj.port === 'number')) {
+        return {
+            name: 'check_localhost_health',
+            args: { port: Number(obj.port) }
+        };
+    }
+
+    // 7. replace_symbol signature
+    if (obj.filepath && obj.symbolName && obj.newCode) {
+        return {
+            name: 'replace_symbol',
+            args: { filepath: obj.filepath, symbolName: obj.symbolName, newCode: obj.newCode }
+        };
+    }
+
+    // 8. get_symbol_outline signature
+    if (obj.filepath && obj.symbolName && !obj.newCode) {
+        return {
+            name: 'get_symbol_outline',
+            args: { filepath: obj.filepath }
+        };
+    }
+
+    // 9. get_code_diagnostics signature
+    if (obj.diagnostics !== undefined || obj.problems !== undefined) {
+        return {
+            name: 'get_code_diagnostics',
+            args: { filepath: obj.filepath || '' }
+        };
+    }
+
+    // 10. update_architecture_context signature
+    if (obj.architecture || obj.arch_content) {
+        return {
+            name: 'update_architecture_context',
+            args: { content: obj.architecture || obj.arch_content }
+        };
+    }
+
+    return null;
+}
+
 function extractTextToolCalls(text: string): Array<{ name: string; args: any; raw: string }> {
     const results: Array<{ name: string; args: any; raw: string }> = [];
     if (!text || typeof text !== 'string') return results;
 
-    // Pattern 1: Function call syntax: e.g. search_web(query="...") or execute_terminal_command(command="...")
-    const funcRegex = /\b(search_web|research_web_docs|execute_terminal_command|list_directory_tree|read_multiple_files|get_code_diagnostics|get_symbol_outline|check_localhost_health)\s*\(([\s\S]*?)\)/g;
+    const pushUnique = (name: string, args: any, raw: string) => {
+        if (!results.some(r => r.name === name && JSON.stringify(r.args) === JSON.stringify(args))) {
+            results.push({ name, args, raw });
+        }
+    };
+
+    // Pattern 1: Naked Tool Name followed by JSON Object (Common in Gemma, Llama, Qwen local outputs)
+    // e.g.: list_directory_tree \n { "dir": ".", "depth": 2 }
+    const nakedRegex = new RegExp(`(?:^|\\n)\\s*(${KNOWN_TOOLS_REGEX_STR})\\s*(?::|->)?\\s*\\n*\\s*(?:\`\`\`(?:json)?\\s*\\n*)?(\\{[\\s\\S]*?\\})(?:\\s*\\n*\`\`\`)?`, 'gi');
+    let nakedMatch;
+    while ((nakedMatch = nakedRegex.exec(text)) !== null) {
+        const toolName = nakedMatch[1].trim();
+        const rawJson = nakedMatch[2].trim();
+        const parsed = tryParseJsonRelaxed(rawJson);
+        if (parsed && typeof parsed === 'object') {
+            pushUnique(toolName, parsed, nakedMatch[0]);
+        }
+    }
+
+    // Pattern 2: JSON Object with "name" or "tool" property matching a known tool
+    const jsonToolRegex = /\{[\s\S]*?"(?:name|tool)"\s*:\s*"([a-zA-Z_0-9]+)"[\s\S]*?\}/g;
+    let jsonMatch;
+    while ((jsonMatch = jsonToolRegex.exec(text)) !== null) {
+        const parsed = tryParseJsonRelaxed(jsonMatch[0]);
+        if (parsed) {
+            const toolName = parsed.name || parsed.tool;
+            if (toolName && KNOWN_TOOLS_LIST.includes(toolName)) {
+                const args = parsed.arguments || parsed.args || parsed.parameters || parsed;
+                const cleanArgs = { ...args };
+                delete cleanArgs.name;
+                delete cleanArgs.tool;
+                pushUnique(toolName, cleanArgs, jsonMatch[0]);
+            }
+        }
+    }
+
+    // Pattern 3: Standard Function call syntax: e.g. search_web(query="...")
+    const funcRegex = new RegExp(`\\b(${KNOWN_TOOLS_REGEX_STR})\\s*\\(([\\s\\S]*?)\\)`, 'gi');
     let match;
     while ((match = funcRegex.exec(text)) !== null) {
         const toolName = match[1];
@@ -17,9 +212,8 @@ function extractTextToolCalls(text: string): Array<{ name: string; args: any; ra
 
         // Case A: JSON object inside parentheses, e.g. search_web({"query": "foo"})
         if (rawArgs.startsWith('{') && rawArgs.endsWith('}')) {
-            try {
-                parsedArgs = JSON.parse(rawArgs);
-            } catch {}
+            const parsed = tryParseJsonRelaxed(rawArgs);
+            if (parsed) parsedArgs = parsed;
         }
 
         // Case B: keyword arguments: query="foo", command="bar"
@@ -54,19 +248,111 @@ function extractTextToolCalls(text: string): Array<{ name: string; args: any; ra
         }
 
         if (toolName && Object.keys(parsedArgs).length > 0) {
-            results.push({ name: toolName, args: parsedArgs, raw: match[0] });
+            pushUnique(toolName, parsedArgs, match[0]);
         }
     }
 
-    // Pattern 2: XML <tool_call>...</tool_call>
-    const xmlRegex = /<tool_call>([\s\S]*?)<\/tool_call>/g;
+    // Pattern 4: XML <tool_call>...</tool_call> or <action>...</action>
+    const xmlRegex = /<(?:tool_call|action)>([\s\S]*?)<\/(?:tool_call|action)>/gi;
     while ((match = xmlRegex.exec(text)) !== null) {
-        try {
-            const parsed = JSON.parse(match[1].trim());
-            if (parsed.name) {
-                results.push({ name: parsed.name, args: parsed.arguments || parsed.args || {}, raw: match[0] });
+        const parsed = tryParseJsonRelaxed(match[1].trim());
+        if (parsed && parsed.name) {
+            pushUnique(parsed.name, parsed.arguments || parsed.args || {}, match[0]);
+        }
+    }
+
+    // Pattern 5: Line-based shorthand: e.g. read_multiple_files \n catalog/views.py
+    const shorthandRegex = new RegExp(`(?:^|\\n)\\s*(${KNOWN_TOOLS_REGEX_STR})\\s*(?::|->)?\\s*\\n\\s*([a-zA-Z0-9_\\-\\.\\/\\\\]+\\.[a-zA-Z0-9]+)\\s*(?:\\n|$)`, 'gi');
+    let shortMatch;
+    while ((shortMatch = shorthandRegex.exec(text)) !== null) {
+        const tool = shortMatch[1].trim();
+        const arg = shortMatch[2].trim();
+        if (tool === 'read_multiple_files' || tool === 'get_code_diagnostics' || tool === 'get_symbol_outline') {
+            const args = tool === 'read_multiple_files' ? { filepaths: [arg] } : { filepath: arg };
+            pushUnique(tool, args, shortMatch[0]);
+        }
+    }
+
+    // Pattern 6: Signature-Inferred Tool Calls (Naked JSON payloads without tool name)
+    // Extracts balanced-brace JSON objects in markdown fences or raw text
+    // Handles: { "filepaths": [ "catalog/views.py" ] }, { "command": "..." }, { "dir": ".", "depth": 2 }
+    let openBraceIndex = -1;
+    let braceCount = 0;
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (escape) {
+            escape = false;
+            continue;
+        }
+        if (char === '\\') {
+            escape = true;
+            continue;
+        }
+        if (char === '"' && !escape) {
+            inString = !inString;
+            continue;
+        }
+        if (!inString) {
+            if (char === '{') {
+                if (braceCount === 0) {
+                    openBraceIndex = i;
+                }
+                braceCount++;
+            } else if (char === '}') {
+                braceCount--;
+                if (braceCount === 0 && openBraceIndex !== -1) {
+                    const candidate = text.substring(openBraceIndex, i + 1).trim();
+                    const parsed = tryParseJsonRelaxed(candidate);
+                    if (parsed && typeof parsed === 'object') {
+                        const inferred = inferToolFromObject(parsed);
+                        if (inferred) {
+                            pushUnique(inferred.name, inferred.args, candidate);
+                        }
+                    }
+                    openBraceIndex = -1;
+                } else if (braceCount < 0) {
+                    braceCount = 0;
+                    openBraceIndex = -1;
+                }
             }
-        } catch {}
+        }
+    }
+
+    // Pattern 7: Auto-route actionable bash code blocks to execute_terminal_command
+    if (results.length === 0) {
+        const bashBlockRegex = /```(?:bash|sh|cmd|powershell)\s*\n([\s\S]*?)\n```/gi;
+        let bashMatch;
+        while ((bashMatch = bashBlockRegex.exec(text)) !== null) {
+            const rawCmd = bashMatch[1].trim();
+            if (rawCmd.length > 0 && !rawCmd.startsWith('#')) {
+                results.push({
+                    name: 'execute_terminal_command',
+                    args: { command: rawCmd, explanation: 'Auto-detected command from response' },
+                    raw: bashMatch[0]
+                });
+                break;
+            }
+        }
+    }
+
+    // Pattern 8: Auto-detect conversational file reading intent (prevents hallucination and fetches real context)
+    // e.g. "I am reading the project's main urls.py", "Reading urls.py to verify...", "Let me inspect catalog/views.py"
+    if (results.length === 0) {
+        const readIntentRegex = /(?:#|\/\/)?\s*(?:I am reading|Reading|Let me read|Let me inspect|I will inspect|Let's check|Checking)\s+(?:the\s+)?(?:project'?s?\s+main\s+)?`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`?/i;
+        const readMatch = readIntentRegex.exec(text);
+        if (readMatch && readMatch[1]) {
+            const rawPath = readMatch[1].trim();
+            if (!rawPath.endsWith('.md') && !rawPath.includes(' ') && rawPath.includes('.')) {
+                results.push({
+                    name: 'read_multiple_files',
+                    args: { filepaths: [rawPath] },
+                    raw: readMatch[0]
+                });
+            }
+        }
     }
 
     return results;
@@ -334,8 +620,9 @@ export class GeminiCloudClient implements IEngine {
         let finalUsage: CompletionResult['usage'] | undefined;
         let fullText = '';
         let iteration = 0;
+        const toolExecutionHistory = new Map<string, number>();
 
-        while (iteration < 15) { // Max 15 tool calls per turn to prevent infinite loops
+        while (iteration < 12) { // Max 12 tool calls per turn to allow full scaffolding and audits
             iteration++;
             const requestBody: any = {
                 contents,
@@ -483,10 +770,18 @@ export class GeminiCloudClient implements IEngine {
                 if (onChunk) onChunk({ text: `\n> *⚙️ AI is using tool: \`${functionCallToExecute.name}\`*\n`, done: false });
                 
                 let toolResult;
-                try {
-                    toolResult = await onToolCall(functionCallToExecute);
-                } catch (err: any) {
-                    toolResult = `Error executing tool: ${err?.message}`;
+                const callSignature = `${functionCallToExecute.name}:${JSON.stringify(functionCallToExecute.args || {})}`;
+                const callCount = (toolExecutionHistory.get(callSignature) || 0) + 1;
+                toolExecutionHistory.set(callSignature, callCount);
+
+                if (callCount > 2) {
+                    toolResult = `[LOOP PREVENTED]: Tool '${functionCallToExecute.name}' with the same arguments was already executed ${callCount - 1} times in this turn. Aborting repeat execution to prevent loop. Please explain the issue to the user or proceed without re-running this command.`;
+                } else {
+                    try {
+                        toolResult = await onToolCall(functionCallToExecute);
+                    } catch (err: any) {
+                        toolResult = `Error executing tool: ${err?.message}`;
+                    }
                 }
 
                 // Add to contents for next API call
@@ -511,7 +806,8 @@ export class GeminiCloudClient implements IEngine {
             return { text: fullText, usage: finalUsage };
         } // end tool loop
         
-        throw new Error("Exceeded maximum tool call iterations.");
+        if (onChunk) onChunk({ text: '\n\n*Completed maximum autonomous tool executions for this turn. Proceeding with the project roadmap.*', done: true, usage: finalUsage });
+        return { text: fullText || 'Completed autonomous tool executions for this turn. Proceeding with next planned steps.', usage: finalUsage };
     }
 }
 
@@ -573,7 +869,9 @@ export class LocalOllamaClient implements IEngine {
             }));
         }
 
-        const MAX_TOOL_ITERATIONS = 10;
+        const MAX_TOOL_ITERATIONS = 12;
+        const localToolExecutionCounts = new Map<string, number>();
+        let lastFullText = '';
         for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
             const requestBody: any = {
                 model: this.model,
@@ -690,6 +988,16 @@ export class LocalOllamaClient implements IEngine {
                     for (const tc of toolCallsAccumulator) {
                         try {
                             const args = JSON.parse(tc.arguments);
+                            const callSig = `${tc.name}:${tc.arguments}`;
+                            const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
+                            localToolExecutionCounts.set(callSig, count);
+
+                            if (count > 2) {
+                                const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: loopMsg });
+                                continue;
+                            }
+
                             const result = await onToolCall({ name: tc.name, args });
                             messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: typeof result === 'string' ? result : JSON.stringify(result) });
                         } catch (e: any) {
@@ -738,6 +1046,16 @@ export class LocalOllamaClient implements IEngine {
                                 for (const tc of toolCalls) {
                                     try {
                                         const args = JSON.parse(tc.function.arguments);
+                                        const callSig = `${tc.function.name}:${tc.function.arguments}`;
+                                        const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
+                                        localToolExecutionCounts.set(callSig, count);
+
+                                        if (count > 2) {
+                                            const loopMsg = `[LOOP PREVENTED]: Tool '${tc.function.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                            messages.push({ role: 'tool', tool_call_id: tc.id, content: loopMsg });
+                                            continue;
+                                        }
+
                                         if (onChunk) onChunk({ text: `\n> *⚙️ Tool: \`${tc.function.name}\`*\n`, done: false });
                                         const result = await onToolCall({ name: tc.function.name, args });
                                         messages.push({
@@ -762,6 +1080,7 @@ export class LocalOllamaClient implements IEngine {
                     fullText = rawText;
                 }
                 
+                lastFullText = fullText;
                 if (stream && onChunk) {
                     onChunk({ text: fullText, done: false });
                     onChunk({ text: '', done: true });
@@ -770,6 +1089,9 @@ export class LocalOllamaClient implements IEngine {
             }
         }
 
-        throw new Error('Exceeded maximum tool call iterations.');
+        if (stream && onChunk) {
+            onChunk({ text: '\n\n*Completed maximum autonomous tool executions for this turn. Proceeding with the project roadmap.*', done: true });
+        }
+        return { text: lastFullText || 'Completed autonomous tool executions for this turn. Proceeding with next planned steps.' };
     }
 }

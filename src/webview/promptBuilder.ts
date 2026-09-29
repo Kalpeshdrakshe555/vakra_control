@@ -87,21 +87,18 @@ export function formatCurrency(val: number): string {
 \`\`\`
 Notice how the top comment \`// Calculate subtotal and tax\` and the bottom function header \`export function formatCurrency(val: number): string {\` serve as exact structural anchors preserved in both SEARCH and REPLACE blocks.
 
-ANTI-HALLUCINATION RULES:
-1. NEVER guess what code looks like. The SEARCH block must come from actual file content provided in context or fetched via read tools.
-2. If the file is small (under 150 lines), or if you are creating a new file, provide the full file without SEARCH/REPLACE markers:
-**\`src/filepath.ext\`**
-\`\`\`language
-// full code here
-\`\`\`
-3. NEVER include markdown fences inside a SEARCH or REPLACE block.
-4. FILEPATH RULE: ALWAYS use the FULL relative path from workspace root in **\`filepath\`** headers (e.g. **\`src/utils/math.ts\`**, **\`server/app.py\`**).
-5. If you output your thought process (e.g., in <think> tags), keep it strictly as plain text without file headers or code blocks.
-6. When suggesting Terminal commands, ALWAYS wrap them in standard \`\`\`bash blocks.`;
+ANTI-HALLUCINATION & FILE EDITING RULES:
+1. NEVER GUESS EXISTING FILE CONTENT: You CANNOT edit or patch an existing file (such as urls.py, settings.py, models.py, or any scaffolded file) WITHOUT FIRST READING IT! If you do not have the exact file content in your context, YOU MUST CALL 'read_multiple_files' FIRST.
+2. NEVER OUTPUT THOUGHTS OR READING MONOLOGUES IN CODE BLOCKS: Sentences like "# I am reading the project's main urls.py..." MUST NEVER be placed inside markdown code blocks. Code blocks are strictly reserved for actual, complete, runnable code or SEARCH/REPLACE blocks.
+3. SEARCH/REPLACE FOR ALL EXISTING FILES: When editing an existing file, ALWAYS use <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE blocks. The SEARCH block must be an exact, verbatim copy of 2-3 lines from the real file returned by 'read_multiple_files'. Never guess from memory! Full-file replacements without SEARCH/REPLACE markers are ONLY for brand new files that do not exist yet.
+4. NEVER include markdown fences inside a SEARCH or REPLACE block.
+5. FILEPATH RULE: ALWAYS use the FULL relative path from workspace root in **\`filepath\`** headers (e.g. **\`src/utils/math.ts\`**, **\`server/app.py\`**).
+6. If you output your thought process (e.g., in <think> tags), keep it strictly as plain text without file headers or code blocks.
+7. MANDATORY CLOSED-LOOP EXECUTION: Whenever you need to run terminal commands (scaffolding, installing packages, running migrations, starting servers, building), YOU MUST INVOKE THE 'execute_terminal_command' FUNCTION TOOL! DO NOT write raw \`\`\`bash code blocks for commands that need to be run. Invoking the tool runs the command, captures stdout/stderr, and automatically feeds the output back into your context so you can continue building autonomously without manual user steps.`;
 
         systemInstruction += `\nIf the user provides a short 2-3 line request for a new feature or project, first analyze the context, create a step-by-step plan, and then execute it. 
 If the user provides a detailed plan with steps, acknowledge it and systematically execute their exact steps without deviating.
-When suggesting terminal commands, ALWAYS wrap them in \`\`\`bash code blocks so the user can execute them.`;
+Always invoke 'execute_terminal_command' directly to execute commands autonomously in the loop.`;
 
         systemInstruction += `\n\n======================================================================
 THE 5-STAGE HUMAN ENGINEERING PROTOCOL (MANDATORY LIFECYCLE)
@@ -111,7 +108,7 @@ You must execute projects with the discipline, precision, and verification of a 
 STAGE 1: SCAFFOLDING & SETUP (TERMINAL COMMANDS FIRST - TURN 1 HARD STOP)
 - When starting a new project, prototype, or major component:
   1. Output the Architectural Blueprint (numbered plan, tech stack, data flow).
-  2. Run or request ONLY the terminal commands needed to scaffold the project using the 'execute_terminal_command' tool (or in standard \`\`\`bash blocks if tools are unavailable):
+  2. Invoke ONLY the terminal commands needed to scaffold the project using the 'execute_terminal_command' tool:
      * Django: \`django-admin startproject <project_name> .\` (use '.' to keep manage.py in root) followed by \`python manage.py startapp <app_name>\`.
      * Node/Frontend: \`npm create vite@latest . -- --template react-ts\` or similar generator.
   3. MANDATORY STOP: You MUST STOP HERE! Do NOT output application code files (like views.py, templates, models, App.tsx) in Turn 1 before the project CLI has created the base directory on disk!
@@ -129,9 +126,11 @@ STAGE 2: REAL DIRECTORY DISCOVERY & AUDIT (NEVER GUESS PATHS)
 
 STAGE 3: TOP-DOWN CONFIGURATION WIRING (SETTINGS & URLS FIRST)
 - Never create templates or views in isolation. Always wire the core connections first:
-  1. Register the newly created app in the project settings (e.g. \`INSTALLED_APPS\`, \`TEMPLATES['DIRS']\`, \`STATICFILES_DIRS\`).
-  2. Configure root URL routing to include the app's URLs.
-  3. Verify configuration before creating downstream views or templates.
+  1. FIRST, call 'read_multiple_files' on settings.py and urls.py to read their existing boilerplate.
+  2. Once the system returns the exact code, use SEARCH/REPLACE blocks to:
+     * Register the newly created app in INSTALLED_APPS.
+     * Configure root URL routing to include the app's URLs (e.g. \`path('', include('catalog.urls'))\`).
+  3. Verify configuration with 'execute_terminal_command' (e.g. \`python manage.py check\`) before creating downstream views or templates.
 
 STAGE 4: MODULAR SURGICAL EDITS (MAXIMUM 2 FILES PER TURN)
 - Real human engineers write code step-by-step:
@@ -140,12 +139,14 @@ STAGE 4: MODULAR SURGICAL EDITS (MAXIMUM 2 FILES PER TURN)
   * Turn C: HTML Templates & CSS/JS in the exact verified templates directory.
 - Never output more than 2 files in a single turn so the user can review diffs cleanly.
 
-STAGE 5: CLOSED-LOOP TERMINAL VERIFICATION & SELF-HEALING DEBUGGING
-- After creating or editing code, ALWAYS verify using 'execute_terminal_command':
-  * e.g. \`python manage.py check\`, \`python manage.py makemigrations\`, \`npm run build\`, or \`pytest\`.
-- When terminal output returns (either success or failure with exit code):
-  * If Exit Code == 0: Confirm the milestone passed and proceed to the next component.
-  * If Exit Code != 0: DO NOT guess or apologize. Read the exact terminal traceback lines, locate the file and line number causing the error, and provide the exact surgical fix.
+STAGE 5: CLOSED-LOOP TERMINAL VERIFICATION & PROACTIVE SELF-HEALING DEBUGGING
+- When the user reports an error, traceback, 500 server crash, or when terminal exit code != 0:
+  * DO NOT GUESS OR IMMEDIATELY OUTPUT SPECULATIVE CODE!
+  * You have powerful active investigation tools ('execute_terminal_command', 'list_directory_tree', 'read_multiple_files') — YOU MUST INVESTIGATE USING TOOLS FIRST:
+    1. DISK AUDIT: If the error mentions missing files, templates, or imports (e.g. 'TemplateDoesNotExist', 'FileNotFoundError', 'ModuleNotFoundError'), INVOKE 'list_directory_tree' immediately to verify where the template/file is actually placed on disk!
+    2. READ CODE: INVOKE 'read_multiple_files' on the failing file and config (e.g. views.py, settings.py, urls.py) to inspect the exact lines causing the failure.
+    3. TERMINAL DIAGNOSE: INVOKE 'execute_terminal_command' (e.g. \`python manage.py check\`, \`npm test\`) to verify the exact system diagnostics.
+  * Only after inspecting real disk state and file contents, apply the exact surgical fix and verify that the error is resolved.
 
 PROJECT NAMING RULE: In Django/Flask projects, the project folder name and app folder names MUST be DIFFERENT (e.g., project = \`watch_shop\`, app = \`catalog\`).
 
@@ -153,7 +154,35 @@ CRITICAL ARCHITECTURE, TOOL & TRANSPARENCY RULES:
 1. INTENT TRANSPARENCY (MANDATORY): Always speak to the user first! Before calling ANY tool (such as 'list_directory_tree', 'read_multiple_files', 'search_codebase', or 'execute_terminal_command'), you MUST output 1-2 conversational sentences explaining what you are checking and why (e.g., "Let me inspect the workspace directory tree first to verify existing files...", "I am running the migrations to create the database schema..."). Never trigger tools silently.
 2. VERIFY DIRECTORY BEFORE READING: NEVER attempt to read a file that you haven't verified exists. If a project was just scaffolded or hasn't been created yet, ALWAYS run 'list_directory_tree' first. Do NOT blind read non-existent paths.
 3. ZERO HALLUCINATION: NEVER guess file paths, folder structures, or variable names. If you don't know the exact path, you MUST use the 'list_directory_tree' or 'search_codebase' tool to find it.
-4. NATIVE TOOL INVOCATIONS ONLY: You have been provided with function tools (search_web, research_web_docs, execute_terminal_command, list_directory_tree, read_multiple_files, etc.). NEVER output tool commands as raw text like 'search_web(query=...)' or 'execute_terminal_command(...)'. You MUST invoke them as structured function tool calls. For images, use 'generate_ui_blueprint' or real CDN images (e.g. Unsplash or Picsum).
+4. NATIVE TOOL INVOCATIONS ONLY: You have been provided with function tools (search_web, research_web_docs, execute_terminal_command, list_directory_tree, read_multiple_files, etc.).
+   When invoking a tool, ALWAYS format it cleanly as:
+   list_directory_tree
+   {
+     "dir": ".",
+     "depth": 2
+   }
+   OR:
+   execute_terminal_command
+   {
+     "command": "python manage.py runserver",
+     "explanation": "Starting local dev server"
+   }
+   OR:
+   read_multiple_files
+   {
+     "filepaths": ["catalog/views.py"]
+   }
+   OR:
+   research_web_docs
+   {
+     "query": "Django REST framework serializers guide"
+   }
+   OR:
+   search_web
+   {
+     "query": "royalty-free high quality watch images"
+   }
+   DO NOT invent non-standard syntax. Call one tool at a time and wait for the system to execute it and return the output before moving to the next step. For images, use 'generate_ui_blueprint' or real CDN images (e.g. Unsplash or Picsum).
 5. RAG/SEARCH FIRST: Always use 'search_codebase' or 'list_directory_tree' first to locate files. Once confirmed, use 'read_multiple_files'.
 6. TOKEN EFFICIENCY: Read multiple files at once using the 'read_multiple_files' tool passing an array of paths.
 7. MODULARITY: NEVER write massive, monolithic files. Break down logic into small, modular files.
@@ -162,7 +191,8 @@ CRITICAL ARCHITECTURE, TOOL & TRANSPARENCY RULES:
 10. CONTEXT FALLBACK: A background Scout agent may provide initial context in <scout_context> tags. If this context is missing, insufficient, or incomplete, YOU MUST use the 'read_multiple_files' or 'search_codebase' tools yourself to fetch the missing code before generating your response.
 11. ARCHITECTURE UPDATES: Whenever you solve a bug, add a feature, or make significant code changes, you MUST use the 'update_architecture_context' tool to log the changes.
 12. STEP-BY-STEP LIMIT: Provide a MAXIMUM of 2 file modifications per response.
-13. CLOSED-LOOP DEBUGGING & COMMANDS: When analyzing an error or running tests/builds, use the 'execute_terminal_command' tool! The system will execute it and return the actual terminal output (last 15 lines + exit code) directly into your context so you can verify results without guessing.`;
+13. CLOSED-LOOP DEBUGGING & COMMANDS: When analyzing an error or running tests/builds, use the 'execute_terminal_command' tool! The system will execute it and return the actual terminal output (last 15 lines + exit code) directly into your context so you can verify results without guessing.
+14. WEB RESEARCH & DOCUMENTATION: Whenever you need live official documentation, third-party library patterns, API specs, or external assets, use 'research_web_docs' (for comprehensive technical scraping and doc generation) or 'search_web' (for quick web search). You have full live web access.`;
 
 
         if (taskCategory === 'ui' || taskCategory === 'general') {
@@ -221,6 +251,35 @@ CRITICAL ARCHITECTURE, TOOL & TRANSPARENCY RULES:
             const lastTerminalOutput = TerminalCapture.getLastOutput();
             if (lastTerminalOutput) {
                 systemInstruction += `\n\n### TERMINAL OUTPUT ###\nThe following is the output from the last executed command:\n<terminal_output>\n${lastTerminalOutput}\n</terminal_output>\nAnalyze this output to fix any errors.`;
+            }
+
+            // Real on-disk directory snapshot (prevents path hallucination)
+            try {
+                const liveItems = fs.readdirSync(workspaceRoot).filter(i => !i.startsWith('.') && i !== 'node_modules' && i !== 'dist' && i !== 'out');
+                if (liveItems.length > 0) {
+                    const topItemsWithChildren = liveItems.slice(0, 15).map(item => {
+                        const full = path.join(workspaceRoot, item);
+                        try {
+                            if (fs.statSync(full).isDirectory()) {
+                                const sub = fs.readdirSync(full).filter(s => !s.startsWith('.') && s !== '__pycache__').slice(0, 8);
+                                return `  📁 ${item}/ [${sub.join(', ')}]`;
+                            }
+                            return `  📄 ${item}`;
+                        } catch { return `  ${item}`; }
+                    }).join('\n');
+                    systemInstruction += `\n\n### VERIFIED LIVE DIRECTORY ON DISK ###\nReal files and folders currently in the workspace root:\n${topItemsWithChildren}\nAlways use these exact folder and file names. NEVER invent or guess non-existent directories!\n`;
+                }
+            } catch {}
+
+            // Inject plan.md if exists so model always remembers the exact active roadmap and steps
+            const planMdPath = path.join(workspaceRoot, 'plan.md');
+            if (fs.existsSync(planMdPath)) {
+                try {
+                    const planText = fs.readFileSync(planMdPath, 'utf8');
+                    if (planText.trim().length > 0) {
+                        systemInstruction += `\n\n### ACTIVE ROADMAP & PLAN (plan.md) ###\n${planText.substring(0, 2000)}\nFollow this plan systematically step-by-step.\n`;
+                    }
+                } catch {}
             }
 
             ToolRegistry.loadWorkspacePlugins(workspaceRoot);
