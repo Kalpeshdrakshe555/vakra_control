@@ -50,7 +50,8 @@ export class DiffValidator {
         const allComments = lines.length > 0 && lines.every(l =>
             l.startsWith('#') || l.startsWith('//') || l.startsWith('/*') || l.startsWith('*') || l.startsWith('<!--')
         );
-        if (allComments && (lines.length < 5 || /reading|inspecting|checking|verifying/i.test(trimmed))) {
+        const isIntentionalDeletionMarker = options?.allowEmpty === true || /\b(delete|deletion|remove|removed|clear|empty|intentional)\b/i.test(content);
+        if (allComments && (lines.length < 5 || /reading|inspecting|checking|verifying/i.test(trimmed)) && !isIntentionalDeletionMarker) {
             return {
                 valid: false,
                 reason: "Replacement block appears to be an explanatory comment or monologue rather than executable code."
