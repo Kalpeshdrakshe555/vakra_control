@@ -250,6 +250,7 @@ export interface AgentConfig {
     advancedModeEnabled?: boolean;
 
     temperature?: number; // 0.0 - 1.0 (default 0.4)
+    maxAutonomousToolSteps?: number; // 5 - 100 (default 30)
 
     contextLimits: { 
         maxTokens?: number; 

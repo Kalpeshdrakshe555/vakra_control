@@ -106,6 +106,30 @@ FIX: Move the template into the nested directory: \`catalog/templates/catalog/${
             contexts.unshift({ filepath: requestedTpl, line: 0, codeSnippet: tplDiagnostic });
         }
 
+        // Framework Diagnostic 2: Python ModuleNotFoundError
+        const modMatch = errorText.match(/ModuleNotFoundError:\s*No module named ['"]([^'"]+)['"]/i);
+        if (modMatch && modMatch[1]) {
+            const missingMod = modMatch[1];
+            const modDiagnostic = `### MISSING DEPENDENCY DIAGNOSTIC ###\n` +
+                `Python failed to import module '${missingMod}'.\n` +
+                `FIX: Run the terminal command to install the package:\n` +
+                `\`pip install ${missingMod}\` (or check if it is part of your virtual environment requirements).\n`;
+            contexts.unshift({ filepath: 'requirements.txt', line: 0, codeSnippet: modDiagnostic });
+        }
+
+        // Framework Diagnostic 3: Node Cannot find module
+        const nodeModMatch = errorText.match(/Cannot find module ['"]([^'"]+)['"]/i);
+        if (nodeModMatch && nodeModMatch[1]) {
+            const missingMod = nodeModMatch[1];
+            if (!missingMod.startsWith('.')) {
+                const nodeDiagnostic = `### MISSING NODE DEPENDENCY DIAGNOSTIC ###\n` +
+                    `Node.js failed to resolve package '${missingMod}'.\n` +
+                    `FIX: Run the terminal command to install the package:\n` +
+                    `\`npm install ${missingMod}\`\n`;
+                contexts.unshift({ filepath: 'package.json', line: 0, codeSnippet: nodeDiagnostic });
+            }
+        }
+
         return contexts;
     }
 

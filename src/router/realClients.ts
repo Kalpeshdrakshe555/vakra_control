@@ -1,4 +1,14 @@
 import { IEngine, CompletionResult, StreamChunk } from './IEngine';
+import { repairToolCall, ToolSpec } from './toolReanchor';
+
+function getToolSpecsFromTools(tools?: any[]): ToolSpec[] {
+    if (!tools || !tools[0]?.functionDeclarations) return [];
+    return tools[0].functionDeclarations.map((f: any) => ({
+        name: f.name,
+        signature: `${f.name}(${Object.keys(f.parameters?.properties || {}).join(', ')})`,
+        parameters: f.parameters || { properties: {} }
+    }));
+}
 
 /**
  * Fallback parser for models that emit tool calls in plain text syntax (e.g. search_web(query="..."), <tool_call>...).
@@ -156,6 +166,56 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         return {
             name: 'update_architecture_context',
             args: { content: obj.architecture || obj.arch_content }
+        };
+    }
+
+    // 11. write_file signature
+    if (obj.filepath && (obj.content !== undefined || obj.code !== undefined) && !obj.symbolName && !obj.old_text && !obj.oldText) {
+        return {
+            name: 'write_file',
+            args: {
+                filepath: String(obj.filepath),
+                content: String(obj.content !== undefined ? obj.content : obj.code)
+            }
+        };
+    }
+
+    // 12. edit_file signature
+    if (obj.filepath && (obj.old_text !== undefined || obj.oldText !== undefined || obj.search !== undefined) && (obj.new_text !== undefined || obj.newText !== undefined || obj.replace !== undefined)) {
+        return {
+            name: 'edit_file',
+            args: {
+                filepath: String(obj.filepath),
+                old_text: String(obj.old_text !== undefined ? obj.old_text : (obj.oldText !== undefined ? obj.oldText : obj.search)),
+                new_text: String(obj.new_text !== undefined ? obj.new_text : (obj.newText !== undefined ? obj.newText : obj.replace))
+            }
+        };
+    }
+
+    // 13. plan_set signature
+    if ((obj.steps && Array.isArray(obj.steps)) || (obj.goal && obj.steps)) {
+        return {
+            name: 'plan_set',
+            args: {
+                goal: String(obj.goal || ''),
+                steps: obj.steps
+            }
+        };
+    }
+
+    // 14. plan_update signature
+    if (obj.stepId !== undefined || (obj.action && (obj.action === 'done' || obj.action === 'drop' || obj.action === 'dropped' || obj.action === 'update'))) {
+        return {
+            name: 'plan_update',
+            args: obj
+        };
+    }
+
+    // 15. plan_done signature
+    if (obj.plan_done !== undefined || (obj.note && !obj.filepath && !obj.command)) {
+        return {
+            name: 'plan_done',
+            args: { note: String(obj.note || obj.plan_done) }
         };
     }
 
@@ -367,6 +427,7 @@ export class GeminiCloudClient implements IEngine {
     private maxTokens: number;
 
     public temperature: number = 0.4;
+    public maxToolIterations: number = 30;
 
     constructor(keys: string[], model: string, timeoutMs: number = 30000, maxTokens: number = 8000, temperature: number = 0.4) {
         this.keys = keys || [];
@@ -622,7 +683,11 @@ export class GeminiCloudClient implements IEngine {
         let iteration = 0;
         const toolExecutionHistory = new Map<string, number>();
 
-        while (iteration < 12) { // Max 12 tool calls per turn to allow full scaffolding and audits
+        while (iteration < this.maxToolIterations) { // Configurable tool calls per turn (default 30)
+            if (signal?.aborted) {
+                if (onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: finalUsage });
+                return { text: fullText || 'Stopped by user.', usage: finalUsage };
+            }
             iteration++;
             const requestBody: any = {
                 contents,
@@ -762,6 +827,12 @@ export class GeminiCloudClient implements IEngine {
                 const textCalls = extractTextToolCalls(fullText);
                 if (textCalls.length > 0) {
                     functionCallToExecute = { name: textCalls[0].name, args: textCalls[0].args };
+                } else {
+                    const toolSpecs = getToolSpecsFromTools(tools);
+                    const repaired = repairToolCall(fullText, toolSpecs);
+                    if (repaired) {
+                        functionCallToExecute = { name: repaired.name, args: repaired.args };
+                    }
                 }
             }
 
@@ -817,6 +888,7 @@ export class GeminiCloudClient implements IEngine {
 export class LocalOllamaClient implements IEngine {
     public readonly name = 'Local-Model';
     public temperature: number = 0.4;
+    public maxToolIterations: number = 30;
 
     constructor(private model: string = 'llama3', private endpoint: string = 'http://127.0.0.1:11434', private apiKey?: string, temperature: number = 0.4) {
         this.temperature = temperature;
@@ -869,10 +941,14 @@ export class LocalOllamaClient implements IEngine {
             }));
         }
 
-        const MAX_TOOL_ITERATIONS = 12;
+        const MAX_TOOL_ITERATIONS = this.maxToolIterations;
         const localToolExecutionCounts = new Map<string, number>();
         let lastFullText = '';
         for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+            if (signal?.aborted) {
+                if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                return { text: lastFullText || 'Stopped by user.' };
+            }
             const requestBody: any = {
                 model: this.model,
                 messages: messages,
@@ -979,6 +1055,16 @@ export class LocalOllamaClient implements IEngine {
                             name: tc.name,
                             arguments: JSON.stringify(tc.args)
                         }));
+                    } else {
+                        const toolSpecs = getToolSpecsFromTools(tools);
+                        const repaired = repairToolCall(fullText, toolSpecs);
+                        if (repaired) {
+                            toolCallsAccumulator = [{
+                                id: `call_repaired_0`,
+                                name: repaired.name,
+                                arguments: JSON.stringify(repaired.args)
+                            }];
+                        }
                     }
                 }
 
@@ -1029,13 +1115,24 @@ export class LocalOllamaClient implements IEngine {
                         // Check if the model wants to call tools (or fallback to text-based tool calls)
                         let toolCalls = choice?.message?.tool_calls;
                         if ((!toolCalls || toolCalls.length === 0) && onToolCall) {
-                            const textCalls = extractTextToolCalls(choice?.message?.content || fullText);
+                            const raw = choice?.message?.content || fullText;
+                            const textCalls = extractTextToolCalls(raw);
                             if (textCalls.length > 0) {
                                 toolCalls = textCalls.map((tc, i) => ({
                                     id: `call_text_${i}`,
                                     type: 'function',
                                     function: { name: tc.name, arguments: JSON.stringify(tc.args) }
                                 }));
+                            } else {
+                                const toolSpecs = getToolSpecsFromTools(tools);
+                                const repaired = repairToolCall(raw, toolSpecs);
+                                if (repaired) {
+                                    toolCalls = [{
+                                        id: `call_repaired_0`,
+                                        type: 'function',
+                                        function: { name: repaired.name, arguments: JSON.stringify(repaired.args) }
+                                    }];
+                                }
                             }
                         }
                         if (toolCalls && toolCalls.length > 0 && onToolCall) {

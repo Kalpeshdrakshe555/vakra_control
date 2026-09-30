@@ -261,8 +261,19 @@ export function chunkCodeFile(filepath: string, content: string): CodeChunk[] {
             const name = match[1];
             const isClass = !!(line.includes('class ') || line.match(pyClass) || line.match(rustImpl));
             const type: CodeChunk['type'] = isClass ? 'class' : 'function';
-            const startLine = i;
-            let endLine = startLine;
+            
+            // Include decorator lines immediately above (@app.get, @dataclass, etc.)
+            let actualStart = i;
+            while (actualStart > importsEndLine + 1) {
+                const prev = lines[actualStart - 1].trim();
+                if (prev.startsWith('@') || prev.startsWith('#[')) {
+                    actualStart--;
+                } else {
+                    break;
+                }
+            }
+            const startLine = actualStart;
+            let endLine = i;
 
             if (isPythonFile || line.match(pyFunc) || line.match(pyClass)) {
                 // Python: strict indentation-based scope boundary

@@ -227,9 +227,9 @@ export function applyDiff(filePath: string, llmResponse: string): boolean {
             return false;
         }
         
-        // Safety check for accidental file wipe via partial code snippet
-        if (fileText.length > 0 && contentToWrite.length < fileText.length * 0.5) {
-            console.warn(`Safety Abort: AI tried to overwrite ${resolvedPath} with a code block < 50% of the original file size. Aborting overwrite.`);
+        // Zero-Wipe Guard: Never silently overwrite an existing non-empty file with a raw code block!
+        if (fileText.trim().length > 0) {
+            console.warn(`Safety Abort: Rejected silent overwrite of existing file ${resolvedPath}. Existing files require SEARCH/REPLACE blocks or replace_symbol.`);
             return false;
         }
         
@@ -289,8 +289,15 @@ export function applyRobustSearchReplace(
     // Helper to normalize tabs to 4 spaces and trim trailing whitespace
     const normalize = (str: string) => str.replace(/\t/g, '    ').split(/\r?\n/).map(l => l.trimRight()).join('\n');
     
-    // Tier 0: Empty SEARCH = Full file overwrite (Model creating a new file or wiping one)
+    // Tier 0: Zero-Wipe Guard - never permit an empty SEARCH block to overwrite an existing non-empty file!
     if (searchStr.trim().length === 0) {
+        if (fileText.trim().length > 0) {
+            return {
+                success: false,
+                result: fileText,
+                error: "ZERO_WIPE_GUARD: Empty SEARCH block rejected for a non-empty file. Existing files require exact SEARCH blocks or replace_symbol."
+            };
+        }
         return { success: true, result: replaceStr };
     }
 

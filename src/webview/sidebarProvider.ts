@@ -3,8 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
 import { applyDiffToActiveFile, applyRobustSearchReplace, resolveSafeWorkspacePath } from '../operations/diffPatcher';
+import { replaceSymbolTool } from '../operations/replaceSymbol';
 import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, ensureAgentConfig, AgentConfig } from '../config';
 import { ConversationHistory } from '../state/conversationHistory';
+import { buildTailBlock, ToolSpec, AgentLedger } from '../router/toolReanchor';
 import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
 import { skeletonizeFile, generateStructuralRepoMap } from '../utils/astSkeletonizer';
 import { extractBrandDNA, orchestrateAssets, DesignSemantics } from '../utils/designBrain';
@@ -12,36 +14,46 @@ import { generateCacheKey, checkCache, saveCache } from '../utils/queryCache';
 import { ContextSelector } from '../utils/contextSelector';
 import { DependencyGraph } from '../utils/dependencyGraph';
 import { SettingsHandler } from './settingsHandler';
-import { PromptBuilder } from './promptBuilder';
+import { PromptBuilder, TaskState } from './promptBuilder';
 import { PromptClassifier } from '../utils/promptClassifier';
 import { DiffValidator } from '../operations/diffValidator';
 import { ProjectScanner } from '../indexer/projectScanner';
-import { TaskPlanner } from '../state/taskPlanner';
+import { InMemoryTaskPlanner, planTools } from '../state/inMemoryTaskPlanner';
 import { FileVersioning } from '../operations/fileVersioning';
 import { TerminalCapture } from '../tools/terminalCapture';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { SessionMemory } from '../state/sessionMemory';
 import { SkillsManager } from '../features/skillsManager';
 import { ToolRegistry } from '../tools/toolRegistry';
+import { autonomousPreFlightScout } from '../tools/scraper';
+import { captureLocalhostTool } from '../tools/visionCapture';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private conversationHistory: ConversationHistory;
+    private taskPlanner: InMemoryTaskPlanner;
     private currentStreamAbortController: AbortController | null = null;
     private currentSeqOp: any = null; // Store reference to cancel Architect queue
     private isTerminalSessionAutoApproved: boolean = false;
     private pendingTerminalResolvers: Map<string, (result: string) => void> = new Map();
+    private consecutiveNoToolTurns: number = 0;
+    private recentFilesTouched: Set<string> = new Set<string>();
+    private lastToolResultText?: string;
+    private lastToolErrorText?: string;
+    private currentTaskState?: TaskState;
     private _onStartCb?: any;
     private _onResetCb?: any;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
         private _workspaceRoot: string,
-        private ragEngine?: any
+        private ragEngine?: any,
+        private readonly _extensionContext?: vscode.ExtensionContext
     ) {
         const config = require('../config').getAgentConfig(this._workspaceRoot);
         const historyLimit = config?.contextLimits?.historyLength || 10;
         this.conversationHistory = new ConversationHistory(historyLimit * 2, this._workspaceRoot);
+        this.taskPlanner = new InMemoryTaskPlanner(this._extensionContext, (msg) => this.postMessageToWebview(msg));
     }
 
     public resolveWebviewView(
@@ -112,6 +124,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         maxOutputTokens: config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192,
                         maxContextTokens: config?.contextLimits?.maxContextTokens || 7000,
                         historyLength: config?.contextLimits?.historyLength || 10,
+                        maxAutonomousToolSteps: config?.maxAutonomousToolSteps || 30,
                         enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
                         enableHoverExplanations: vsConfig.get('enableHoverExplanations', false)
                     }
@@ -134,6 +147,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 this._onStartCb(message.data);
             } else if (message.command === 'reset') {
                 this.conversationHistory.clear();
+                this.taskPlanner.clear();
+                PromptBuilder.invalidatePrefixCache();
+                this.consecutiveNoToolTurns = 0;
+                this.recentFilesTouched.clear();
+                this.lastToolResultText = undefined;
+                this.lastToolErrorText = undefined;
                 if (this._onResetCb) {
                     this._onResetCb();
                 }
@@ -142,6 +161,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 await this.handleChatMessage(message.text, message.includeActiveFile);
             } else if (message.command === 'sendChatStream') {
                 await this.handleChatMessageStream(message);
+            } else if (message.command === 'plan_skip_step' || message.type === 'plan_skip_step' || message.command === 'plan_clear' || message.type === 'plan_clear') {
+                this.taskPlanner.handleWebviewMessage(message);
             } else if (message.command === 'applyDiff') {
                 try {
                     const activeEditor = vscode.window.activeTextEditor;
@@ -160,9 +181,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 await this.handleApplyWorkspaceEdits(message);
             } else if (message.command === 'openConfig') {
                 this.handleOpenConfig();
-
+            } else if (message.command === 'openMcpConfig') {
+                this.handleOpenMcpConfig();
+            } else if (message.command === 'openPluginsScript') {
+                this.handleOpenPluginsScript();
             } else if (message.command === 'newChat') {
                 this.conversationHistory.clear();
+                this.taskPlanner.clear();
+                this.consecutiveNoToolTurns = 0;
+                this.recentFilesTouched.clear();
+                this.lastToolResultText = undefined;
+                this.lastToolErrorText = undefined;
                 if (this._onResetCb) {
                     this._onResetCb();
                 }
@@ -333,6 +362,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     this.currentSeqOp.cancelQueue();
                     this.currentSeqOp = null;
                 }
+                if (this.currentTaskState) {
+                    this.currentTaskState.event = 'user_pivot';
+                    this.currentTaskState.pivotText = 'Task stopped by user';
+                }
+                this.postMessageToWebview({ command: 'statusUpdate', text: '🛑 Generation stopped by user.' });
+                this.postMessageToWebview({ command: 'streamChunk', text: '\n\n*🛑 Generation stopped by user.*', done: true });
+            } else if (message.command === 'plan_clear') {
+                this.taskPlanner.clear();
+                if (this.currentTaskState) {
+                    this.currentTaskState.plan = [];
+                    this.currentTaskState.phase = this.currentTaskState.mode === 'new' ? 'plan' : 'audit';
+                }
+                this.postMessageToWebview({ type: 'update_plan_stepper', goal: '', steps: [] });
+            } else if (message.command === 'plan_skip_step') {
+                this.taskPlanner.handleWebviewMessage(message);
             } else if (message.command === 'runInTerminal') {
                 this.handleRunInTerminal(message.text);
             } else if (message.command === 'insertToEditor') {
@@ -511,7 +555,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (fs.existsSync(archPath) || fs.existsSync(newArchPath)) return; // Already onboarded!
             // Check if folder actually has files (ignoring hidden files and node_modules)
             const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
             
             const filesInRoot = fs.readdirSync(workspaceRoot).filter(f => !f.startsWith('.') && !combinedIgnores.includes(f));
             if (filesInRoot.length <= 1) return; // Too small or empty, skip onboarding
@@ -563,7 +607,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             // Use vscode findFiles to get max 20 files matching the query (if provided) or recent files
             const searchPattern = query ? `**/*${query}*` : '**/*';
             const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
             const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
             
             const files = await vscode.workspace.findFiles(searchPattern, excludePattern, 25);
@@ -934,6 +978,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 : (typeof mainBrain?.temperature === 'number' ? mainBrain.temperature : 0.4);
             if (mainClient) {
                 mainClient.temperature = configuredTemp;
+                mainClient.maxToolIterations = config?.maxAutonomousToolSteps || 30;
             }
             
             const client = mainClient;
@@ -952,21 +997,50 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
             let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap);
             
-            // Task Planner Injection
-            if (workspaceRoot) {
-                // In Architect Mode, EVERY request is considered complex to enforce plan-first workflow
-                const isComplex = message.architectMode || TaskPlanner.isComplexRequest(message.text);
-                const planState = TaskPlanner.readPlan(workspaceRoot);
-                
-                if (isComplex && !planState.isActive) {
-                    systemInstruction += `\n\n[TASK PLANNER ACTIVE]\nThe user's request is complex. DO NOT write any actual code yet. You MUST first generate a detailed step-by-step plan using a markdown file. Write your plan to **\`.ultra-light-ai/PLAN.md\`** using the SEARCH/REPLACE format. Number the steps 1, 2, 3...`;
-                } else if (planState.isActive) {
-                    systemInstruction += `\n\n[TASK PLANNER ACTIVE]\nAn active plan exists:\n${planState.planContent}\n\nReview the plan. Complete the next step. If a step is done, mark it as [x] in the PLAN.md file. Only focus on one step at a time!`;
+            // Task State & Phase Machine (Head-v4 Architecture)
+            this.taskPlanner.syncWithDisk(workspaceRoot);
+
+            const isNewWorkspace = workspaceRoot ? PromptBuilder.classifyWorkspace(workspaceRoot).mode === 'new' : true;
+            const diskPlanExists = workspaceRoot ? fs.existsSync(path.join(workspaceRoot, '.ultra-light-ai', 'PLAN.md')) : false;
+
+            // If workspace was wiped or has no files on disk, purge any stale ghost plan immediately!
+            if (isNewWorkspace && !diskPlanExists) {
+                this.taskPlanner.clear();
+                this.currentTaskState = undefined;
+            }
+
+            if (!this.currentTaskState || this.currentTaskState.phase === 'done' || !this.taskPlanner.hasActivePlan()) {
+                this.currentTaskState = PromptBuilder.startTask(workspaceRoot, message.text);
+            } else {
+                this.currentTaskState = PromptBuilder.applyPivot(this.currentTaskState, message.text);
+            }
+            this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
+            if (this.currentTaskState.plan.length > 0) {
+                const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
+                if (!hasUndone) {
+                    this.currentTaskState.phase = 'verify';
+                } else if (this.currentTaskState.phase === 'audit' || this.currentTaskState.phase === 'plan') {
+                    this.currentTaskState.phase = 'execute';
                 }
             }
+
+            // Volatile per-turn context (terminal output, session notes) for the dynamic tail block
+            const vol = PromptBuilder.buildVolatile(workspaceRoot);
             
             TokenAccountant.measureSystemPrompt(systemInstruction);
             let finalPrompt = await this.buildPrompt(message.text, false, false /* Disable hardcoded search */, false, workspaceRoot);
+
+            // Autonomous Pre-Flight Scout: Injects live package registry documentation if library detected
+            try {
+                const liveDocs = await autonomousPreFlightScout(message.text);
+                if (liveDocs) {
+                    finalPrompt = `${liveDocs}\n\n${finalPrompt}`;
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `🔍 Pre-Flight Scout: Injected live registry documentation into context`
+                    });
+                }
+            } catch {}
             
 
             
@@ -1160,13 +1234,85 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
             };
             tools[0].functionDeclarations.push(searchWebTool);
+            tools[0].functionDeclarations.push(replaceSymbolTool);
+            tools[0].functionDeclarations.push(captureLocalhostTool);
+
+            // Core file writing & editing tools
+            tools[0].functionDeclarations.push(
+                {
+                    name: "write_file",
+                    description: "Writes a full file to disk. Use this to create new files. For existing files, read them first before overwriting, or use replace_symbol/edit_file.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            filepath: { type: "string", description: "Target file path relative to workspace root" },
+                            content: { type: "string", description: "The complete file content to write" }
+                        },
+                        required: ["filepath", "content"]
+                    }
+                },
+                {
+                    name: "edit_file",
+                    description: "Edits an existing file by replacing an exact text snippet (old_text) with new_text. Use this for configs, imports, CSS, HTML, and small edits.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            filepath: { type: "string", description: "Target file path relative to workspace root" },
+                            old_text: { type: "string", description: "Exact text snippet to replace (must match current file content)" },
+                            new_text: { type: "string", description: "Replacement text" }
+                        },
+                        required: ["filepath", "old_text", "new_text"]
+                    }
+                },
+                {
+                    name: "plan_update",
+                    description: "Updates the execution plan: marks a step done, drops obsolete steps with a reason, or updates plan steps on a pivot.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            stepId: { type: "number", description: "Step number to update (optional, defaults to current active step)" },
+                            status: { type: "string", enum: ["done", "dropped", "active"], description: "New status for the step" },
+                            reason: { type: "string", description: "Reason if dropping or skipping a step" },
+                            note: { type: "string", description: "Completion note or verify check confirmation" },
+                            steps: { type: "array", items: { type: "string" }, description: "Optional new step list if revising plan" }
+                        }
+                    }
+                }
+            );
+
+            const allowedPlan = this.taskPlanner.allowedPlanTools();
+            if (allowedPlan.includes('plan_set')) {
+                tools[0].functionDeclarations.push(planTools[0]);
+            }
+            if (allowedPlan.includes('plan_done')) {
+                tools[0].functionDeclarations.push(planTools[1]);
+            }
+
+            // Head-v4 Tool Gating: strictly limit exposed tools to the current phase
+            const isUiTask = promptCategory === 'ui';
+            const phaseAllowed = new Set(PromptBuilder.allowedTools(this.currentTaskState!, isUiTask));
+            tools[0].functionDeclarations = tools[0].functionDeclarations.filter((f: any) => phaseAllowed.has(f.name));
 
             const filteredTools = PromptClassifier.filterTools(promptCategory, tools);
 
+            const toolSpecs: ToolSpec[] = (filteredTools[0]?.functionDeclarations || []).map((f: any) => ({
+                name: f.name,
+                signature: `${f.name}(${Object.keys(f.parameters?.properties || {}).join(', ')})`,
+                parameters: f.parameters || { properties: {} }
+            }));
+
+            const toolCard = toolSpecs.map(t => `- ${t.signature}`).join('\n');
+            const stateBlock = PromptBuilder.buildStateBlock(this.currentTaskState!, toolCard, vol);
+            finalPrompt = `${finalPrompt}\n\n${stateBlock}`;
+
             let consecutiveReadCount = 0;
             const readFilesThisTurn = new Set<string>();
+            const executedToolActions: string[] = [];
 
-            const onToolCall = async (functionCall: any) => {
+            const rawOnToolCall = async (functionCall: any) => {
+                if (this.currentStreamAbortController?.signal?.aborted) {
+                    throw new Error('Operation aborted by user.');
+                }
                 if (functionCall.name === 'read_multiple_files') {
                     // Maximum of 3 consecutive read actions before forcing a synthesis or plan turn
                     if (consecutiveReadCount >= 3) {
@@ -1411,6 +1557,14 @@ ${JSON.stringify(assets, null, 2)}
                     const explanation = functionCall.args?.explanation || 'AI requested terminal execution';
                     if (!cmd) return 'Error: No command provided to execute_terminal_command.';
 
+                    // Scaffolding Guard: Block destructive CLI generators in existing projects
+                    if (this.currentTaskState?.mode === 'existing') {
+                        const isScaffold = /^(npx\s+|npm\s+|pnpm\s+|yarn\s+)?(create-|create\s+|init\s+)|django-admin\s+startproject|flutter\s+create|cargo\s+new|vue\s+create|ng\s+new/i.test(cmd);
+                        if (isScaffold) {
+                            return `[SCAFFOLDING GUARD BLOCKED]: Workspace already has existing source files (EXISTING project). Running CLI scaffold generator '${cmd}' is blocked to prevent wiping or corrupting existing files. Instead, audit the existing structure, create missing files with write_file, or install packages with install commands.`;
+                        }
+                    }
+
                     const isDaemon = TerminalCapture.isDaemonCommand(cmd);
                     if (isDaemon) {
                         this.handleRunInTerminal(cmd);
@@ -1528,8 +1682,228 @@ ${JSON.stringify(assets, null, 2)}
                         data: { port: port }
                     });
                     return await ToolRegistry.executeTool('check_localhost_health', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
+
+                } else if (functionCall.name === 'replace_symbol') {
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'replace_symbol',
+                        title: 'Surgical Symbol Edit',
+                        data: { filepath: functionCall.args?.filepath, symbol: functionCall.args?.symbolName }
+                    });
+                    return await ToolRegistry.executeTool('replace_symbol', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
+
+                } else if (functionCall.name === 'write_file') {
+                    if (!workspaceRoot) return "Error: No workspace open.";
+                    const filepath = functionCall.args?.filepath;
+                    let content = functionCall.args?.content;
+                    if (!filepath || content === undefined) return "Error: write_file requires filepath and content.";
+
+                    content = content.replace(/^```[a-zA-Z]*\r?\n/, '').replace(/\r?\n```$/, '');
+
+                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                    if (!safeCheck.safe) return safeCheck.error || `Invalid path: ${filepath}`;
+                    const fullPath = safeCheck.resolvedPath;
+
+                    const fileAlreadyExists = fs.existsSync(fullPath);
+                    if (fileAlreadyExists) {
+                        const normalizedKey = filepath.trim().replace(/\\/g, '/');
+                        const wasRead = readFilesThisTurn.has(normalizedKey) || this.recentFilesTouched.has(filepath);
+                        if (!wasRead) {
+                            return `Guard Rejection: '${filepath}' already exists on disk. You must inspect it first with read_multiple_files before overwriting, or use edit_file / replace_symbol for surgical changes.`;
+                        }
+                    }
+
+                    const parentDir = path.dirname(fullPath);
+                    if (!fs.existsSync(parentDir)) {
+                        fs.mkdirSync(parentDir, { recursive: true });
+                    }
+
+                    if (fileAlreadyExists) {
+                        try {
+                            const oldContent = fs.readFileSync(fullPath, 'utf8');
+                            FileVersioning.saveSnapshot(workspaceRoot, fullPath, oldContent);
+                        } catch {}
+                    }
+
+                    fs.writeFileSync(fullPath, content, 'utf8');
+                    SessionMemory.recordFileApplied(workspaceRoot, filepath, content);
+
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'write_file',
+                        title: fileAlreadyExists ? 'Updated File' : 'Created File',
+                        data: { filepath, length: content.length }
+                    });
+
+                    return `Successfully wrote file: ${filepath} (${content.length} characters).`;
+
+                } else if (functionCall.name === 'edit_file') {
+                    if (!workspaceRoot) return "Error: No workspace open.";
+                    const filepath = functionCall.args?.filepath;
+                    const oldText = functionCall.args?.old_text ?? functionCall.args?.oldText;
+                    const newText = functionCall.args?.new_text ?? functionCall.args?.newText;
+                    if (!filepath || oldText === undefined || newText === undefined) {
+                        return "Error: edit_file requires filepath, old_text, and new_text.";
+                    }
+
+                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
+                    if (!safeCheck.safe) return safeCheck.error || `Invalid path: ${filepath}`;
+                    const fullPath = safeCheck.resolvedPath;
+
+                    if (!fs.existsSync(fullPath)) {
+                        return `Error: File not found: ${filepath}. Use write_file to create new files.`;
+                    }
+
+                    let fileContent = fs.readFileSync(fullPath, 'utf8');
+                    if (fileContent.includes(oldText)) {
+                        FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
+                        fileContent = fileContent.replace(oldText, newText);
+                        fs.writeFileSync(fullPath, fileContent, 'utf8');
+                        SessionMemory.recordFileApplied(workspaceRoot, filepath, fileContent);
+                        this.postMessageToWebview({
+                            command: 'toolCallEvent',
+                            tool: 'edit_file',
+                            title: 'Edited File',
+                            data: { filepath }
+                        });
+                        return `Successfully edited ${filepath}.`;
+                    }
+
+                    const normOld = oldText.replace(/\r\n/g, '\n').trim();
+                    const normContent = fileContent.replace(/\r\n/g, '\n');
+                    if (normContent.includes(normOld)) {
+                        FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
+                        const updated = normContent.replace(normOld, newText.replace(/\r\n/g, '\n'));
+                        fs.writeFileSync(fullPath, updated, 'utf8');
+                        SessionMemory.recordFileApplied(workspaceRoot, filepath, updated);
+                        this.postMessageToWebview({
+                            command: 'toolCallEvent',
+                            tool: 'edit_file',
+                            title: 'Edited File (Normalized)',
+                            data: { filepath }
+                        });
+                        return `Successfully edited ${filepath} (matched with normalized whitespace).`;
+                    }
+
+                    return `edit_file failed: Could not find matching old_text in ${filepath}. Inspect the file with read_multiple_files to get the exact lines.`;
+
+                } else if (functionCall.name === 'plan_set') {
+                    const goal = functionCall.args?.goal || '';
+                    const steps = functionCall.args?.steps || [];
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'plan_set',
+                        title: 'Setting Execution Plan',
+                        data: { goal, stepCount: steps.length }
+                    });
+                    const res = this.taskPlanner.setPlan(goal, steps);
+                    if (this.currentTaskState) {
+                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
+                        this.currentTaskState.phase = 'execute';
+                    }
+                    return res;
+
+                } else if (functionCall.name === 'plan_update') {
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'plan_update',
+                        title: 'Updating Execution Plan',
+                        data: functionCall.args || {}
+                    });
+                    const res = this.taskPlanner.updatePlan(functionCall.args || {});
+                    if (this.currentTaskState) {
+                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
+                        if (this.currentTaskState.event === 'user_pivot') {
+                            this.currentTaskState.event = 'none';
+                            this.currentTaskState.pivotText = undefined;
+                        }
+                        const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
+                        if (!hasUndone) {
+                            this.currentTaskState.phase = 'verify';
+                        }
+                    }
+                    return res;
+
+                } else if (functionCall.name === 'plan_done') {
+                    const note = functionCall.args?.note;
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'plan_done',
+                        title: 'Step Completed',
+                        data: { note }
+                    });
+                    const res = this.taskPlanner.markCurrentDone(note);
+                    if (this.currentTaskState) {
+                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
+                        const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
+                        if (!hasUndone) {
+                            this.currentTaskState.phase = 'verify';
+                        }
+                    }
+                    return res;
+
+                } else if (functionCall.name === 'capture_localhost_preview') {
+                    const url = functionCall.args?.url || 'http://localhost:3000';
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'capture_localhost_preview',
+                        title: 'Capturing Local Preview',
+                        data: { url }
+                    });
+                    return await ToolRegistry.executeTool('capture_localhost_preview', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
                 }
                 return `Unknown tool: ${functionCall.name}`;
+            };
+
+            const onToolCall = async (functionCall: any) => {
+                const toolName = functionCall?.name || 'unknown';
+                const toolArgs = functionCall?.args || {};
+                const argsSummary = JSON.stringify(toolArgs).substring(0, 150);
+                const touched = toolArgs.filepath || toolArgs.path || (Array.isArray(toolArgs.filepaths) ? toolArgs.filepaths[0] : null);
+                if (touched && typeof touched === 'string') {
+                    this.recentFilesTouched.add(touched);
+                }
+
+                try {
+                    const res = await rawOnToolCall(functionCall);
+                    const resStr = typeof res === 'string' ? res : JSON.stringify(res || '');
+                    this.lastToolResultText = resStr.substring(0, 300);
+                    this.lastToolErrorText = undefined;
+                    executedToolActions.push(`Called ${toolName}(${argsSummary}) -> ${resStr.substring(0, 150)}`);
+                    
+                    // Notify in-memory task planner of tool event
+                    this.taskPlanner.onToolEvent({
+                        tool: toolName,
+                        ok: true,
+                        filepath: typeof touched === 'string' ? touched : undefined,
+                        command: toolArgs.command
+                    });
+
+                    if (this.currentTaskState) {
+                        this.currentTaskState.lastResult = resStr.substring(0, 500);
+                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
+                        const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
+                        if (this.currentTaskState.plan.length > 0 && !hasUndone) {
+                            this.currentTaskState.phase = 'verify';
+                        }
+                    }
+
+                    return res;
+                } catch (err: any) {
+                    const errStr = err?.message || String(err);
+                    this.lastToolErrorText = errStr;
+                    executedToolActions.push(`Called ${toolName}(${argsSummary}) -> ERROR: ${errStr.substring(0, 150)}`);
+                    this.taskPlanner.onToolEvent({
+                        tool: toolName,
+                        ok: false,
+                        filepath: typeof touched === 'string' ? touched : undefined,
+                        command: toolArgs.command
+                    });
+                    if (this.currentTaskState) {
+                        this.currentTaskState.lastResult = `ERROR: ${errStr.substring(0, 500)}`;
+                    }
+                    throw err;
+                }
             };
 
             // Stream response
@@ -1558,9 +1932,18 @@ ${JSON.stringify(assets, null, 2)}
 
             if (!result) return; // Guard for clients not implementing completeWithHistory completely
 
+            if (executedToolActions.length > 0) {
+                this.consecutiveNoToolTurns = 0;
+            } else {
+                this.consecutiveNoToolTurns++;
+            }
 
             // Strip <think> tags robustly before saving to history to prevent context pollution
-            const cleanResponseText = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
+            let cleanResponseText = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '').trim();
+            if (executedToolActions.length > 0) {
+                const actionsBlock = `\n\n[Agent Actions Taken]:\n${executedToolActions.map(a => '- ' + a).join('\n')}`;
+                cleanResponseText = cleanResponseText ? (cleanResponseText + '\n' + actionsBlock) : actionsBlock;
+            }
             this.conversationHistory.addMessage('model', cleanResponseText, result.usage);
 
             // Job 2: Session Summarizer & Long-term Memory updater
@@ -1760,7 +2143,7 @@ ${JSON.stringify(assets, null, 2)}
             if (workspaceRoot) {
                 try {
                     const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-                    const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+                    const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
                     const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
                     const files = await vscode.workspace.findFiles(
                         '**/*',
@@ -1778,18 +2161,17 @@ ${JSON.stringify(assets, null, 2)}
             finalPrompt = finalPrompt.replace(/@workspace/gi, '').trim();
         }
 
-        // Auto-RAG Trigger: Always inject top 2-3 snippets if it's a substantive query, unless heavily explicit context is already given
+        // RAG Trigger: ONLY inject when user explicitly requests (@rag / @smart) or via search_codebase tool.
+        // Prevents prompt bloat and irrelevant background code dumping on new/scratch tasks.
         const isExplicitRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
-        const wantsRag = isExplicitRag || (!hasFileMatch && !wantsWorkspace && text.length > 15 && this.ragEngine);
+        const wantsRag = isExplicitRag && !!this.ragEngine;
         
         if (wantsRag && this.ragEngine) {
             try {
-                if (isExplicitRag) {
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `🧠 Semantic Search: Analyzing codebase...`
-                    });
-                }
+                this.postMessageToWebview({
+                    command: 'statusUpdate',
+                    text: `🧠 Semantic Search: Analyzing codebase on-demand...`
+                });
                 
                 let ragResults;
                 const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_manual', [], text) : null;
@@ -1799,29 +2181,21 @@ ${JSON.stringify(assets, null, 2)}
                     try { ragResults = JSON.parse(rawCache); } catch(e) {}
                 }
                 
-                if (ragResults && isExplicitRag) {
+                if (ragResults) {
                     this.postMessageToWebview({ command: 'statusUpdate', text: `⚡ RAG Cache Hit: Instant offline search!` });
-                } else if (!ragResults) {
-                    ragResults = await this.ragEngine.search(text, isExplicitRag ? 3 : 2);
+                } else {
+                    ragResults = await this.ragEngine.search(text, 3);
                     if (ragCacheKey && ragResults && ragResults.length > 0) {
                         saveCache(workspaceRoot!, ragCacheKey, JSON.stringify(ragResults));
                     }
                 }
 
                 if (ragResults && ragResults.length > 0) {
-                    contextSources.push({ name: 'Semantic Codebase Context (Auto-RAG)', content: ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n'), priority: 7 });
-                    if (isExplicitRag) {
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `🧠 Semantic Search: Loaded ${ragResults.length} relevant files.`
-                        });
-                    } else {
-                        // Silent or subtle status for auto-RAG
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `🧠 Auto-RAG injected ${ragResults.length} background context snippets.`
-                        });
-                    }
+                    contextSources.push({ name: 'Semantic Codebase Context (@rag)', content: ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n'), priority: 7 });
+                    this.postMessageToWebview({
+                        command: 'statusUpdate',
+                        text: `🧠 Semantic Search: Loaded ${ragResults.length} relevant files.`
+                    });
                 }
             } catch (err: any) {
                 console.error("RAG search failed", err);
@@ -2216,6 +2590,98 @@ RULES FOR USING CONTEXT:
     }
 
     /**
+     * Open or create the .ultra-light-ai/mcp_config.json file in the editor.
+     */
+    private async handleOpenMcpConfig(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            vscode.window.showErrorMessage('Please open a workspace folder to configure MCP.');
+            return;
+        }
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const metaDir = this.getAiMetaDir(workspaceRoot);
+        const mcpConfigPath = path.join(metaDir, 'mcp_config.json');
+
+        if (!fs.existsSync(mcpConfigPath)) {
+            const defaultMcp = {
+                mcpServers: {
+                    filesystem: {
+                        command: 'npx',
+                        args: ['-y', '@modelcontextprotocol/server-filesystem', workspaceRoot],
+                        env: {}
+                    },
+                    github: {
+                        command: 'npx',
+                        args: ['-y', '@modelcontextprotocol/server-github'],
+                        env: {
+                            GITHUB_PERSONAL_ACCESS_TOKEN: ''
+                        }
+                    }
+                }
+            };
+            fs.writeFileSync(mcpConfigPath, JSON.stringify(defaultMcp, null, 2), 'utf8');
+        }
+
+        try {
+            const doc = await vscode.workspace.openTextDocument(mcpConfigPath);
+            await vscode.window.showTextDocument(doc);
+            vscode.window.showInformationMessage('Opened MCP configuration file (mcp_config.json). Add your tools/servers here.');
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to open MCP config: ${e?.message || e}`);
+        }
+    }
+
+    /**
+     * Open or create the .ultra-light-ai/plugins.js file in the editor.
+     */
+    private async handleOpenPluginsScript(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            vscode.window.showErrorMessage('Please open a workspace folder to configure Plugins.');
+            return;
+        }
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const metaDir = this.getAiMetaDir(workspaceRoot);
+        const pluginsPath = path.join(metaDir, 'plugins.js');
+
+        if (!fs.existsSync(pluginsPath)) {
+            const defaultPlugins = `/**
+ * Workspace Custom Plugins for Ultra-Light AI
+ * Export an array of custom tool objects.
+ * Each tool will be automatically registered and exposed to the model.
+ */
+
+module.exports = {
+    tools: [
+        {
+            name: 'custom_project_health',
+            description: 'Check custom project status or lint output',
+            parameters: {
+                type: 'object',
+                properties: {
+                    target: { type: 'string', description: 'Target module or component' }
+                }
+            },
+            execute: async ({ target }, workspaceRoot) => {
+                return \`[Custom Plugin: health check for \${target || 'all'} passed successfully]\`;
+            }
+        }
+    ]
+};
+`;
+            fs.writeFileSync(pluginsPath, defaultPlugins, 'utf8');
+        }
+
+        try {
+            const doc = await vscode.workspace.openTextDocument(pluginsPath);
+            await vscode.window.showTextDocument(doc);
+            vscode.window.showInformationMessage('Opened workspace plugins script (plugins.js).');
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to open plugins script: ${e?.message || e}`);
+        }
+    }
+
+    /**
      * Clear local cache
      */
     private handleClearCache(): void {
@@ -2340,9 +2806,16 @@ RULES FOR USING CONTEXT:
      */
     public clearChat(): void {
         this.conversationHistory.clear();
+        this.taskPlanner.clear();
+        this.currentTaskState = undefined;
+        this.recentFilesTouched.clear();
+        this.lastToolResultText = undefined;
+        this.lastToolErrorText = undefined;
+        PromptBuilder.invalidatePrefixCache();
         if ((this as any)._onResetCb) {
             (this as any)._onResetCb();
         }
         this.postMessageToWebview({ command: 'chatCleared' });
+        this.postMessageToWebview({ type: 'update_plan_stepper', goal: '', steps: [] });
     }
 }

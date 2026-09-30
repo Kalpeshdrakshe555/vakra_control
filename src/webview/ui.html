@@ -495,19 +495,23 @@
                 <textarea id="setting-instructions" rows="3" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm resize-y leading-relaxed font-mono placeholder:text-slate-600"></textarea>
             </div>
 
-            <!-- Context Limits -->
-            <div class="grid grid-cols-3 gap-3">
+            <!-- Context Limits & Autonomous Steps -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <div class="space-y-1.5">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Output Tokens</label>
-                    <input type="number" id="setting-maxOutputTokens" min="100" max="100000" placeholder="e.g. 8192" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Output</label>
+                    <input type="number" id="setting-maxOutputTokens" min="100" max="100000" placeholder="e.g. 8192" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
                 </div>
                 <div class="space-y-1.5">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Context Tokens</label>
-                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 7000" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max Context</label>
+                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 7000" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
                 </div>
                 <div class="space-y-1.5">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">History Length</label>
-                    <input type="number" id="setting-historyLength" min="2" max="50" placeholder="e.g. 10" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-3 py-2.5 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">History Len</label>
+                    <input type="number" id="setting-historyLength" min="2" max="50" placeholder="e.g. 10" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase" title="Maximum sequential tool calls the model can execute before pausing">Max Steps</label>
+                    <input type="number" id="setting-maxToolSteps" min="5" max="100" placeholder="e.g. 30" class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
                 </div>
             </div>
             <p id="token-warning" class="text-[9px] text-yellow-400/90 mt-1.5 hidden leading-tight font-mono">
@@ -524,6 +528,27 @@
                     <input type="checkbox" id="setting-enableHover" class="accent-cyber-neonCyan w-3.5 h-3.5 cursor-pointer">
                     <span class="text-slate-300 font-mono tracking-wide text-[10px] uppercase">Enable AI Hover Explanations</span>
                 </label>
+            </div>
+
+            <!-- 🔌 MCP & Plugins Hub -->
+            <div class="p-3 bg-black/30 border border-purple-500/30 rounded-xl space-y-2.5 mt-4">
+                <div class="flex items-center justify-between border-b border-purple-500/20 pb-1.5">
+                    <h3 class="text-purple-300 text-[10px] uppercase font-bold tracking-widest flex items-center gap-1.5 font-mono">
+                        <span>🔌</span> MCP & Custom Plugins Hub
+                    </h3>
+                    <span class="text-[9px] font-mono text-purple-300 bg-purple-950/60 border border-purple-500/40 px-2 py-0.5 rounded">Extensible</span>
+                </div>
+                <p class="text-[10px] text-slate-400 leading-relaxed font-sans">
+                    Connect standard MCP servers (Filesystem, GitHub, Databases) or define custom JavaScript workspace tools for the agent.
+                </p>
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button type="button" id="open-mcp-config-btn" class="flex items-center justify-center gap-1.5 bg-purple-900/30 hover:bg-purple-800/40 border border-purple-500/40 hover:border-purple-300 text-purple-200 hover:text-white text-[10px] font-mono py-1.5 px-2 rounded-lg transition-all cursor-pointer shadow-sm">
+                        <span>⚙️</span> MCP Config
+                    </button>
+                    <button type="button" id="open-plugins-script-btn" class="flex items-center justify-center gap-1.5 bg-cyan-900/30 hover:bg-cyan-800/40 border border-cyan-500/40 hover:border-cyan-300 text-cyan-200 hover:text-white text-[10px] font-mono py-1.5 px-2 rounded-lg transition-all cursor-pointer shadow-sm">
+                        <span>🧩</span> Plugins.js
+                    </button>
+                </div>
             </div>
 
             <!-- Action buttons -->
@@ -680,6 +705,20 @@
             vscode.postMessage({ command: 'openConfig' });
         });
 
+        const openMcpConfigBtn = document.getElementById('open-mcp-config-btn');
+        if (openMcpConfigBtn) {
+            openMcpConfigBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'openMcpConfig' });
+            });
+        }
+
+        const openPluginsScriptBtn = document.getElementById('open-plugins-script-btn');
+        if (openPluginsScriptBtn) {
+            openPluginsScriptBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'openPluginsScript' });
+            });
+        }
+
         const clearCacheBtn = document.getElementById('clear-cache-btn');
         if (clearCacheBtn) {
             clearCacheBtn.addEventListener('click', () => {
@@ -773,6 +812,7 @@
                 maxOutputTokens: parseInt(document.getElementById('setting-maxOutputTokens').value, 10) || 8192,
                 maxContextTokens: parseInt(document.getElementById('setting-maxContextTokens').value, 10) || 7000,
                 historyLength: parseInt(document.getElementById('setting-historyLength').value, 10) || 20,
+                maxAutonomousToolSteps: parseInt(document.getElementById('setting-maxToolSteps').value, 10) || 30,
                 enableInlineCompletions: document.getElementById('setting-enableInline').checked,
                 enableHoverExplanations: document.getElementById('setting-enableHover').checked
             };
@@ -861,6 +901,7 @@
             document.getElementById('setting-maxOutputTokens').value = config.contextLimits?.maxOutputTokens || config.maxTokens || 8192;
             document.getElementById('setting-maxContextTokens').value = config.contextLimits?.maxContextTokens || 7000;
             document.getElementById('setting-historyLength').value = config.contextLimits?.historyLength || config.historyLength || 20;
+            document.getElementById('setting-maxToolSteps').value = config.maxAutonomousToolSteps || 30;
             
             checkTokenWarning();
             document.getElementById('setting-enableInline').checked = config.enableInlineCompletions === true;
@@ -2345,6 +2386,54 @@
             } else if (message.command === 'onboardingFailed') {
                 const card = document.getElementById('onboarding-card');
                 if (card) card.style.display = 'none';
+            } else if (message.type === 'update_plan_stepper' || message.command === 'update_plan_stepper') {
+                let stepper = document.getElementById('plan-stepper');
+                if (!stepper) {
+                    stepper = document.createElement('div');
+                    stepper.id = 'plan-stepper';
+                    stepper.className = 'w-full my-2 px-3 py-2 bg-slate-900/90 border border-cyber-neonCyan/40 rounded-xl text-xs space-y-1.5 shadow-md';
+                    chatContainer.appendChild(stepper);
+                }
+                if (!message.steps || message.steps.length === 0) {
+                    stepper.style.display = 'none';
+                } else {
+                    stepper.style.display = 'block';
+                    const iconMap = { pending: '○', active: '▶', done: '✔', failed: '✖', skipped: '⤼' };
+                    const statusClass = {
+                        pending: 'text-slate-400',
+                        active: 'text-cyan-400 font-bold',
+                        done: 'text-green-400 line-through opacity-70',
+                        failed: 'text-red-400',
+                        skipped: 'text-slate-500'
+                    };
+                    const safe = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                    let stepsHtml = `<div class="font-semibold text-slate-200 border-b border-slate-700/50 pb-1 mb-1.5 flex items-center justify-between">
+                        <span>🎯 Plan: ${safe(message.goal || 'Execution Roadmap')}</span>
+                        <button id="clear-plan-btn" class="text-[10px] text-slate-400 hover:text-red-400 px-1 py-0.5 rounded border border-slate-700">Clear</button>
+                    </div>`;
+                    stepsHtml += message.steps.map(s => `
+                        <div class="flex items-center justify-between py-0.5 ${statusClass[s.status] || 'text-slate-300'}">
+                            <span class="truncate flex items-center gap-1.5 text-[11px]">
+                                <span class="font-mono text-[10px]">${iconMap[s.status] || '•'}</span>
+                                ${safe(s.title)}
+                            </span>
+                            ${(s.status === 'pending' || s.status === 'active') ? `<button data-skip="${s.id}" class="skip-step-btn text-[9px] px-1 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-600">skip</button>` : ''}
+                        </div>
+                    `).join('');
+                    stepper.innerHTML = stepsHtml;
+
+                    const clearBtn = stepper.querySelector('#clear-plan-btn');
+                    if (clearBtn) {
+                        clearBtn.onclick = () => vscode.postMessage({ command: 'plan_clear' });
+                    }
+                    stepper.querySelectorAll('.skip-step-btn').forEach(btn => {
+                        btn.onclick = (e) => {
+                            const stepId = parseInt(e.target.getAttribute('data-skip'), 10);
+                            vscode.postMessage({ command: 'plan_skip_step', stepId });
+                        };
+                    });
+                }
+                scrollToBottom();
             }
         });
     </script>

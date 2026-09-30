@@ -86,7 +86,7 @@ export class ProjectScanner {
         
         try {
             // Very fast shallow glob search
-            const files = await vscode.workspace.findFiles('**/{' + commonEntryNames.join(',') + '}', '**/node_modules/**|**/.git/**|**/dist/**|**/build/**|**/.next/**', 10);
+            const files = await vscode.workspace.findFiles('**/{' + commonEntryNames.join(',') + '}', '**/node_modules/**|**/.git/**|**/dist/**|**/build/**|**/.next/**|**/.ultra-light-ai/**', 10);
             for (const file of files) {
                 const relPath = path.relative(workspaceRoot, file.fsPath);
                 // Keep only top 3 levels
@@ -112,7 +112,24 @@ export class ProjectScanner {
         const profilePath = path.join(workspaceRoot, '.ultra-light-ai', 'PROJECT_PROFILE.json');
         if (fs.existsSync(profilePath)) {
             try {
-                return JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+                const profile: ProjectProfile = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+                // Validate if any manifest or entry point still exists on disk
+                const manifestExists = [
+                    'package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod'
+                ].some(m => fs.existsSync(path.join(workspaceRoot, m)));
+                
+                const validEntryPoints = (profile.entryPoints || []).filter(ep => 
+                    fs.existsSync(path.isAbsolute(ep) ? ep : path.join(workspaceRoot, ep))
+                );
+
+                if (!manifestExists && validEntryPoints.length === 0) {
+                    // All project files were deleted: purge stale profile
+                    try { fs.unlinkSync(profilePath); } catch {}
+                    return null;
+                }
+
+                profile.entryPoints = validEntryPoints;
+                return profile;
             } catch (e) {
                 return null;
             }

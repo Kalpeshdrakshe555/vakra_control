@@ -81,7 +81,7 @@ If the user's message says the project is unfinished, "complete it", or "fix it"
 # Phases
 AUDIT (read-only): list_directory_tree; read the manifest and the entry points with read_multiple_files; run the project's build, test or import check. Mark each finding OK, MISSING or BROKEN and cite the output that shows it. No output, no finding.
 PLAN: call plan_set with 3 to 8 steps. One file or one command per step, each with a verify check. Order: broken config and imports, then missing files, then polish.
-EXECUTE: do the current step only. When its verify check passes, call plan_update or plan_done to mark it done.
+EXECUTE: do the current step only. When its verify check passes, call plan_update to mark it done.
 VERIFY: run the check. If it fails, read the failing file first, then fix. If it passes, continue to the next step or finish.
 [STATE] may carry EVENT: user_pivot (the user changed direction) or EVENT: stuck (the same failure happened twice). See Pivots.
 
@@ -91,7 +91,7 @@ VERIFY: run the check. If it fails, read the failing file first, then fix. If it
    - File does not exist: write_file with the full content.
    - File exists, change is one function, class or method: replace_symbol with the COMPLETE new definition ("Class.method" for methods).
    - File exists, change is anything else (config, JSON, CSS, HTML, imports, a few lines): edit_file with old_text copied exactly from a read of the file, and new_text.
-   - Never write_file over an existing file without inspecting it first. Never leave placeholders or "existing code" comments. Read a file before editing it if you have not seen it.
+   - Never write_file over an existing file. Never leave placeholders or "existing code" comments. Read a file before editing it if you have not seen it.
    If the harness rejects a call, its message names the right tool. Use it.
 3. Run every shell command with execute_terminal_command. Never print commands as text for the user. After it returns, read the output. If the exit code is non-zero, investigate (read the failing file or config) before changing code.
 4. Take small steps: one file per turn, then verify with a check, build or test command.
@@ -271,32 +271,26 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
     /* ================================================================== */
     /* 5. TOOL GATING: fewer tools per turn = fewer wrong choices           */
     /* ================================================================== */
-    private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files', 'get_code_diagnostics', 'get_symbol_outline'];
+    private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files'];
     private static readonly WRITE = ['write_file', 'replace_symbol', 'edit_file'];
 
     /**
      * Filter the registry's tool card with this list before it goes into the tail.
+     * Rename to match your registry (edit_file and plan_update must exist; see notes).
      */
     static allowedTools(task: TaskState, hasUiTask = false): string[] {
         const R = PromptBuilder.READ;
         const W = PromptBuilder.WRITE;
         switch (task.phase) {
             case 'audit':
-                return [...R, 'execute_terminal_command', 'check_localhost_health', 'plan_set', 'final_answer'];
+                return [...R, 'execute_terminal_command', 'plan_set', 'final_answer'];
             case 'plan':
                 return [...R, 'plan_set'];
             case 'execute':
-                return [
-                    ...R, ...W,
-                    'execute_terminal_command', 'check_localhost_health', 'capture_localhost_preview',
-                    'plan_update', 'plan_done', 'research_web_docs', 'search_web', 'update_architecture_context',
-                    ...(hasUiTask ? ['generate_ui_blueprint'] : [])
-                ];
+                return [...R, ...W, 'execute_terminal_command', 'plan_update', 'research_web_docs',
+                    ...(hasUiTask ? ['generate_ui_blueprint'] : [])];
             case 'verify':
-                return [
-                    ...R, 'execute_terminal_command', 'check_localhost_health', 'capture_localhost_preview',
-                    ...W, 'plan_update', 'plan_done', 'final_answer'
-                ];
+                return [...R, 'execute_terminal_command', ...W, 'plan_update', 'final_answer'];
             case 'done':
                 return ['final_answer'];
         }

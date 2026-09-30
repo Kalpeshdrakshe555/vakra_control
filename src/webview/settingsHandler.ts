@@ -40,6 +40,8 @@ export class SettingsHandler {
                 supportBrain: message.config.supportBrain,
                 advancedModeEnabled: isAdvancedMode,
 
+                maxAutonomousToolSteps: Math.min(100, Math.max(5, Number(message.config.maxAutonomousToolSteps) || 30)),
+
                 contextLimits: {
                     maxOutputTokens: Number(message.config.maxOutputTokens || message.config.maxTokens || 8192),
                     maxContextTokens: Number(message.config.maxContextTokens || 7000),

@@ -2,8 +2,91 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
+ * Direct Package Registry Interfaces (Zero scraping, Zero CAPTCHAs, 100% reliable)
+ */
+
+export interface PackageDocResult {
+    name: string;
+    version: string;
+    description: string;
+    homepage?: string;
+    documentationUrl?: string;
+    installCommand: string;
+    readmeSnippet?: string;
+}
+
+/**
+ * Fetches official Python package info from PyPI's JSON API.
+ */
+export async function fetchPyPiInfo(pkgName: string): Promise<PackageDocResult | null> {
+    try {
+        const cleanName = pkgName.trim().toLowerCase().replace(/[^a-z0-9_\-\.]/g, '');
+        if (!cleanName) return null;
+
+        const res = await fetch(`https://pypi.org/pypi/${cleanName}/json`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!res.ok) return null;
+
+        const data: any = await res.json();
+        const info = data.info || {};
+        const urls = info.project_urls || {};
+        const docUrl = urls.Documentation || urls.Docs || urls['Source Code'] || urls.Source || info.home_page || '';
+
+        // Truncate README description to first 2000 chars
+        const rawDesc = info.description || '';
+        const readmeSnippet = rawDesc.length > 2500 ? rawDesc.substring(0, 2500) + '\n...(truncated)' : rawDesc;
+
+        return {
+            name: info.name || cleanName,
+            version: info.version || 'latest',
+            description: info.summary || '',
+            homepage: info.home_page || '',
+            documentationUrl: docUrl,
+            installCommand: `pip install ${info.name || cleanName}`,
+            readmeSnippet
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Fetches official JavaScript/TypeScript package info from npm Registry API.
+ */
+export async function fetchNpmInfo(pkgName: string): Promise<PackageDocResult | null> {
+    try {
+        const cleanName = pkgName.trim().toLowerCase().replace(/[^\@a-z0-9_\-\/]/g, '');
+        if (!cleanName) return null;
+
+        const res = await fetch(`https://registry.npmjs.org/${cleanName}`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!res.ok) return null;
+
+        const data: any = await res.json();
+        const latestVersion = data['dist-tags']?.latest || Object.keys(data.versions || {}).pop() || 'latest';
+        const versionData = data.versions?.[latestVersion] || {};
+
+        const rawReadme = data.readme || versionData.readme || '';
+        const readmeSnippet = rawReadme.length > 2500 ? rawReadme.substring(0, 2500) + '\n...(truncated)' : rawReadme;
+
+        return {
+            name: data.name || cleanName,
+            version: latestVersion,
+            description: data.description || versionData.description || '',
+            homepage: data.homepage || versionData.homepage || '',
+            documentationUrl: data.homepage || (data.repository?.url ? data.repository.url.replace(/^git\+/, '') : ''),
+            installCommand: `npm install ${data.name || cleanName}`,
+            readmeSnippet
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Fetches HTML context from a web resource, strips HTML tags, and truncates content.
- * Serves as a zero-dependency local RAG utility.
  */
 export async function fetchWebContext(url: string): Promise<string> {
     try {
@@ -28,21 +111,19 @@ export async function fetchWebContext(url: string): Promise<string> {
         }
 
         // Basic code block formatting preservation
-        let cleanText = mainContent.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, p1) => {
+        let cleanText = mainContent.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_match, p1) => {
             return '\n```\n' + p1.replace(/<[^>]+>/g, '').trim() + '\n```\n';
         });
 
-        // 1. Strip noisy tags including their nested contents
-        // 2. Strip all remaining HTML tags
-        // 3. Normalize white spaces and trim
+        // Strip noisy tags
         cleanText = cleanText
             .replace(/<(style|script|head|title|nav|footer|aside|header|form|button|figure|iframe|noscript|svg)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
             .replace(/<[^>]+>/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Truncate to maximum of 2000 characters per page to save tokens
-        return cleanText.substring(0, 2000);
+        // Truncate to maximum of 2500 characters
+        return cleanText.substring(0, 2500);
     } catch (error) {
         console.error(`fetchWebContext failed for ${url}:`, error);
         return '';
@@ -50,162 +131,119 @@ export async function fetchWebContext(url: string): Promise<string> {
 }
 
 /**
- * Performs a free web search using DuckDuckGo HTML interface.
+ * Performs a web search with DuckDuckGo fallback and Registry API prioritization.
  */
 export async function searchWeb(query: string): Promise<string> {
     try {
+        // Step 1: Detect if query is asking for a package/library directly
+        const words = query.trim().split(/\s+/);
+        const candidatePkg = words.find(w => /^[a-z0-9\-_]{2,30}$/i.test(w) && !['how', 'to', 'in', 'the', 'use', 'create', 'with', 'code', 'file', 'app'].includes(w.toLowerCase()));
+
+        if (candidatePkg) {
+            // Check PyPI & npm in parallel
+            const [pypi, npm] = await Promise.all([
+                fetchPyPiInfo(candidatePkg),
+                fetchNpmInfo(candidatePkg)
+            ]);
+
+            const isPy = /python|django|fastapi|pydantic|flask|celery|sqlmodel|pip/i.test(query);
+            const winner = isPy ? (pypi || npm) : (npm || pypi);
+            if (winner) {
+                let out = `--- DIRECT REGISTRY DOCUMENTATION: ${winner.name}@${winner.version} ---\n`;
+                out += `Summary: ${winner.description}\n`;
+                out += `Install: \`${winner.installCommand}\`\n`;
+                if (winner.documentationUrl) out += `Docs / Homepage: ${winner.documentationUrl}\n`;
+                if (winner.readmeSnippet) {
+                    out += `\nReadme / Usage Snippet:\n${winner.readmeSnippet.substring(0, 1500)}\n`;
+                }
+                return out;
+            }
+        }
+
+        // Step 2: Fallback to DuckDuckGo search
         const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         });
-        if (!response.ok) {
-            throw new Error(`Search failed: ${response.status}`);
-        }
-        const html = await response.text();
-        
-        const results: {url: string, snippet: string}[] = [];
 
-        // Strategy 1: Standard result__snippet
-        const resultRegex1 = /<a class="result__snippet[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-        // Strategy 2: result__url or result__a links
-        const resultRegex2 = /<a class="result__url"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-        // Strategy 3: any link with uddg parameter
-        const resultRegex3 = /href="([^"]*uddg=[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-
-        const processMatch = (rawUrl: string, rawSnippet: string) => {
-            let url = rawUrl;
-            if (url.includes('uddg=')) {
+        if (response.ok) {
+            const html = await response.text();
+            const results: { url: string; snippet: string }[] = [];
+            const resultRegex = /href="([^"]*uddg=[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+            let match;
+            while ((match = resultRegex.exec(html)) !== null && results.length < 3) {
                 try {
-                    const params = new URLSearchParams(url.includes('?') ? url.split('?')[1] : url);
-                    url = decodeURIComponent(params.get('uddg') || url);
-                } catch { /* ignore */ }
+                    const params = new URLSearchParams(match[1].includes('?') ? match[1].split('?')[1] : match[1]);
+                    const cleanUrl = decodeURIComponent(params.get('uddg') || '');
+                    const snippet = match[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+                    if (cleanUrl.startsWith('http') && !cleanUrl.includes('duckduckgo.com') && !results.some(r => r.url === cleanUrl)) {
+                        results.push({ url: cleanUrl, snippet });
+                    }
+                } catch {}
             }
-            if (url.startsWith('//')) url = 'https:' + url;
-            const snippet = rawSnippet.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            if (url.startsWith('http') && !url.includes('duckduckgo.com') && !results.some(r => r.url === url)) {
-                results.push({ url, snippet });
-            }
-        };
 
-        let match;
-        while ((match = resultRegex1.exec(html)) !== null && results.length < 3) {
-            processMatch(match[1], match[2]);
-        }
-        if (results.length < 3) {
-            while ((match = resultRegex2.exec(html)) !== null && results.length < 3) {
-                processMatch(match[1], match[2]);
+            if (results.length > 0) {
+                const fullResults = await Promise.all(results.map(async (r, idx) => {
+                    try {
+                        const pageContent = await fetchWebContext(r.url);
+                        if (pageContent && pageContent.length > 200) {
+                            return `[Source ${idx + 1}] ${r.url}\n${pageContent}`;
+                        }
+                    } catch {}
+                    return `[Source ${idx + 1}] ${r.url}\nSnippet: ${r.snippet}`;
+                }));
+                return `--- WEB SEARCH RESULTS FOR '${query}' ---\n\n` + fullResults.join('\n\n---\n\n');
             }
         }
-        if (results.length < 3) {
-            while ((match = resultRegex3.exec(html)) !== null && results.length < 3) {
-                processMatch(match[1], match[2]);
-            }
-        }
-        
-        if (results.length === 0) {
-            return "No search results found.";
-        }
-        
-        const fullResults = await Promise.all(results.map(async (r, idx) => {
-            try {
-                const pageContent = await fetchWebContext(r.url);
-                if (pageContent && pageContent.length > 300) {
-                    return `[Source ${idx+1}] ${r.url}\n${pageContent}`;
-                }
-            } catch (err) {}
-            return `[Source ${idx+1}] ${r.url}\nSnippet: ${r.snippet}`;
-        }));
-        
-        return "--- WEB SEARCH RESULTS FOR '" + query + "' ---\n\n" + fullResults.join('\n\n---\n\n');
+
+        return `No online documentation found for query '${query}'.`;
     } catch (error) {
         console.error("Search error:", error);
-        return "Search failed.";
+        return `Search failed: ${error}`;
     }
 }
 
 /**
  * Autonomous Deep Doc Researcher Sub-Agent
- * Scrapes URLs, strips HTML noise, saves full markdown in `.ultra-light-ai/research/`
- * and returns a concise ~150-token executive summary.
+ * Integrates direct package registry lookups with web fallback.
+ * Saves clean markdown in `.ultra-light-ai/research/`.
  */
 export async function researchWebDocs(query: string, urls: string[] = [], workspaceRoot: string): Promise<string> {
+    const { executeDeepResearch } = require('./researchDistiller');
+    return await executeDeepResearch(query, urls, workspaceRoot);
+}
+
+/**
+ * Autonomous Pre-Flight Scout Pattern:
+ * Analyzes prompt for library/framework setup needs and fetches live registry docs
+ * BEFORE invoking the model. Returns an injected context block (max 800 tokens).
+ */
+export async function autonomousPreFlightScout(prompt: string): Promise<string> {
     try {
-        const researchDir = path.join(workspaceRoot, '.ultra-light-ai', 'research');
-        if (!fs.existsSync(researchDir)) {
-            fs.mkdirSync(researchDir, { recursive: true });
-        }
+        const lower = prompt.toLowerCase();
+        // Common libraries that often suffer from syntax hallucination in small models
+        const candidateLibs = [
+            'tailwind', 'django-tailwind', 'fastapi', 'pydantic', 'zustand', 'zod',
+            'trpc', 'prisma', 'drizzle-orm', 'next-auth', 'lucide-react', 'flowbite',
+            'radix-ui', 'shadcn', 'framer-motion', 'sqlmodel', 'celery'
+        ];
 
-        // If no or few URLs provided, autonomously search DuckDuckGo for top documentation links
-        let targetUrls = Array.isArray(urls) ? [...urls] : [];
-        if (targetUrls.length < 2) {
-            try {
-                const searchHtmlResponse = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + ' documentation reference code example')}`, {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' }
-                });
-                if (searchHtmlResponse.ok) {
-                    const searchHtml = await searchHtmlResponse.text();
-                    const linkMatches = searchHtml.matchAll(/href="([^"]*uddg=[^"]+)"/gi);
-                    for (const m of linkMatches) {
-                        try {
-                            const params = new URLSearchParams(m[1].includes('?') ? m[1].split('?')[1] : m[1]);
-                            const cleanUrl = decodeURIComponent(params.get('uddg') || '');
-                            if (cleanUrl.startsWith('http') && !cleanUrl.includes('duckduckgo.com') && !targetUrls.includes(cleanUrl)) {
-                                targetUrls.push(cleanUrl);
-                                if (targetUrls.length >= 3) break;
-                            }
-                        } catch {}
-                    }
-                }
-            } catch (e) {
-                console.error("Auto-search for docs failed:", e);
-            }
-        }
+        const detected = candidateLibs.filter(lib => lower.includes(lib));
+        if (detected.length === 0) return '';
 
-        let combinedMarkdown = `# Deep Documentation Research: ${query}\n\n`;
-        combinedMarkdown += `*Generated autonomously by Researcher Sub-Agent*\n\n`;
-        const summaryPoints: string[] = [];
-        const extractedCodeSnippets: string[] = [];
+        const targetLib = detected[0];
+        const [npm, pypi] = await Promise.all([fetchNpmInfo(targetLib), fetchPyPiInfo(targetLib)]);
+        const pythonLibs = ['fastapi', 'pydantic', 'django-tailwind', 'sqlmodel', 'celery'];
+        const isPy = pythonLibs.includes(targetLib);
+        const best = isPy ? (pypi || npm) : (npm || pypi);
+        if (!best) return '';
 
-        for (const url of targetUrls.slice(0, 3)) {
-            try {
-                const content = await fetchWebContext(url);
-                if (content && content.length > 50) {
-                    combinedMarkdown += `## Source: ${url}\n\n${content}\n\n---\n\n`;
-                    let host = url;
-                    try { host = new URL(url).hostname; } catch {}
-                    summaryPoints.push(`- **[${host}](${url})**: Extracted relevant API signatures & patterns.`);
-
-                    // Extract first code snippet if present in content
-                    const codeMatch = content.match(/```(?:[a-z]+)?\n([\s\S]*?)\n```/i);
-                    if (codeMatch && extractedCodeSnippets.length < 2) {
-                        extractedCodeSnippets.push(codeMatch[0]);
-                    }
-                }
-            } catch (e) {
-                console.error(`Failed to research ${url}:`, e);
-            }
-        }
-
-        const sanitizedFileName = query.toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 40) + '.md';
-        const docPath = path.join(researchDir, sanitizedFileName);
-        fs.writeFileSync(docPath, combinedMarkdown, 'utf8');
-
-        const relPath = path.relative(workspaceRoot, docPath);
-
-        let response = `### 📚 Autonomous Research Complete\n`;
-        response += `**Topic:** ${query}\n`;
-        response += `**Full Research Saved:** \`${relPath}\` (use \`read_multiple_files\` to view complete details)\n\n`;
-        response += `**Key Documentation Sources & Findings:**\n`;
-        response += summaryPoints.length > 0 ? summaryPoints.join('\n') : '- No external sites could be reached; check query or internet connectivity.';
-
-        if (extractedCodeSnippets.length > 0) {
-            response += `\n\n**Verified Code Pattern Example:**\n${extractedCodeSnippets[0]}`;
-        }
-
-        return response;
-    } catch (error: any) {
-        console.error("researchWebDocs error:", error);
-        return `Research failed: ${error?.message || error}`;
+        return `[PRE-FLIGHT SCOUT: Live Docs for ${best.name}@${best.version}]\n` +
+               `Install: ${best.installCommand}\n` +
+               `Description: ${best.description}\n` +
+               (best.readmeSnippet ? `Setup Guide:\n${best.readmeSnippet.substring(0, 800)}\n` : '');
+    } catch {
+        return '';
     }
 }

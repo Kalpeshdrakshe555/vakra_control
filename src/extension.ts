@@ -69,7 +69,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,js,py,java,go,rs,tsx,jsx,css,json,html,md}');
         const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-        const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+        const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
         const safeUpdateRag = (uri: vscode.Uri) => {
             const fp = uri.fsPath.replace(/\\/g, '/');
             if (combinedIgnores.some(folder => fp.includes(`/${folder}/`) || fp.endsWith(`/${folder}`))) return;
@@ -107,7 +107,7 @@ export function activate(context: vscode.ExtensionContext) {
     // ──────────────────────────────────────────────────────────────────────
     // SIDEBAR PROVIDER
     // ──────────────────────────────────────────────────────────────────────
-    const sidebarProvider = new SidebarProvider(context.extensionUri, workspaceRoot, globalRagEngine);
+    const sidebarProvider = new SidebarProvider(context.extensionUri, workspaceRoot, globalRagEngine, context);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('ultra-light-ai-sidebar', sidebarProvider)

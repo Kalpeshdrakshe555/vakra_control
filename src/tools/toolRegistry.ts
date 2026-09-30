@@ -159,6 +159,66 @@ export class ToolRegistry {
                 }
             }
         });
+
+        // 5. replace_symbol
+        this.registerTool({
+            name: 'replace_symbol',
+            description: 'Surgically replaces a whole function, class, or method by symbol name using LSP AST outline without fragile SEARCH blocks. Use "Class.method" for methods.',
+            parameters: '{"filepath": "string", "symbolName": "string", "newCode": "string"}',
+            execute: async (argsStr: string, _workspaceRoot: string) => {
+                try {
+                    const parsed = JSON.parse(argsStr || '{}');
+                    if (!parsed.filepath || !parsed.symbolName || !parsed.newCode) {
+                        return 'Error: replace_symbol requires "filepath", "symbolName", and "newCode".';
+                    }
+                    const { replaceSymbol } = require('../operations/replaceSymbol');
+                    const res = await replaceSymbol({
+                        filepath: parsed.filepath,
+                        symbolName: parsed.symbolName,
+                        newCode: parsed.newCode
+                    });
+                    if (!res.success) {
+                        let msg = `replace_symbol failed: ${res.message}`;
+                        if (res.candidates && res.candidates.length) {
+                            msg += `\nAvailable candidate symbols: ${res.candidates.join(', ')}`;
+                        }
+                        return msg;
+                    }
+                    return res.message;
+                } catch (e: any) {
+                    return `replace_symbol error: ${e?.message || e}`;
+                }
+            }
+        });
+
+        // 6. capture_localhost_preview
+        this.registerTool({
+            name: 'capture_localhost_preview',
+            description: 'Captures a visual screenshot and DOM layout health report of a local dev server (e.g. http://localhost:3000) using the system browser.',
+            parameters: '{"url": "string", "viewport": "desktop|mobile"}',
+            execute: async (argsStr: string) => {
+                try {
+                    const parsed = JSON.parse(argsStr || '{}');
+                    const url = parsed.url || 'http://localhost:3000';
+                    const viewport = parsed.viewport || 'desktop';
+                    const { VisionCapture } = require('./visionCapture');
+                    const capturer = new VisionCapture();
+                    try {
+                        const result = await capturer.capture(url, viewport);
+                        let summary = `### 👁️ Visual Preview Captured (${result.viewport})\n`;
+                        summary += `- URL: ${url}\n`;
+                        summary += `- Console Errors: ${result.consoleErrors.length > 0 ? result.consoleErrors.join(', ') : 'None'}\n`;
+                        summary += `- Failed Requests: ${result.failedRequests.length > 0 ? result.failedRequests.join(', ') : 'None'}\n`;
+                        summary += `- DOM Findings: ${result.findings.length > 0 ? result.findings.map((f: any) => `\n  - [${f.severity}] ${f.text}`).join('') : 'No layout defects detected'}\n`;
+                        return summary;
+                    } finally {
+                        capturer.dispose();
+                    }
+                } catch (e: any) {
+                    return `capture_localhost_preview error: ${e?.message || e}`;
+                }
+            }
+        });
     }
 
     public static loadWorkspacePlugins(workspaceRoot: string) {

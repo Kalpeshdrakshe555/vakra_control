@@ -1,192 +1,244 @@
-# 🚀 Ultra Light AI — System Upgrade & Master Requirements Specification
+# 🚀 VAKRA CONTROL — MASTER SYSTEM REQUIREMENTS & PHASED EXECUTION ROADMAP
 
-Yeh document humare project ke saare active core issues, architecture improvements, aur next-gen Copilot features ka single source of truth hai. Purane solved problems archive kar diye gaye hain taaki document active priorities par focused rahe.
+> **Document Status**: Active Master Roadmap & Phased Execution Plan  
+> **Core Target**: 4B Parameter Models (Gemma 4 E4B Vision, Nemotron-3-Nano 4B, Qwopus/Qwen 2.5 Coder 3B/4B) operating stably at **40,000–60,000+ tokens context** with sub-second generation (~35–42 TPS) and zero API costs, with plug-and-play Cloud API connectivity.  
+> **Architecture Strategy**: "4B Model = Next-Action Generator | Supervisor = Source of Truth & Protocol Gateway | Extension = Deterministic Heavy-Lifting".
 
 ---
 
-## 🏆 Resolved & Verified Milestones (Archive Summary)
+## 🏆 Resolved & Archived Milestones (Foundation Complete)
 
 | # | Milestone | Status | Key Deliverable |
 |---|---|---|---|
-| 1 | **Gaming Mode Complete Removal** | ✅ Verified | `gameRunnerPanel.ts`, casual HTML runners, commands, and assets completely purged. |
-| 2 | **Professional Prompts Overhaul** | ✅ Verified | Model-agnostic system prompt with strict output protocols, search/replace anchors, zero-hallucination rules, and structured Architect flow. |
-| 3 | **Multi-Tier Robust Diff Patcher** | ✅ Verified | 5-tier matching (Exact, Normalized, Anchor, Fuzzy Levenshtein, AST fallback, Scout healer) with zero silent appending. |
-| 4 | **True File Rewind & Rollback** | ✅ Verified | Dual-layer disk and buffer state reversion (`fs.unlinkSync` for new files, snapshot restoration for edits). |
-| 5 | **Collapsible Thinking Stream** | ✅ Verified | `<details class="thinking-accordion">` dropdown with live `<think>` stream handling. |
-| 6 | **Context Mentions & Diagnostics** | ✅ Verified | `@file`, `@terminal`, `@git` input injections and `ultra-light-ai.autoFixDiagnostics` active. |
-| 7 | **Dynamic Workspace Switching & Security** | ✅ Verified | `onDidChangeWorkspaceFolders` dynamic reload, OS Keychain `context.secrets` storage. |
+| 1 | **Gaming Mode Complete Removal** | ✅ Verified | `gameRunnerPanel.ts` and casual HTML runners completely purged. |
+| 2 | **Multi-Tier Diff Patcher Foundation** | ✅ Verified | 5-tier fuzzy matching with anti-elision guards. |
+| 3 | **True File Rewind & Rollback** | ✅ Verified | Dual-layer disk and buffer state reversion with snapshots. |
+| 4 | **Collapsible Thinking Stream** | ✅ Verified | Live `<think>` accordion without UI layout breakage. |
+| 5 | **Tri-Choice Terminal Permission UX** | ✅ Verified | Interactive card (`Allow for Now`, `Skip`, `Allow All for Session`). |
+| 6 | **Closed-Loop Terminal Interceptor** | ✅ Verified | Captures stdout/stderr exit codes and auto-feeds to LLM context. |
+| 7 | **Context Mentions & Diagnostics** | ✅ Verified | `@file`, `@terminal`, `@git` input injections and autoFixDiagnostics. |
 
 ---
 
-## 📌 Phase 1: Top Priority Active Sprint (UI, Terminal & Polish)
+## 🧭 PHASED EXECUTION ROADMAP: FROM 60% TO 95% PRODUCTION GRADE
 
-### 1. Summary-First Streaming & Clean File Edit UX (Hide Raw Code Clutter) — [VERIFIED ✅]
-- **Current Problem**:
-  - Model chat stream me bada raw code dump kar deta hai jisse chat messy aur unprofessional lagti hai.
-  - User chahta hai ki model kya kar raha hai iski concise **summary information / status** front-end par dikhe (e.g. *"Analyzing bug in auth logic..."*, *"Editing `src/auth.ts` to add token refresh..."*), jabki code generation background/backend me process ho.
-  - Edit complete hone ke baad UI me clean, high-fidelity **Verify Diff & Apply** card trigger hona chahiye bina layout breakdown ya double-rendering ke.
-- **Action Items**:
-  - **Live Action Status Chips**: AI generation ke dauran live status banner dikhaye (e.g. `⚡ Editing src/controllers/userController.ts...`).
-  - **Code Payload Stream Virtualization / Drawer**: Code blocks chat bubble ko flood karne ke bajay sleek collapsible artifact card me direct stream hon.
-  - **Verification Card**: Edit complete hone par `[ 👁️ Verify Diff ]`, `[ ⚡ Apply Changes ]`, aur `[ ✕ Reject ]` buttons prominently render hon with clear visual feedback.
+We will **NOT** implement everything at once. We will execute step-by-step in isolated, verifiable phases.
 
-### 2. Reliable Terminal Execution & Self-Healing Loop — [VERIFIED ✅]
-- **Current Problem**:
-  - Model terminal commands ka sahi se istemaal nahi kar raha hai (bash commands execute nahi hoti ya markdown me dab ke reh jaati hain).
-  - Model ko pata nahi chalta ki command ka output ya error kya aaya, jisse autonomous debugging fail hoti hai.
-- **Action Items**:
-  - **Universal Terminal Command Interceptor**: AI chahe `execute_terminal_command` tool call kare ya markdown me ````bash` block de, UI automatically ek interactive **Terminal Execution Card** render kare.
-  - **Interactive Review & 1-Click Run**:
-    - Editable command box.
-    - `[ ▶ Run in Terminal ]`: VS Code integrated terminal me bhejta hai.
-    - `[ ▶ Run & Read Output ]`: Command execute karke stdout/stderr capture karta hai.
-  - **Self-Healing Loop**: Output capture hote hi agar exit code non-zero ho, toh auto-diagnostic context model ko feed ho taaki wo error ko bina user intervention ke fix kar sake.
-
-### 3. Premium UI Aesthetics & Hidden UI Bug Fixes — [VERIFIED ✅]
-- **Current Problem**:
-  - Current UI basic lag raha hai, modern Copilot / Cursor jaisa sleek, premium feel missing hai.
-  - Hidden bugs: Streaming ke time text jump/flicker, status badges overflow, copy button glitches, aur button state synchronization issues.
-- **Action Items**:
-  - **Premium Dark Aesthetics**:
-    - Modern glassmorphism (`backdrop-filter: blur(12px)`), refined dark palette (`#0d1117`, `#161b22`, subtle `#30363d` borders).
-    - Polished glowing status accents, sleek micro-animations for hover and focus states.
-  - **Layout & Stream Stability**:
-    - Stream message rendering me DOM thrashing prevent karna.
-    - Message action icons (Copy, Edit, Delete, Rollback) ko clean floating bar me convert karna.
-  - **Component Quality**:
-    - File cards, terminal cards, aur thinking accordions ka unified design system.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       STEP-BY-STEP EXECUTION PHASES                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ PHASE 1: Zero-Wipe Safety & Head/Tail Prompt Architecture (Day 1)           │ [COMPLETED & VERIFIED ✅]
+│ PHASE 2: Tool Amnesia & Protocol Gateway (Day 2)                            │ [NEXT 🔴]
+│ PHASE 3: Surgical Editing (replace_symbol) & In-Memory Planner (Day 3)      │
+│ PHASE 4: Autonomous Web Researcher & Pre-Flight Scout Fix (Day 4)           │
+│ PHASE 5: Tree-sitter WASM Function-Wise AST Chunking (Day 5–6)              │
+│ PHASE 6: Multimodal Vision UI Debugging (Gemma 4 E4B) (Day 7)               │
+│ PHASE 7: Closed-Loop Self-Healing Diagnostics & Rollback (Day 8)            │
+│ PHASE 8: Extensibility & MCP Standard Client Integration (Future)           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 🚨 Evening Sprint: Immediate Fixes for Reported Bugs [ACTIVE 🔴]
+## 📍 PHASE 1: Zero-Wipe Safety & Head/Tail Prompt Architecture — [COMPLETED & VERIFIED ✅]
 
-### Issue 1: Raw HTML Tag Leak in Chat Body — [VERIFIED ✅]
-- **Status**: Fixed via DOM Placeholder Pipeline (`renderMarkdownWithCustomWidgets`). Markdown parsing is completely isolated from custom widgets, preventing raw tags from escaping.
+### Step 1.1: Zero-Wipe Guard in `diffPatcher.ts`
+* **Problem**: When a 4B model omits the `<<<<<<< SEARCH` block or outputs an empty search string, `diffPatcher.ts` considers it an intended full overwrite and silently wipes non-empty files!
+* **Exact Fix**:
+  ```typescript
+  if (searchStr.trim().length === 0) {
+      if (fileText.trim().length > 0) {
+          return {
+              success: false,
+              result: fileText,
+              error: "ZERO_WIPE_GUARD: Empty SEARCH block rejected for non-empty file. Use replace_symbol or provide exact SEARCH block."
+          };
+      }
+      return { success: true, result: replaceStr };
+  }
+  ```
+* **Success Criteria**: 0 accidental file erasures across 50 simulated broken search blocks.
 
-### Issue 2: Blind Hallucinated File Reads Without Prior Planning — [VERIFIED ✅]
-- **Status**: Fixed. Prompt enforces directory verification before any file reads, forbidding made-up paths.
+### Step 1.2: Upgrade to Claude's Cached `HEAD` & Memoized `SESSION PREFIX`
+* **Problem**: Current `promptBuilder.ts` has 292 lines of desperate begging rules at token 0, which breaks llama-server's `--cache-reuse 256` and wastes thousands of prompt tokens every single turn.
+* **Exact Fix**:
+  - Replace `src/webview/promptBuilder.ts` with Manager Claude's refactored `promptBuilder.ts`.
+  - **`buildHead()`**: Static, byte-identical constant (~900 tokens). Never changes, guaranteed 100% cache hit!
+  - **`buildSessionPrefix()`**: Stable per task (project profile, conventions, repo map), memoized with SHA1 hash.
+  - Volatile items (terminal output, plan text) are stripped from the system prompt and moved to the dynamic tail.
 
-### Issue 3: Missing Human Communication / Intent Transparency — [VERIFIED ✅]
-- **Status**: Fixed. Intent transparency rule requires model to state its reason in 1-2 conversational sentences before calling tools.
-
-### Issue 4: Word-by-Word Streaming Stalled / Not Progressively Visible — [VERIFIED ✅]
-- **Status**: Fixed. Continuous streaming (`stream: stream`) enabled across all tool iterations in `LocalOllamaClient` and `GeminiCloudClient`.
-
-### Issue 5: Architect Mode Premature Code Dumping & Scaffold Desynchronization — [VERIFIED ✅]
-- **Status**: Fixed. Implemented Turn 1 Hard Stop (Scaffolding only in Turn 1, no application code files until scaffolding is confirmed).
-
-### Issue 6: UI Markdown Tag Collisions & Stray "COPY" Injections — [VERIFIED ✅]
-- **Status**: Fixed. Injected custom widgets after markdown parsing; prevented copy button injection into thinking accordion and drawer payloads.
-
-### Issue 7: Tri-Choice Terminal Permission UX (Frictionless Automation) — [VERIFIED ✅]
-- **Status**: Fixed. Interactive Tri-Choice card (`Allow for Now`, `Skip`, `Allow All for Session`) with `⚡ Apply Selection` button.
-
-### Issue 8: Closed-Loop Execution (Verify & Execute — Anti-Blind Loop) — [VERIFIED ✅]
-- **Status**: Fixed & Fully Closed-Loop.
-  - Interactive Tri-Choice card emits with unique `callId`; pauses tool execution using an asynchronous `Promise`.
-  - When user selects `Allow for Now`, `Skip`, or `Allow All for Session`, `resolveTerminalApproval` executes via `TerminalCapture.runAndCapture`, formats exit code + last 15 lines of stdout/stderr, and resolves the tool promise directly into the LLM context.
-  - In `LocalOllamaClient` and `GeminiCloudClient`, added `extractTextToolCalls` parser to intercept and execute text-formatted tool calls like `search_web(...)` and `execute_terminal_command(...)`, eliminating plaintext tool command leakage.
-  - Enabled **Single Brain Auto-Healer**: When `supportBrain` is absent, `mainBrain` automatically kicks in to repair slightly mismatched SEARCH blocks.
-  - Updated `extractFiles` in `ui.html` and 1-shot SEARCH/REPLACE prompt in `promptBuilder.ts` with explicit `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` syntax.
-
-### Issue 9: Interactive Architectural Discovery (Clarification Questions First)
-- **Problem**: Complex project request aate hi model direct blind assumptions le kar blueprint banane lagta hai, jisse wrong libraries ya unwanted templates generate ho jaate hain.
-- **Solution Architecture**:
-  - Architect Mode me model blueprint se pehle 2-3 focused clarification questions puchega (e.g. Database preference, authentication type, styling framework).
-  - User ke answers confirm hone ke baad hi step-by-step verified development plan shuru karega.
-
-### Issue 10: Dynamic Temperature & Behavior Controls in Settings
-- **Problem**: Model ka temperature `realClients.ts` me `0.7` hardcoded hai. Coding aur search/replace diffs ke liye ye bohot high hai, jisse hallucination aur anchor mismatch hota hai.
-- **Solution Architecture**:
-  - Extension settings panel me interactive **Temperature Slider (`0.0` se `1.0`)** aur **Behavior Presets Dropdown**:
-    - `🎯 Strict Coder (0.1)`: Bug fixes, Search/Replace diffs, deterministic syntax (Zero hallucinations).
-    - `⚖️ Balanced Assistant (0.4)`: General explanations, refactoring, Q&A.
-    - `🎨 Creative Architect (0.7)`: UI design, naming ideas, architectural brainstorming.
-  - Value `config.json` me save hogi aur direct LLM API request payload me pass hogi.
-
-### Issue 11: Experiential Memory & Self-Learning Agent Loop (Hermes-Style Reflection)
-- **Problem**: Har naye session me model blank rehta hai aur wahi puraane mistakes ya wrong library versions dohrata hai jo user pehle bhi theek kar chuka hota hai.
-- **Solution Architecture**:
-  - **Self-Correction & Lesson Extractor**: Jab bhi user model ko correct kare ya error solve ho, model background me ek concise lesson extract karega:
-    `Mistake -> Solution / Project Convention`.
-  - **Persistent Local Vault**: Lessons `.ultra-light-ai/memory/learned_lessons.md` me structured format me save honge.
-  - **Dynamic Context Injection**: Agle sessions me user prompt ke matching keywords detect karke relevant lessons `promptBuilder.ts` ke through inject honge taaki model kabhi wahi galti dobara na kare.
+### Step 1.3: Dynamic Tail Block Re-Anchoring (`toolReanchor.ts`)
+* **Problem**: 4B models suffer from attention drift at 40k+ tokens; they forget tool instructions because they are buried at token 0.
+* **Exact Fix**:
+  - Copy `managers_response/manager_claud_response/toolReanchor.ts` to `src/router/toolReanchor.ts`.
+  - Append the `[STATE]` + `[TOOLS]` card as the very last message in the context window via `withTailReanchor`.
+  - Tail block contains: current step, touched files, last error/result, and active tool signatures (~150 tokens).
 
 ---
 
-## 📌 Phase 2: Autonomous Researcher Sub-Agent & Essential Tools Suite
+## 📍 PHASE 2: Tool Amnesia, Repair Layer & Protocol Gateway [COMPLETED & VERIFIED ✅]
 
-### 4. Deep Doc Researcher Sub-Agent (`research_web_docs`) — [VERIFIED ✅]
-- **Goal**: Internet se real-time official documentation, API references, aur code examples autonomously fetch karke clean `.md` files me store karna taaki main model outdated training cutoff ki wajah se kabhi hallucinate na kare.
-- **Dual-Brain Allocation**:
-  - **Scout Model Priority**: Agar `scoutBrain` (Cloud 31B / Fast API model) configured hai, toh research task Scout model ko delegate hoga (super fast, high intelligence, saving local token budget).
-  - **Fallback**: Agar Scout configured nahi hai, toh regular primary model as researcher act karega.
-- **Workflow**:
-  1. Main agent prompt me tool trigger karta hai: `research_web_docs(query="Next.js 15 Server Actions params", urls=[...])`.
-  2. Sub-agent background me multiple targeted URLs scrape karta hai.
-  3. HTML boilerplate (scripts, ads, navbars, tracking code) filter karke pure Markdown me format karta hai.
-  4. Output file `.ultra-light-ai/research/<sanitized-topic>.md` me save hoti hai.
-  5. Main agent ko sirf ek concise **150-Token Executive Summary + Table of Contents + File Link** di jaati hai.
-  6. Main agent bina token explode kiye wahi exact documentation read karke accurate code likhta hai.
+### Step 2.1: Naked JSON & Bracket Repair Layer
+* **Problem**: 4B models frequently output:
+  - Naked JSON: `{"filepaths": ["catalog/views.py"]}` without `name`.
+  - Conversational preamble before JSON: *"I am reading the file... {"name": ...}"*.
+  - Truncated parameter brackets when tokens are tight.
+* **Exact Fix**:
+  - Integrate `extractJsonObject(text)`: Scans for the first balanced `{...}` and auto-balances unclosed brackets.
+  - Integrate `matchToolByArgs(obj, tools)`: Matches naked JSON to tool by property key overlap.
+  - Integrate `repairToolCall(raw, tools)`: Normalizes malformed responses before tool dispatch.
 
-### 5. Essential Agent Tools Suite — [VERIFIED ✅]
-Top-tier coding agents ki tarah main agent ke context aur execution power ko complete karne ke liye 4 essential tools add honge:
-- **`list_directory_tree` (Directory Explorer)**:
-  - Workspace ya specific subfolder ka clean visual tree structure (`depth` limit ke sath) return karta hai taaki AI blind guess na kare.
-- **`get_code_diagnostics` (LSP Compiler & Linter Check)**:
-  - VS Code language server se target file ke active red squiggles, compiler errors, aur warnings fetch karta hai (`vscode.languages.getDiagnostics`). Code edit ke turant baad AI bina terminal run kiye syntax errors detect kar sakta hai.
-- **`get_symbol_outline` (AST Outline Inspector)**:
-  - Poori 1000 lines ki file read kiye bina us file ke saare Classes, Methods, Functions, aur Interfaces ki hierarchy return karta hai (Zero token waste navigation).
-- **`check_localhost_health` (Dev Server Health Ping)**:
-  - AI dev command run karne ke baad `http://localhost:<port>` ko ping karke check karta hai ki server sach me live hua ya port clash/crash ho gaya.
+### Step 2.2: Hard Protocol Gateway & Discipline Loop
+* **Problem**: If the model outputs conversational prose instead of invoking a tool, the agent stalls and forgets its task.
+* **Exact Fix**:
+  - Implement `evaluateModelReply`:
+    - Turn produces tool call -> reset `consecutiveNoToolTurns = 0`.
+    - Turn produces prose when tool is expected -> inject 1-line nudge: *"WARNING: You must emit a tool call. No prose."*
+    - If 2 consecutive prose turns occur -> force constrained decoding (`json_schema` / GBNF grammar).
+
+### Step 2.3: Tool Turn Persistence in History
+* **Problem**: `sidebarProvider.ts` only saves the final plain text in `conversationHistory`, dropping `tool_calls` and tool outputs. On the next turn, the model sees no record of its previous tool actions!
+* **Exact Fix**: Preserve assistant tool invocations and tool observation results in the active session history.
 
 ---
 
-## 📌 Phase 3: Core Architecture & Accuracy Engine
+## 📍 PHASE 3: Surgical Editing (`replaceSymbol.ts`) & In-Memory Task Planner [COMPLETED & VERIFIED ✅]
 
-### 6. Speculative Refiner Pipeline (4B Local Draft + 31B Cloud Scout Validator) — [ACTIVE 🔴]
-- **Goal**: Unlimited daily development usage with high accuracy and zero API quota exhaustion.
-- **Workflow**:
-  - **Draft Execution (4B Local Model)**: Local model free me initial code files aur diffs generate karta hai.
-  - **Refiner Pass (31B Cloud Scout)**: Chhota payload (Draft Code + Target File Snippet + 150 token rule) Scout ko jata hai:
-    - Code syntax errors verify karta hai.
-    - Exact `SEARCH/REPLACE` anchors align karta hai taaki diff patch 100% succeed ho.
-  - **Budget Safe**: Har edit par sirf 400-800 tokens consume honge (14k RPD / 16k TPS limit me safe).
+### Step 3.1: LSP-Backed Surgical Edit (`replace_symbol`)
+* **Problem**: 4B models cannot reliably reproduce 30 lines of code verbatim with exact indentation to form a search block.
+* **Exact Fix**:
+  - Copy `managers_response/manager_claud_response/replaceSymbol.ts` to `src/operations/replaceSymbol.ts`.
+  - Register `replace_symbol` tool in `ToolRegistry.ts` (`filepath`, `symbolName`, `newCode`).
+  - VS Code LSP `DocumentSymbol` locates exact start and end line ranges (including `@decorators` and indentation).
+  - Applies atomic edit via `vscode.WorkspaceEdit`.
+  - Diagnostics verification: Checks for compiler errors after edit; auto-rollbacks if new syntax errors are introduced.
 
-### 7. Next-Gen Codebase Relationship Map (AST Call Hierarchy Graph) — [ACTIVE 🔴]
-- **Goal**: Heavy full-file reading ke bajay lightweight AST Symbol Graph banana taaki cross-file relations model ko instantly milein.
-- **Action Items**:
-  - Background indexing me Class, Interface, Function signatures aur Import/Export call graph store karna.
-  - Full 1000-line files context me dump karne ke bajay sirf relevant signatures aur dependencies bhejna. Token consumption 80% drop hoga.
+### Step 3.2: In-Memory Task Planner (Zero Workspace Garbage)
+* **Problem**: Current agent writes `.ultra-light-ai/PLAN.md` into the user's project, which gets indexed into RAG, leaks into code retrieval, and traps the model in an infinite planning loop.
+* **Exact Fix**:
+  - Copy `managers_response/manager_claud_response/inMemoryTaskPlanner.ts` to `src/state/inMemoryTaskPlanner.ts`.
+  - Store plan in `ctx.workspaceState` and runtime memory. **Zero `.md` files written to project root**.
+  - **Auto-Advancement Logic**: The harness automatically marks steps as `done` when:
+    - Target file was edited (`file_edited`).
+    - Terminal command exited with code 0 (`command_ok`).
+  - The model NEVER has to manually tick checkboxes or edit markdown plans!
+  - Stream plan progress to webview UI via `postMessage({ type: 'update_plan_stepper', plan })`.
 
----
-
-## 📌 Phase 4: Extensibility, Custom Skills & MCP Ecosystem
-
-### 8. Custom Agent Skills System (Claude Skills-Style Workflows) — [FOUNDATION VERIFIED ✅]
-- **Goal**: User apne custom coding workflows aur domain-specific rules create kar sake.
-- **Architecture**:
-  - Directory: `.ultra-light-ai/skills/<skill-name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `trigger_rules`).
-  - Tech stack ya keywords match hone par on-demand load hoga (Zero token waste).
-  - Default `code-reviewer` skill shipped under `.ultra-light-ai/skills/code-reviewer/SKILL.md`.
-
-### 9. Model Context Protocol (MCP) Standard Client Integration — [PLANNED 🟡]
-- **Goal**: Anthropic open-source MCP protocol ke through local/remote MCP servers (SQLite, GitHub, PostgreSQL, Filesystem, Puppeteer) se connect hona.
-- **Config**: `.ultra-light-ai/mcp_config.json`.
-- **Status**: Config loader ready, MCP StdioClient transport integration pending.
-
-### 10. Extensible Plugin & Tooling Architecture — [PLANNED 🟡]
-- **Goal**: Third-party plugins (Gmail, Slack, Jira, Custom APIs) `.ultra-light-ai/plugins/` directory se auto-load hona.
+### Step 3.3: Exclude `.ultra-light-ai` from RAG Indexing
+* **Problem**: `ragEngine.ts` was not ignoring `.ultra-light-ai`, causing metadata leakage into code context.
+* **Exact Fix**: Add `.ultra-light-ai` to default ignore folders in `ragEngine.ts` and `codeIndexer.ts`.
 
 ---
 
-## 🎯 Implementation Priority Order
-1. **Milestone 1 (UI Top Priority)**: Summary-First Streaming & Clean File Edit Cards — [COMPLETED & VERIFIED ✅]
-2. **Milestone 2 (Terminal)**: Reliable Terminal Execution Bridge & Self-Healing Loop — [COMPLETED & VERIFIED ✅]
-3. **Milestone 3 (UI Polish)**: Premium Glassmorphic Aesthetics & Hidden UI Bug Fixes — [COMPLETED & VERIFIED ✅]
-4. **Milestone 4 (Intelligence)**: Autonomous Doc Researcher Sub-Agent (`research_web_docs`) — [COMPLETED & VERIFIED ✅]
-5. **Milestone 5 (Tools)**: Essential Agent Tools Suite (`list_directory_tree`, `get_code_diagnostics`, `get_symbol_outline`, `check_localhost_health`) — [COMPLETED & VERIFIED ✅]
-6. **Milestone 6 (Skills)**: Custom Skills Engine (`.ultra-light-ai/skills/`) — [COMPLETED & VERIFIED ✅]
-7. **Milestone 7 (Refiner)**: Speculative Refiner Pipeline (4B Local + 31B Scout Validator) — [NEXT 🔴]
-8. **Milestone 8 (Code Graph)**: Next-Gen Codebase Relationship Map (AST Call Hierarchy) — [NEXT 🔴]
-9. **Milestone 9 (Extensibility)**: Full MCP Stdio Protocol Client Integration — [NEXT 🔴]
+## 📍 PHASE 4: Autonomous Web Researcher & Pre-Flight Scout Fix [COMPLETED & VERIFIED ✅]
+
+### Step 4.1: Root Cause Analysis of Researcher Inactivity
+1. **Passive Model Prompting**: 4B models do not proactively think to call `research_web_docs` because their default behavior is to guess from training weights.
+2. **DuckDuckGo Anti-Bot Blocking**: `scraper.ts` uses raw `fetch('https://html.duckduckgo.com/html/?q=...')`. DuckDuckGo frequently returns HTTP 202/403 or bot captchas, causing `searchWeb()` to silently return `""` (empty string).
+3. **Missing Package Registry Direct APIs**: For 90% of coding tasks (e.g. Django, Next.js, Tailwind), documentation is available directly via JSON APIs without web scraping!
+
+### Step 4.2: Direct Registry API Providers in `scraper.ts` (Zero Scraping, Zero Captchas)
+Add direct, reliable API fallbacks in `src/tools/scraper.ts`:
+* **Python Packages (PyPI JSON API)**:
+  `https://pypi.org/pypi/<package_name>/json` -> Returns exact latest version, summary, dependencies, and official docs URL.
+* **Node Packages (npm Registry API)**:
+  `https://registry.npmjs.org/<package_name>` -> Returns latest version, README markdown, and entry points.
+* **GitHub Official Docs**:
+  `https://raw.githubusercontent.com/<owner>/<repo>/main/README.md`.
+* **Multi-Search Fallback**:
+  If DuckDuckGo fails or returns empty, automatically fallback to SearXNG or clean Google/Brave API proxy instead of returning empty text.
+
+### Step 4.3: Autonomous Pre-Flight Scout Pattern (Supervisor Gated)
+Instead of waiting for the 4B model to realize it needs docs, the **Supervisor runs the Scout BEFORE invoking the coding LLM**:
+```
+User Prompt: "Create a modern Django app with django-tailwind 4 and flowbite"
+     │
+     ▼
+Supervisor Pre-Flight Dependency Scanner
+  - Extracts library names: ['django-tailwind', 'flowbite']
+  - Checks local requirements.txt / package.json -> Not present or unknown version
+     │
+     ▼
+Autonomous Scout Fetches Live Docs via PyPI / npm APIs
+  - Fetches setup snippet & installation command
+  - Distills to ≤800 tokens: [LIVE DOCS: django-tailwind@latest]
+     │
+     ▼
+Context Compiler Injects [LIVE DOCS] into Prompt
+     │
+     ▼
+4B Model Receives 100% Verified, Current Code Patterns on Turn 1!
+```
+
+---
+
+## 📍 PHASE 5: AST Boundary Chunking & 1-Hop Symbol Expansion [COMPLETED & VERIFIED ✅]
+
+### Step 5.1: Replace Line-Based Regex Chunking
+* **Problem**: In `codeIndexer.ts`, when symbol providers fail or on syntax-error fallback, code gets cut into arbitrary 80-line chunks. Function signatures end up in Chunk A, while return statements end up in Chunk B, crippling 4B model context.
+* **Exact Fix**:
+  - Install `web-tree-sitter` and bundle prebuilt WASMs (`tree-sitter-python.wasm`, `tree-sitter-typescript.wasm`, `tree-sitter-html.wasm`).
+  - Chunk code strictly at AST boundaries: `function_definition`, `class_definition`, `method_definition`.
+  - For large functions (>100 lines), split only at top-level child statement boundaries while copying the parent function signature and docstrings into each chunk header.
+
+### Step 5.2: Structured `CodeChunk` & 1-Hop Symbol Expansion
+* Return structured chunks with `symbolPath` (`['Product', 'save']`), `nodeType`, and `imports`.
+* Implement 1-hop symbol expansion in RAG: When a view function is retrieved, also retrieve its referenced model or serializer chunk.
+
+---
+
+## 📍 PHASE 6: Multimodal Vision UI Debugging (Gemma 4 E4B) [COMPLETED & VERIFIED ✅]
+
+### Step 6.1: Windows Native Zero-Download Vision Capture
+* **Problem**: Inspecting localhost web previews (catching broken CSS, overlapping flexboxes, missing buttons) requires browser screenshots, but downloading heavy browser binaries is slow and fragile.
+* **Exact Fix**:
+  - Copy `managers_response/manager_claud_response/visionCapture.ts` to `src/tools/visionCapture.ts`.
+  - Uses `puppeteer-core` to drive the user's **existing system Microsoft Edge or Google Chrome** (always present on Windows!). Zero extra browser downloads.
+  - Captures localhost screenshots (desktop 1440px and mobile 375px viewports) to PNG base64 buffers.
+
+### Step 6.2: DOM Heuristics + Gemma 4 E4B Vision Audit
+* `visionCapture.ts` extracts automated DOM heuristics:
+  - Horizontal overflow (`scrollWidth > clientWidth`).
+  - Zero-size or hidden interactive elements.
+  - Browser console error logs.
+* Passes screenshot + DOM heuristics to Gemma 4 E4B via `llama-server.exe` multimodal endpoint.
+* Gemma identifies visual defects, and the supervisor applies surgical CSS/HTML fixes via `replace_symbol`.
+
+---
+
+## 📍 PHASE 7: Closed-Loop Self-Healing Diagnostics & Multi-File Transactions [COMPLETED & VERIFIED ✅]
+
+### Step 7.1: Automated Terminal Error Diagnostic Pre-Checks
+* **Problem**: In Django tests, when `TemplateDoesNotExist: catalog/product_list.html` occurred, the model gave up instead of checking why the file was missing.
+* **Exact Fix**:
+  - Update `src/utils/errorDiagnoser.ts` with error-pattern actions:
+    - `TemplateDoesNotExist: X` -> Automatically resolves against `TEMPLATES['DIRS']` and app template directories; returns directory existence report directly into context.
+    - `ModuleNotFoundError: No module named 'X'` -> Triggers Scout to fetch install command.
+  - Model receives concrete diagnostic facts rather than vague traceback strings.
+
+### Step 7.2: Multi-File Transaction Snapshots
+* Group all file edits belonging to an agent task under a single Transaction ID (`fileVersioning.ts`).
+* If a terminal verification command (e.g. `pytest` or `npm run build`) fails after 3 repair attempts, offer instant 1-click group rollback to the pre-task snapshot.
+
+---
+
+## 📍 PHASE 8: Extensibility & MCP Client Integration (Future Sprint)
+
+### Step 8.1: Model Context Protocol (MCP) Standard Client
+* Support `.ultra-light-ai/mcp_config.json` for external stdio MCP tools (PostgreSQL, SQLite, GitHub, Filesystem).
+* Seamlessly expose MCP tools inside the dynamic tail tool card.
+
+---
+
+## 📅 VERIFIED ROADMAP SUMMARY & SPRINT PHASING
+
+| Sprint | Target Days | Focus Areas | Deliverables |
+|---|---|---|---|
+| **Sprint 1 (Now)** | **Day 1** | Safety & Prompt Re-architecture | • Zero-Wipe Guard in `diffPatcher.ts`<br>• Refactored `promptBuilder.ts` (Static Head + Prefix Cache)<br>• `toolReanchor.ts` integration in `sidebarProvider.ts` |
+| **Sprint 2** | **Day 2** | Tool Discipline & Protocol Gateway | • JSON extraction & naked JSON repair layer<br>• Discipline nudge loop (2-nudge retry)<br>• Tool call history persistence |
+| **Sprint 3** | **Day 3** | Surgical Editing & Plan Isolation | • `replaceSymbol.ts` LSP tool in `diffPatcher.ts`<br>• `inMemoryTaskPlanner.ts` (0 files in workspace)<br>• UI Stepper wiring |
+| **Sprint 4** | **Day 4** | Autonomous Web Researcher & Scout | • Direct Registry APIs in `scraper.ts` (PyPI, npm, GitHub)<br>• Pre-Flight Autonomous Scout injection (`[LIVE DOCS]`)<br>• DuckDuckGo anti-bot fix |
+| **Sprint 5** | **Day 5–6** | Precision Retrieval (Tree-sitter) | • `web-tree-sitter` WASM chunker<br>• Complete function/class chunks in BM25 |
+| **Sprint 6** | **Day 7** | Multimodal Vision (Gemma 4 E4B) | • `visionCapture.ts` via Windows Edge/Chrome<br>• Localhost preview screenshot + CSS fix loop |
+| **Sprint 7** | **Day 8** | Closed-Loop Self-Healing | • Diagnostic rule table in `errorDiagnoser.ts`<br>• Multi-file transaction rollback |

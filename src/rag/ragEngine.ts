@@ -52,18 +52,41 @@ export class RagEngine {
                 try {
                     const cacheData = await fs.promises.readFile(cachePath, 'utf8');
                     const parsed = JSON.parse(cacheData);
-                    // Bug 6 Fix: Staleness check — if cache older than 24h, rebuild
+                    // Staleness check — if cache older than 24h, rebuild
                     const isStale = parsed.builtAt && (Date.now() - parsed.builtAt > 24 * 60 * 60 * 1000);
                     if (!isStale && Array.isArray(parsed.chunks)) {
-                        this.chunks = parsed.chunks;
-                        this.bm25 = new BM25();
-                        // Bug 1 Fix: Restore boost scores from cached chunk metadata
-                        for (const chunk of this.chunks) {
-                            this.bm25.addDocument(chunk.id, chunk.content, chunk.importanceScore || 1.0);
+                        // Ghost-File Defense: Verify that cached files actually exist on disk
+                        const validChunks: CodeChunk[] = [];
+                        let missingCount = 0;
+                        const verifiedPaths = new Map<string, boolean>();
+
+                        for (const chunk of parsed.chunks) {
+                            const full = path.isAbsolute(chunk.filepath) ? chunk.filepath : path.join(this.workspaceRoot, chunk.filepath);
+                            let exists = verifiedPaths.get(full);
+                            if (exists === undefined) {
+                                exists = fs.existsSync(full);
+                                verifiedPaths.set(full, exists);
+                            }
+                            if (exists) {
+                                validChunks.push(chunk);
+                            } else {
+                                missingCount++;
+                            }
                         }
-                        this.indexReady = true;
-                        console.log(`[RAG] Index loaded from cache: ${this.chunks.length} chunks.`);
-                        return;
+
+                        // If files were deleted or empty, force rebuild
+                        if (missingCount === 0 && validChunks.length > 0) {
+                            this.chunks = validChunks;
+                            this.bm25 = new BM25();
+                            for (const chunk of this.chunks) {
+                                this.bm25.addDocument(chunk.id, chunk.content, chunk.importanceScore || 1.0);
+                            }
+                            this.indexReady = true;
+                            console.log(`[RAG] Index loaded from cache: ${this.chunks.length} chunks (0 ghost files).`);
+                            return;
+                        } else {
+                            console.log(`[RAG] Detected ${missingCount} deleted/ghost files in cache. Rebuilding fresh index...`);
+                        }
                     } else {
                         console.log(`[RAG] Cache stale or invalid, rebuilding...`);
                     }
@@ -81,7 +104,7 @@ export class RagEngine {
                     aiignoreList = aiContent.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
                 } catch (e) {}
             }
-            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, ...aiignoreList, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__']));
+            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, ...aiignoreList, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
             const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
 
             const files = await vscode.workspace.findFiles(
@@ -157,10 +180,39 @@ export class RagEngine {
         const scoredChunks = this.chunks.map(chunk => ({
             chunk,
             score: this.bm25.getScore(queryTokens, chunk.id)
-        })).filter(result => result.score > 0);
+        })).filter(result => {
+            if (result.score <= 0) return false;
+            const full = path.isAbsolute(result.chunk.filepath) ? result.chunk.filepath : path.join(this.workspaceRoot, result.chunk.filepath);
+            return fs.existsSync(full);
+        });
         
         scoredChunks.sort((a, b) => b.score - a.score);
-        return scoredChunks.slice(0, topK).map(result => result.chunk);
+        const topChunks = scoredChunks.slice(0, topK).map(result => result.chunk);
+
+        // 1-Hop Symbol Expansion: pull definitions for referenced models/classes
+        const expanded = [...topChunks];
+        const seenIds = new Set(topChunks.map(c => c.id));
+        const symbolMap = new Map<string, CodeChunk>();
+        for (const c of this.chunks) {
+            if (c.symbolName && !c.symbolName.includes(' ') && !c.symbolName.includes('(')) {
+                symbolMap.set(c.symbolName.toLowerCase(), c);
+            }
+        }
+
+        for (const chunk of topChunks) {
+            if (expanded.length >= topK + 2) break;
+            const words = chunk.content.match(/\b[A-Za-z0-9_]{3,30}\b/g) || [];
+            for (const word of words) {
+                const target = symbolMap.get(word.toLowerCase());
+                if (target && !seenIds.has(target.id) && target.filepath !== chunk.filepath) {
+                    seenIds.add(target.id);
+                    expanded.push(target);
+                    if (expanded.length >= topK + 2) break;
+                }
+            }
+        }
+
+        return expanded;
     }
 
     /**
