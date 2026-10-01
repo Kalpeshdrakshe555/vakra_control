@@ -49,17 +49,24 @@ export class TerminalCapture {
                     if (error) {
                         exitCode = error.code ?? 1;
                         isError = true;
-                        fullOutput += `Exit Code: ${exitCode}\n`;
                         this.outputChannel.appendLine(`Exit Code: ${exitCode}`);
+                        if (!fullOutput.trim() && error.message) {
+                            fullOutput += error.message + '\n';
+                        }
                     }
 
-                    // Extract last 15 lines for concise, high-signal AI feedback
-                    const lines = fullOutput.trim().split('\n').filter(l => l.trim().length > 0);
+                    // Strip ANSI color escape codes for clean AI perception
+                    const cleanOutput = fullOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '').trim();
+                    const lines = cleanOutput.split('\n').filter(l => l.trim().length > 0);
                     let conciseOutput = '';
-                    if (lines.length > 15) {
-                        conciseOutput = lines.slice(-15).join('\n');
+
+                    if (lines.length > 35) {
+                        // Preserve the first 5 lines (context/start) and last 30 lines (traceback, exact error)
+                        const head = lines.slice(0, 5).join('\n');
+                        const tail = lines.slice(-30).join('\n');
+                        conciseOutput = `${head}\n... [${lines.length - 35} lines omitted] ...\n${tail}`;
                     } else {
-                        conciseOutput = fullOutput.trim();
+                        conciseOutput = cleanOutput;
                     }
 
                     this.lastOutput = conciseOutput || (isError ? `Execution failed with exit code ${exitCode}` : 'Command executed successfully (no output).');

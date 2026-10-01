@@ -36,6 +36,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private currentSeqOp: any = null; // Store reference to cancel Architect queue
     private isTerminalSessionAutoApproved: boolean = false;
     private pendingTerminalResolvers: Map<string, (result: string) => void> = new Map();
+    private lastFailedCommand: string | null = null;
+    private filesModifiedSinceLastCommand: boolean = false;
+    private lastReadFiles: Set<string> = new Set<string>();
     private consecutiveNoToolTurns: number = 0;
     private recentFilesTouched: Set<string> = new Set<string>();
     private lastToolResultText?: string;
@@ -418,7 +421,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             } else if (message.command === 'resolveTerminalApproval') {
                 const { callId, action, cmd } = message;
-                const finalCmd = (cmd || '').trim();
+                const finalCmd = (cmd || '').replace(/^[\$#>]\s*/, '').trim();
                 const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || this._workspaceRoot || '';
 
                 if (action === 'always') {
@@ -439,6 +442,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
                             if (workspaceRoot) {
                                 SessionMemory.recordCommand(workspaceRoot, finalCmd, !res.error);
+                            }
+                            if (res.error) {
+                                this.lastFailedCommand = finalCmd;
+                                this.filesModifiedSinceLastCommand = false;
+                            } else {
+                                this.lastFailedCommand = null;
                             }
                             this.postMessageToWebview({
                                 command: 'terminalCommandCompleted',
@@ -1234,7 +1243,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
             };
             tools[0].functionDeclarations.push(searchWebTool);
-            tools[0].functionDeclarations.push(replaceSymbolTool);
             tools[0].functionDeclarations.push(captureLocalhostTool);
 
             // Core file writing & editing tools
@@ -1322,12 +1330,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
                     const filepaths = functionCall.args?.filepaths;
                     if (!filepaths || !Array.isArray(filepaths) || !workspaceRoot) return "Error: No filepaths array or workspace.";
-                    
+
+                    // Redundant read circuit breaker: prevent looping on inspecting identical files without editing
+                    if (this.lastReadFiles.size > 0 && !this.filesModifiedSinceLastCommand) {
+                        const isSame = filepaths.every((f: string) => this.lastReadFiles.has(f.trim().replace(/\\/g, '/')));
+                        if (isSame && filepaths.length === this.lastReadFiles.size) {
+                            return `[REDUNDANT READ BLOCKED]: You already inspected '${filepaths.join(', ')}' and they have not changed. Re-reading is blocked to prevent loops. NEXT ACTION: Proceed directly to applying your fix using edit_file (filepath, old_text, new_text) or replace_symbol (filepath, symbolName, newCode).`;
+                        }
+                    }
+
                     this.postMessageToWebview({
                         command: 'toolCallEvent',
                         tool: 'read_multiple_files',
                         title: 'Inspecting Files',
-                        data: { count: filepaths.length, files: filepaths.slice(0, 3).map(f => path.basename(f)).join(', ') }
+                        data: { count: filepaths.length, files: filepaths.join(', ') }
                     });
                     
                     let combinedResult = '';
@@ -1412,6 +1428,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             }
                         }
                     }
+
+                    this.lastReadFiles = new Set(filepaths.map((f: string) => f.trim().replace(/\\/g, '/')));
+                    if (this.currentTaskState && this.currentTaskState.phase === 'audit') {
+                        this.currentTaskState.auditCalls++;
+                        this.currentTaskState.phase = 'execute';
+                    }
+
+                    combinedResult += `\n[INSPECTION COMPLETE]: File content loaded above. NEXT STEP: Use edit_file (with exact old_text/new_text) or replace_symbol to apply your code fix now, then verify with a check command. Do NOT call read_multiple_files again on these files.\n`;
                     return combinedResult;
                 } else {
                     consecutiveReadCount = 0;
@@ -1501,6 +1525,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         
                         this.conversationHistory.addFileBackupToLatestMessage(fullPath, doc.getText());
                         await vscode.workspace.applyEdit(edit);
+                        this.filesModifiedSinceLastCommand = true;
+                        this.lastReadFiles.clear();
                         return `Successfully replaced ${symbolName} in ${filepath} using AST boundaries.`;
                     } catch (e: any) { return `AST Patching Error: ${e.message}`; }
                 } else if (functionCall.name === 'generate_ui_blueprint') {
@@ -1531,6 +1557,12 @@ ${JSON.stringify(assets, null, 2)}
                 } else if (functionCall.name === 'search_web') {
                     const query = functionCall.args?.query;
                     if (!query) return "Error: No query provided.";
+                    this.postMessageToWebview({
+                        command: 'toolCallEvent',
+                        tool: 'search_web',
+                        title: 'Web Search',
+                        data: { query: query }
+                    });
                     this.postMessageToWebview({ command: 'statusUpdate', text: `🌐 AI Web Search: ${query}` });
                     try {
                         const { searchWeb } = require('../tools/scraper');
@@ -1553,9 +1585,55 @@ ${JSON.stringify(assets, null, 2)}
                     }
 
                 } else if (functionCall.name === 'execute_terminal_command') {
-                    const cmd = (functionCall.args?.command || '').trim();
+                    const rawCmd = (functionCall.args?.command || '').trim();
+                    // Strip leading prompt symbols ($ / > / #) that LLMs often copy from bash snippets
+                    const cmd = rawCmd.replace(/^[\$#>]\s*/, '').trim();
                     const explanation = functionCall.args?.explanation || 'AI requested terminal execution';
                     if (!cmd) return 'Error: No command provided to execute_terminal_command.';
+
+                    // Guard: Circuit breaker for repeated failing commands without code changes
+                    if (this.lastFailedCommand && this.lastFailedCommand === cmd && !this.filesModifiedSinceLastCommand) {
+                        return `[REPEAT FAILED COMMAND BLOCKED]: The command '${cmd}' already failed. Repeating the same failing command without modifying any files or resolving the error is blocked to prevent execution loops. Please inspect the error traceback, read the relevant files with read_multiple_files, or apply fixes before re-testing.`;
+                    }
+
+                    // Guard: Block interactive REPLs (like python manage.py shell, bare python, bare node) that hang waiting for stdin
+                    if (/\bmanage\.py\s+shell\b/i.test(cmd)) {
+                        return `[INTERACTIVE REPL BLOCKED]: 'python manage.py shell' opens an interactive Python prompt which cannot be automated. To safely verify your Django configuration, models, and imports without hanging, run 'python manage.py check'.`;
+                    }
+                    if (/^(python\d?|node|bash|sh|cmd|powershell)\s*$/i.test(cmd)) {
+                        return `[INTERACTIVE REPL BLOCKED]: '${cmd}' opens an interactive shell which hangs waiting for manual user input. Execute specific non-interactive scripts or commands instead.`;
+                    }
+
+                    // Guard: If manage.py is called, verify if it exists in workspace root or subfolder
+                    if (/\bmanage\.py\b/i.test(cmd) && workspaceRoot) {
+                        const rootManage = path.join(workspaceRoot, 'manage.py');
+                        if (!fs.existsSync(rootManage)) {
+                            // Search if manage.py exists in any subdirectory (e.g. backend/manage.py)
+                            const findManagePy = (d: string, depth = 0): string | null => {
+                                if (depth > 3) return null;
+                                try {
+                                    const entries = fs.readdirSync(d, { withFileTypes: true });
+                                    for (const e of entries) {
+                                        if (e.isDirectory() && !['node_modules', '.git', '.venv', 'venv', '__pycache__'].includes(e.name)) {
+                                            const sub = path.join(d, e.name);
+                                            if (fs.existsSync(path.join(sub, 'manage.py'))) {
+                                                return path.relative(workspaceRoot, path.join(sub, 'manage.py')).replace(/\\/g, '/');
+                                            }
+                                            const res = findManagePy(sub, depth + 1);
+                                            if (res) return res;
+                                        }
+                                    }
+                                } catch {}
+                                return null;
+                            };
+                            const subManage = findManagePy(workspaceRoot);
+                            if (subManage) {
+                                return `[MANAGE.PY SUBDIRECTORY]: 'manage.py' is located at '${subManage}', not in the workspace root. To run Django commands, execute: 'python ${subManage} ${cmd.replace(/.*manage\.py\s*/, '')}'`;
+                            } else {
+                                return `[FILE NOT FOUND]: 'manage.py' does not exist in this workspace. Call list_directory_tree to inspect the real project structure and package manifests before running framework commands.`;
+                            }
+                        }
+                    }
 
                     // Scaffolding Guard: Block destructive CLI generators in existing projects
                     if (this.currentTaskState?.mode === 'existing') {
@@ -1591,6 +1669,12 @@ ${JSON.stringify(assets, null, 2)}
                         const res = await TerminalCapture.runAndCapture(cmd, targetRoot);
                         if (targetRoot) {
                             SessionMemory.recordCommand(targetRoot, cmd, !res.error);
+                        }
+                        if (res.error) {
+                            this.lastFailedCommand = cmd;
+                            this.filesModifiedSinceLastCommand = false;
+                        } else {
+                            this.lastFailedCommand = null;
                         }
                         this.postMessageToWebview({
                             command: 'terminalCommandCompleted',
@@ -1727,6 +1811,8 @@ ${JSON.stringify(assets, null, 2)}
 
                     fs.writeFileSync(fullPath, content, 'utf8');
                     SessionMemory.recordFileApplied(workspaceRoot, filepath, content);
+                    this.filesModifiedSinceLastCommand = true;
+                    this.lastReadFiles.clear();
 
                     this.postMessageToWebview({
                         command: 'toolCallEvent',
@@ -1760,11 +1846,17 @@ ${JSON.stringify(assets, null, 2)}
                         fileContent = fileContent.replace(oldText, newText);
                         fs.writeFileSync(fullPath, fileContent, 'utf8');
                         SessionMemory.recordFileApplied(workspaceRoot, filepath, fileContent);
+                        this.filesModifiedSinceLastCommand = true;
+                        this.lastReadFiles.clear();
                         this.postMessageToWebview({
                             command: 'toolCallEvent',
                             tool: 'edit_file',
                             title: 'Edited File',
-                            data: { filepath }
+                            data: {
+                                filepath,
+                                oldText: oldText.length > 80 ? oldText.substring(0, 80) + '...' : oldText,
+                                newText: newText.length > 80 ? newText.substring(0, 80) + '...' : newText
+                            }
                         });
                         return `Successfully edited ${filepath}.`;
                     }
@@ -1776,16 +1868,73 @@ ${JSON.stringify(assets, null, 2)}
                         const updated = normContent.replace(normOld, newText.replace(/\r\n/g, '\n'));
                         fs.writeFileSync(fullPath, updated, 'utf8');
                         SessionMemory.recordFileApplied(workspaceRoot, filepath, updated);
+                        this.filesModifiedSinceLastCommand = true;
+                        this.lastReadFiles.clear();
                         this.postMessageToWebview({
                             command: 'toolCallEvent',
                             tool: 'edit_file',
                             title: 'Edited File (Normalized)',
-                            data: { filepath }
+                            data: {
+                                filepath,
+                                oldText: normOld.length > 80 ? normOld.substring(0, 80) + '...' : normOld,
+                                newText: newText.length > 80 ? newText.substring(0, 80) + '...' : newText
+                            }
                         });
                         return `Successfully edited ${filepath} (matched with normalized whitespace).`;
                     }
 
-                    return `edit_file failed: Could not find matching old_text in ${filepath}. Inspect the file with read_multiple_files to get the exact lines.`;
+                    // Step 3: Line-by-line whitespace-tolerant matching for small LLMs
+                    const contentLines = fileContent.split(/\r?\n/);
+                    const rawOldLines = oldText.split(/\r?\n/);
+                    while (rawOldLines.length > 0 && rawOldLines[0].trim() === '') rawOldLines.shift();
+                    while (rawOldLines.length > 0 && rawOldLines[rawOldLines.length - 1].trim() === '') rawOldLines.pop();
+
+                    if (rawOldLines.length > 0) {
+                        const targetTrimmed = rawOldLines.map((l: string) => l.trim());
+                        let matchStart = -1;
+                        for (let i = 0; i <= contentLines.length - targetTrimmed.length; i++) {
+                            let match = true;
+                            for (let j = 0; j < targetTrimmed.length; j++) {
+                                if (contentLines[i + j].trim() !== targetTrimmed[j]) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) {
+                                matchStart = i;
+                                break;
+                            }
+                        }
+
+                        if (matchStart !== -1) {
+                            FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
+                            const leadingIndent = contentLines[matchStart].match(/^\s*/)?.[0] || '';
+                            const newLines = newText.split(/\r?\n/).map((l: string, idx: number) => {
+                                if (idx === 0 && l.startsWith(leadingIndent)) return l;
+                                if (idx === 0 && !l.startsWith(' ') && !l.startsWith('\t')) return leadingIndent + l;
+                                return l;
+                            });
+                            contentLines.splice(matchStart, targetTrimmed.length, ...newLines);
+                            const updated = contentLines.join('\n');
+                            fs.writeFileSync(fullPath, updated, 'utf8');
+                            SessionMemory.recordFileApplied(workspaceRoot, filepath, updated);
+                            this.filesModifiedSinceLastCommand = true;
+                            this.lastReadFiles.clear();
+                            this.postMessageToWebview({
+                                command: 'toolCallEvent',
+                                tool: 'edit_file',
+                                title: 'Edited File (Line-Matched)',
+                                data: {
+                                    filepath,
+                                    oldText: targetTrimmed.slice(0, 3).join(' '),
+                                    newText: newLines.slice(0, 3).join(' ')
+                                }
+                            });
+                            return `Successfully edited ${filepath} (matched lines with whitespace tolerance).`;
+                        }
+                    }
+
+                    return `edit_file failed: Could not find matching old_text in ${filepath}. Tip: For functions or classes, use replace_symbol which is AST-aware and doesn't require exact text matching.`;
 
                 } else if (functionCall.name === 'plan_set') {
                     const goal = functionCall.args?.goal || '';
@@ -1880,7 +2029,7 @@ ${JSON.stringify(assets, null, 2)}
                     });
 
                     if (this.currentTaskState) {
-                        this.currentTaskState.lastResult = resStr.substring(0, 500);
+                        this.currentTaskState.lastResult = resStr.substring(0, 1500);
                         this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
                         const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
                         if (this.currentTaskState.plan.length > 0 && !hasUndone) {
@@ -1900,7 +2049,7 @@ ${JSON.stringify(assets, null, 2)}
                         command: toolArgs.command
                     });
                     if (this.currentTaskState) {
-                        this.currentTaskState.lastResult = `ERROR: ${errStr.substring(0, 500)}`;
+                        this.currentTaskState.lastResult = `ERROR: ${errStr.substring(0, 1500)}`;
                     }
                     throw err;
                 }

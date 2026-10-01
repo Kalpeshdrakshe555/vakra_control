@@ -118,44 +118,89 @@ export async function generateStructuralRepoMap(workspaceRoot: string, maxFiles:
 
         for (const fileUri of files) {
             const relPath = path.relative(workspaceRoot, fileUri.fsPath).replace(/\\/g, '/');
-            const symbols = await getSymbols(fileUri);
-            
             mapLines.push(`📁 ${relPath}`);
 
-            if (symbols && symbols.length > 0) {
-                for (const sym of symbols) {
-                    const kindName = sym.kind === vscode.SymbolKind.Class ? 'class' :
-                                     sym.kind === vscode.SymbolKind.Interface ? 'interface' :
-                                     sym.kind === vscode.SymbolKind.Function ? 'function' :
-                                     sym.kind === vscode.SymbolKind.Method ? 'method' : '';
-                    if (kindName) {
-                        mapLines.push(`   - ${kindName} ${sym.name}`);
-                        if (sym.children && (sym.kind === vscode.SymbolKind.Class || sym.kind === vscode.SymbolKind.Interface)) {
-                            for (const child of sym.children.slice(0, 5)) {
-                                if (child.kind === vscode.SymbolKind.Method || child.kind === vscode.SymbolKind.Function) {
-                                    mapLines.push(`     • method ${child.name}`);
-                                }
-                            }
-                            if (sym.children.length > 5) {
-                                mapLines.push(`     • ... (${sym.children.length - 5} more methods)`);
-                            }
-                        }
+            try {
+                const content = await fs.promises.readFile(fileUri.fsPath, 'utf8');
+                const lines = content.split('\n');
+
+                // 1. Extract Local Inter-File Connections / Imports
+                const connections: string[] = [];
+                for (const line of lines.slice(0, 50)) {
+                    const trimmed = line.trim();
+                    // JS/TS local import: import { a, b } from './module'
+                    const jsMatch = trimmed.match(/^import\s+(?:\{([^}]+)\}|([a-zA-Z0-9_]+))\s+from\s+['"](\.[^'"]+)['"]/);
+                    if (jsMatch) {
+                        const importedNames = (jsMatch[1] || jsMatch[2] || '').trim().replace(/\s+/g, ' ');
+                        const fromPath = jsMatch[3];
+                        connections.push(`${fromPath} (${importedNames})`);
+                    }
+                    // Python local import: from .models import Item, Category or from app.models import ...
+                    const pyMatch = trimmed.match(/^from\s+(\.[a-zA-Z0-9_.]+|[a-zA-Z0-9_.]+)\s+import\s+([a-zA-Z0-9_,\s*]+)/);
+                    if (pyMatch && (pyMatch[1].startsWith('.') || pyMatch[1].includes('.'))) {
+                        const modName = pyMatch[1];
+                        const symbols = pyMatch[2].trim().replace(/\s+/g, ' ');
+                        connections.push(`${modName} (${symbols})`);
                     }
                 }
-            } else {
-                try {
-                    const content = await fs.promises.readFile(fileUri.fsPath, 'utf8');
-                    const lines = content.split('\n');
-                    const signatures: string[] = [];
-                    for (const line of lines.slice(0, 80)) {
-                        const trimmed = line.trim();
-                        const match = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:class|function|def)\s+([a-zA-Z0-9_]+)/);
-                        if (match) {
-                            signatures.push(`   - ${match[0]}`);
-                        }
+                if (connections.length > 0) {
+                    mapLines.push(`   ↳ imports: ${connections.slice(0, 3).join(' | ')}`);
+                }
+
+                // 2. Extract Key Definitions (Functions, Classes, Endpoints)
+                const signatures: string[] = [];
+                for (const line of lines.slice(0, 250)) {
+                    const trimmed = line.trim();
+                    // Python class or def
+                    const pyDef = trimmed.match(/^(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\([^)]*\):?/);
+                    if (pyDef) {
+                        signatures.push(`def ${pyDef[1]}`);
+                        continue;
                     }
-                    mapLines.push(...signatures.slice(0, 5));
-                } catch {}
+                    const pyClass = trimmed.match(/^class\s+([a-zA-Z0-9_]+)(?:\(([^)]+)\))?:?/);
+                    if (pyClass) {
+                        signatures.push(`class ${pyClass[1]}${pyClass[2] ? `(${pyClass[2]})` : ''}`);
+                        continue;
+                    }
+                    // JS/TS class, function, export const/function
+                    const jsFunc = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_]+)/);
+                    if (jsFunc) {
+                        signatures.push(`function ${jsFunc[1]}`);
+                        continue;
+                    }
+                    const jsConst = trimmed.match(/^(?:export\s+)?(?:const|let)\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/);
+                    if (jsConst) {
+                        signatures.push(`export ${jsConst[1]}()`);
+                        continue;
+                    }
+                    const jsClass = trimmed.match(/^(?:export\s+)?(?:default\s+)?class\s+([a-zA-Z0-9_]+)/);
+                    if (jsClass) {
+                        signatures.push(`class ${jsClass[1]}`);
+                        continue;
+                    }
+                    // Route endpoints (Express / Flask / FastAPI)
+                    const routeMatch = trimmed.match(/^(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]/i);
+                    if (routeMatch) {
+                        signatures.push(`${routeMatch[1].toUpperCase()} ${routeMatch[2]}`);
+                        continue;
+                    }
+                    const pyRoute = trimmed.match(/^@(app|router)\.(get|post|put|delete|route)\s*\(\s*['"]([^'"]+)['"]/i);
+                    if (pyRoute) {
+                        signatures.push(`${pyRoute[2].toUpperCase()} ${pyRoute[3]}`);
+                        continue;
+                    }
+                }
+
+                if (signatures.length > 0) {
+                    for (const sig of signatures.slice(0, 6)) {
+                        mapLines.push(`   - ${sig}`);
+                    }
+                    if (signatures.length > 6) {
+                        mapLines.push(`   - ... (${signatures.length - 6} more symbols)`);
+                    }
+                }
+            } catch (err) {
+                // Skip unreadable files
             }
         }
 

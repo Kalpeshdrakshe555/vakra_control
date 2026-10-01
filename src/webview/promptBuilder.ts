@@ -93,16 +93,16 @@ VERIFY: run the check. If it fails, read the failing file first, then fix. If it
    - File exists, change is anything else (config, JSON, CSS, HTML, imports, a few lines): edit_file with old_text copied exactly from a read of the file, and new_text.
    - Never write_file over an existing file without inspecting it first. Never leave placeholders or "existing code" comments. Read a file before editing it if you have not seen it.
    If the harness rejects a call, its message names the right tool. Use it.
-3. Run every shell command with execute_terminal_command. Never print commands as text for the user. After it returns, read the output. If the exit code is non-zero, investigate (read the failing file or config) before changing code.
+3. Run shell commands with execute_terminal_command without "$" or ">" prefix. Never run interactive REPLs (like "manage.py shell", bare "python" or "node"); run non-interactive automated commands (e.g. npm test, build scripts, or "python manage.py check" when manage.py exists). After it returns, read the output. If the exit code is non-zero, investigate (read the failing file or config) before changing code.
 4. Take small steps: one file per turn, then verify with a check, build or test command.
 5. Never repeat an identical call. If the same failure happens twice, change approach.
 6. If a library, framework version or API is unfamiliar, use [LIVE DOCS] when present, otherwise research_web_docs.
 7. If the user reports a bug without an error message or traceback, ask for it with final_answer.
-8. Django/Flask project and app folder names must differ.
+8. Only run framework commands if that framework and manifest (package.json, manage.py, pyproject.toml) exist on disk. Never guess framework commands. Django/Flask project and app folder names must differ.
 
 # Pivots
 On EVENT: user_pivot, make exactly one plan_update call: keep the plan, amend it, or replace the remaining steps. Finished steps stay done. Superseded steps are dropped with a reason, not deleted. Then continue with the current step. Do not restart the audit and do not ask for confirmation unless the request contradicts finished work.
-On EVENT: stuck, read the file or config where the error originates and try a different approach. If you have no new approach, final_answer with one specific question.
+On EVENT: stuck, read the file or config where the error originates. If the error is from a framework, library, or unknown syntax, call research_web_docs to find the verified official solution before guessing. If you still have no solution, final_answer with one specific question.
 
 # Output
 Do not write text before or after a tool call. Put one short sentence of intent in the call's "thought" field if the schema offers it. Never put code, file paths as headers, or commands in chat text. Use final_answer only when the goal is complete or you need input from the user: state what changed, which files, and how to run it. Reply in the language the user wrote in.
@@ -282,9 +282,9 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         const W = PromptBuilder.WRITE;
         switch (task.phase) {
             case 'audit':
-                return [...R, 'execute_terminal_command', 'check_localhost_health', 'plan_set', 'final_answer'];
+                return [...R, ...W, 'execute_terminal_command', 'check_localhost_health', 'plan_set', 'final_answer', 'research_web_docs', 'search_web'];
             case 'plan':
-                return [...R, 'plan_set'];
+                return [...R, ...W, 'plan_set', 'research_web_docs', 'search_web'];
             case 'execute':
                 return [
                     ...R, ...W,
@@ -295,7 +295,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
             case 'verify':
                 return [
                     ...R, 'execute_terminal_command', 'check_localhost_health', 'capture_localhost_preview',
-                    ...W, 'plan_update', 'plan_done', 'final_answer'
+                    ...W, 'plan_update', 'plan_done', 'final_answer', 'research_web_docs', 'search_web'
                 ];
             case 'done':
                 return ['final_answer'];
@@ -323,7 +323,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
 
     /** One line per phase, repeated every turn. Recency is what small models actually obey. */
     private static readonly PHASE_LINE: Record<Phase, string> = {
-        audit: 'AUDIT (read-only): tree, manifest + entry points, run the check command. Then plan_set with findings.',
+        audit: 'AUDIT (read-only): tree, manifest + entry points. Only run a check command if the manifest and entry point exist on disk. Then plan_set with findings.',
         plan: 'PLAN: call plan_set now. 3-8 steps, one file or command each, with a verify check.',
         execute: 'EXECUTE: do the current step only. New file: write_file. Existing file: replace_symbol or edit_file.',
         verify: 'VERIFY: run the step\'s check. On failure read the failing file before fixing.',

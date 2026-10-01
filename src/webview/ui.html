@@ -1989,52 +1989,100 @@
                     `;
                 }
             } else if (toolName === 'read_multiple_files') {
+                const filesList = data.files || (Array.isArray(data.filepaths) ? data.filepaths.join(', ') : (data.filepaths || ''));
                 innerHtml = `
-                    <div class="tool-call-pill">
-                        <span>🔍</span>
-                        <span>Inspected ${data.count} file(s): <strong class="text-white">${escapeHtml(data.files)}</strong></span>
+                    <div class="tool-call-pill border-cyan-500/40 bg-cyan-950/30 py-1.5 px-3">
+                        <span class="text-cyan-400">🔍</span>
+                        <span class="text-slate-300">Read ${data.count || 1} file(s): <strong class="text-cyan-300 font-mono text-xs">${escapeHtml(filesList)}</strong></span>
+                    </div>
+                `;
+            } else if (toolName === 'edit_file') {
+                const fp = escapeHtml(data.filepath || '');
+                const oldSnippet = data.oldText ? escapeHtml(data.oldText.substring(0, 100)) : '';
+                const newSnippet = data.newText ? escapeHtml(data.newText.substring(0, 100)) : '';
+                innerHtml = `
+                    <div class="tool-call-pill border-amber-500/50 bg-amber-950/30 flex-col !items-start gap-1 py-2 px-3 w-full max-w-[95%]">
+                        <div class="flex items-center gap-1.5 w-full">
+                            <span class="text-amber-400">✏️</span>
+                            <span class="text-slate-200">Edited file: <strong class="text-amber-300 font-mono text-xs">${fp}</strong></span>
+                        </div>
+                        ${oldSnippet ? `<div class="text-[10px] font-mono text-red-300/80 bg-red-950/40 px-2 py-0.5 rounded w-full truncate border border-red-500/20"><span class="text-red-400 font-bold">- </span>${oldSnippet}</div>` : ''}
+                        ${newSnippet ? `<div class="text-[10px] font-mono text-emerald-300/90 bg-emerald-950/40 px-2 py-0.5 rounded w-full truncate border border-emerald-500/20"><span class="text-emerald-400 font-bold">+ </span>${newSnippet}</div>` : ''}
+                    </div>
+                `;
+            } else if (toolName === 'write_file') {
+                const fp = escapeHtml(data.filepath || '');
+                const isNew = data.isNew;
+                innerHtml = `
+                    <div class="tool-call-pill border-emerald-500/40 bg-emerald-950/30 py-1.5 px-3">
+                        <span>${isNew ? '📄' : '📝'}</span>
+                        <span class="text-slate-200">${isNew ? 'Created File' : 'Updated File'}: <strong class="text-emerald-300 font-mono text-xs">${fp}</strong></span>
+                        ${data.length ? `<span class="text-[10px] text-slate-400 ml-auto font-mono">(${data.length} chars)</span>` : ''}
+                    </div>
+                `;
+            } else if (toolName === 'replace_symbol') {
+                const fp = escapeHtml(data.filepath || '');
+                const sym = escapeHtml(data.symbol || data.symbolName || '');
+                innerHtml = `
+                    <div class="tool-call-pill border-purple-500/50 bg-purple-950/30 py-1.5 px-3">
+                        <span class="text-purple-400">⚡</span>
+                        <span class="text-slate-200">Replaced Symbol: <strong class="text-purple-300 font-mono text-xs">${sym}</strong> in <span class="text-slate-300 font-mono text-xs">${fp}</span></span>
+                    </div>
+                `;
+            } else if (toolName === 'search_web') {
+                innerHtml = `
+                    <div class="tool-call-pill border-blue-500/40 bg-blue-950/30 py-1.5 px-3">
+                        <span>🌐</span>
+                        <span class="text-slate-200">Web Search: <strong class="text-blue-300 italic text-xs">"${escapeHtml(data.query || '')}"</strong></span>
                     </div>
                 `;
             } else if (toolName === 'search_codebase') {
                 innerHtml = `
-                    <div class="tool-call-pill">
+                    <div class="tool-call-pill border-indigo-500/40 bg-indigo-950/30 py-1.5 px-3">
                         <span>🧠</span>
-                        <span>Searched codebase for: <em class="text-white">"${escapeHtml(data.query)}"</em></span>
+                        <span class="text-slate-200">Searched codebase for: <em class="text-indigo-300 font-mono text-xs">"${escapeHtml(data.query)}"</em></span>
                     </div>
                 `;
             } else if (toolName === 'research_web_docs') {
                 innerHtml = `
-                    <div class="tool-call-pill border-cyan-500/40 bg-cyan-950/20">
+                    <div class="tool-call-pill border-cyan-500/40 bg-cyan-950/30 py-1.5 px-3">
                         <span>📚</span>
-                        <span>Deep Doc Research: <strong class="text-cyan-300">"${escapeHtml(data.query)}"</strong></span>
+                        <span class="text-slate-200">Deep Doc Research: <strong class="text-cyan-300 italic text-xs">"${escapeHtml(data.query)}"</strong></span>
                     </div>
                 `;
             } else if (toolName === 'list_directory_tree') {
                 innerHtml = `
-                    <div class="tool-call-pill border-blue-500/40 bg-blue-950/20">
+                    <div class="tool-call-pill border-blue-500/40 bg-blue-950/20 py-1.5 px-3">
                         <span>📁</span>
-                        <span>Exploring Tree: <strong class="text-blue-300">${escapeHtml(data.dir || '.')}</strong> (depth: ${data.depth || 2})</span>
+                        <span class="text-slate-200">Exploring Tree: <strong class="text-blue-300 font-mono text-xs">${escapeHtml(data.dir || '.')}</strong> (depth: ${data.depth || 2})</span>
                     </div>
                 `;
             } else if (toolName === 'get_code_diagnostics') {
                 innerHtml = `
-                    <div class="tool-call-pill border-yellow-500/40 bg-yellow-950/20">
+                    <div class="tool-call-pill border-yellow-500/40 bg-yellow-950/20 py-1.5 px-3">
                         <span>🩺</span>
-                        <span>Compiler Diagnostics: <strong class="text-yellow-300">${escapeHtml(data.filepath || 'Workspace')}</strong></span>
+                        <span class="text-slate-200">Compiler Diagnostics: <strong class="text-yellow-300 font-mono text-xs">${escapeHtml(data.filepath || 'Workspace')}</strong></span>
                     </div>
                 `;
             } else if (toolName === 'get_symbol_outline') {
                 innerHtml = `
-                    <div class="tool-call-pill border-purple-500/40 bg-purple-950/20">
+                    <div class="tool-call-pill border-purple-500/40 bg-purple-950/20 py-1.5 px-3">
                         <span>🧬</span>
-                        <span>AST Symbol Outline: <strong class="text-purple-300">${escapeHtml(data.filepath)}</strong></span>
+                        <span class="text-slate-200">AST Symbol Outline: <strong class="text-purple-300 font-mono text-xs">${escapeHtml(data.filepath)}</strong></span>
                     </div>
                 `;
             } else if (toolName === 'check_localhost_health') {
                 innerHtml = `
-                    <div class="tool-call-pill border-emerald-500/40 bg-emerald-950/20">
+                    <div class="tool-call-pill border-emerald-500/40 bg-emerald-950/20 py-1.5 px-3">
                         <span>⚡</span>
-                        <span>Ping Local Server: <strong class="text-emerald-300">localhost:${escapeHtml(String(data.port || 3000))}</strong></span>
+                        <span class="text-slate-200">Ping Local Server: <strong class="text-emerald-300 font-mono text-xs">localhost:${escapeHtml(String(data.port || 3000))}</strong></span>
+                    </div>
+                `;
+            } else if (toolName === 'plan_set') {
+                innerHtml = `
+                    <div class="tool-call-pill border-cyan-500/40 bg-cyan-950/30 py-1.5 px-3">
+                        <span>🎯</span>
+                        <span class="text-slate-200">Plan Set: <strong class="text-cyan-300 text-xs">${escapeHtml(data.goal || '')}</strong> <span class="text-slate-400 font-mono text-[10px]">(${data.stepCount || 0} steps)</span></span>
                     </div>
                 `;
             } else {

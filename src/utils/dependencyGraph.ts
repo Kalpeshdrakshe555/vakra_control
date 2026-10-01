@@ -8,7 +8,7 @@ export class DependencyGraph {
      * Extracts direct imported file paths from a given file content using RegEx.
      * Keeps it lightweight, no heavy AST.
      */
-    public static getDirectImports(filepath: string, content: string): string[] {
+    public static getDirectImports(filepath: string, content: string, workspaceRoot?: string): string[] {
         const imports: string[] = [];
         
         // Match ES6 imports: import { X } from './path' or import X from './path'
@@ -24,25 +24,65 @@ export class DependencyGraph {
             imports.push(match[1]);
         }
 
+        // Match Python imports: from .models import X or from app.models import X
+        const pyFromRegex = /^\s*from\s+([a-zA-Z0-9_.]+)\s+import/gm;
+        while ((match = pyFromRegex.exec(content)) !== null) {
+            imports.push(match[1]);
+        }
+
         const dir = path.dirname(filepath);
         const resolvedPaths: string[] = [];
 
         // Resolve relative paths
         for (const imp of imports) {
             if (imp.startsWith('.')) {
-                let resolved = path.resolve(dir, imp);
-                // Simple attempt to resolve extension if missing
-                if (!fs.existsSync(resolved)) {
-                    if (fs.existsSync(resolved + '.ts')) resolved += '.ts';
-                    else if (fs.existsSync(resolved + '.js')) resolved += '.js';
-                    else if (fs.existsSync(resolved + '.tsx')) resolved += '.tsx';
-                    else if (fs.existsSync(resolved + '.jsx')) resolved += '.jsx';
-                    else if (fs.existsSync(resolved + '/index.ts')) resolved += '/index.ts';
-                    else if (fs.existsSync(resolved + '/index.js')) resolved += '/index.js';
+                if (filepath.endsWith('.py')) {
+                    // Python relative import: .models -> ./models.py, ..utils -> ../utils.py
+                    const leadingDots = imp.match(/^\.+/)?.[0].length || 1;
+                    const modName = imp.replace(/^\.+/, '').replace(/\./g, path.sep);
+                    let baseDir = dir;
+                    for (let i = 1; i < leadingDots; i++) {
+                        baseDir = path.dirname(baseDir);
+                    }
+                    const pyCandidates = [
+                        path.join(baseDir, modName + '.py'),
+                        path.join(baseDir, modName, '__init__.py')
+                    ];
+                    for (const cand of pyCandidates) {
+                        if (fs.existsSync(cand)) {
+                            resolvedPaths.push(cand);
+                            break;
+                        }
+                    }
+                } else {
+                    let resolved = path.resolve(dir, imp);
+                    // Simple attempt to resolve extension if missing
+                    if (!fs.existsSync(resolved)) {
+                        if (fs.existsSync(resolved + '.ts')) resolved += '.ts';
+                        else if (fs.existsSync(resolved + '.js')) resolved += '.js';
+                        else if (fs.existsSync(resolved + '.tsx')) resolved += '.tsx';
+                        else if (fs.existsSync(resolved + '.jsx')) resolved += '.jsx';
+                        else if (fs.existsSync(resolved + '/index.ts')) resolved += '/index.ts';
+                        else if (fs.existsSync(resolved + '/index.js')) resolved += '/index.js';
+                    }
+                    
+                    if (fs.existsSync(resolved)) {
+                        resolvedPaths.push(resolved);
+                    }
                 }
-                
-                if (fs.existsSync(resolved)) {
-                    resolvedPaths.push(resolved);
+            } else if (workspaceRoot && filepath.endsWith('.py')) {
+                // Python package import relative to workspace root (e.g. from app.models import X)
+                const modPath = imp.replace(/\./g, path.sep);
+                const candidates = [
+                    path.join(workspaceRoot, modPath + '.py'),
+                    path.join(workspaceRoot, modPath, '__init__.py'),
+                    path.join(dir, modPath + '.py')
+                ];
+                for (const cand of candidates) {
+                    if (fs.existsSync(cand)) {
+                        resolvedPaths.push(cand);
+                        break;
+                    }
                 }
             }
         }
@@ -55,7 +95,7 @@ export class DependencyGraph {
      * without exploding the token budget.
      */
     public static async getImportSkeletons(filepath: string, content: string, workspaceRoot: string): Promise<string> {
-        const importedPaths = this.getDirectImports(filepath, content);
+        const importedPaths = this.getDirectImports(filepath, content, workspaceRoot);
         if (importedPaths.length === 0) return '';
 
         let skeletonsContext = `\n\n> 🔗 **Dependencies (Imported by ${path.basename(filepath)}):**\n`;

@@ -27,7 +27,8 @@ export class FrameworkConventions {
 - Project-level Templates: If using a root 'templates/' folder, ensure 'settings.py' has:
   TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [BASE_DIR / 'templates'], 'APP_DIRS': True, ...}]
 - App Registration: Ensure '<app_name>' is listed in INSTALLED_APPS in 'settings.py'.
-- Static Files: Put in '<app_name>/static/<app_name>/'.`,
+- Static Files: Put in '<app_name>/static/<app_name>/'.
+- Verification: Always run 'python manage.py check' to verify settings, models, and imports. Never run interactive 'manage.py shell'.`,
 
         'express': `EXPRESS ARCHITECTURE RULES:
 - API Routes: Define in 'src/routes/'.
