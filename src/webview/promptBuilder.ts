@@ -101,7 +101,7 @@ TOOLS:
     }
 
     /* ================================================================== */
-    /* 2. SESSION PREFIX: stable within a task. Memoized.                   */
+    /* 2. SESSION PREFIX: stable base + dynamic living context              */
     /* ================================================================== */
     private static prefixCache = new Map<string, string>();
 
@@ -115,89 +115,96 @@ TOOLS:
         }
         const key = crypto.createHash('sha1').update(JSON.stringify([
             config?.systemInstructions ?? '', workspaceRoot ?? '', isAgentMode, isArchitectMode, taskCategory,
-            rulesStamp, structuralRepoMap ?? '', thinkingBudget ?? '', userText
+            rulesStamp, structuralRepoMap ?? '', thinkingBudget ?? ''
         ])).digest('hex');
 
-        const hit = PromptBuilder.prefixCache.get(key);
-        if (hit !== undefined) return hit;
+        let basePrefix = PromptBuilder.prefixCache.get(key);
+        if (basePrefix === undefined) {
+            const parts: string[] = [];
 
-        const parts: string[] = [];
+            const custom = (config?.systemInstructions ?? '')
+                .replace(/Provide the complete code file content so it can be directly applied\.?/g, '').trim();
+            if (custom) parts.push(`[USER INSTRUCTIONS]\n${custom}`);
 
-        const custom = (config?.systemInstructions ?? '')
-            .replace(/Provide the complete code file content so it can be directly applied\.?/g, '').trim();
-        if (custom) parts.push(`[USER INSTRUCTIONS]\n${custom}`);
-
-        if (thinkingBudget) {
-            const b = thinkingBudget.toLowerCase();
-            const tokenLimit = b === 'low' ? 500 : b === 'high' ? 1500 : 1000;
-            parts.push(`[THINKING BUDGET: ${b.toUpperCase()} (< ${tokenLimit} tokens)]
+            if (thinkingBudget) {
+                const b = thinkingBudget.toLowerCase();
+                const tokenLimit = b === 'low' ? 500 : b === 'high' ? 1500 : 1000;
+                parts.push(`[THINKING BUDGET: ${b.toUpperCase()} (< ${tokenLimit} tokens)]
 Your reasoning thought budget is set to ${b.toUpperCase()} (strictly under ${tokenLimit} tokens).
 - Maintain concise, structured, and focused internal deliberation.
 - Do NOT ramble or repeat thought steps. Focus directly on determining the exact tool call or answer.`);
+            }
+
+            if (workspaceRoot) {
+                const profile = ProjectScanner.getProfile(workspaceRoot);
+                if (profile && profile.stack !== 'Unknown') {
+                    const lines = [
+                        `Stack: ${profile.stack}`,
+                        `Framework: ${profile.framework}`,
+                        `Entry points: ${[...profile.entryPoints].sort().join(', ')}`,
+                        profile.devCommand ? `Run: ${profile.devCommand}` : ''
+                    ].filter(Boolean);
+                    parts.push(`[PROJECT]\n${lines.join('\n')}`);
+
+                    if (isAgentMode && profile.framework) {
+                        const conv = FrameworkConventions.getConvention(profile.framework);
+                        if (conv) parts.push(`[PROJECT] Conventions\n${clip(conv, 1500)}`);
+                    }
+                }
+
+                if (rulesFile) {
+                    try {
+                        parts.push(`[PROJECT RULES] (user-defined, follow them)\n${clip(fs.readFileSync(rulesFile, 'utf8'), 2000)}`);
+                    } catch { /* unreadable rules file: skip */ }
+                }
+
+                ToolRegistry.loadWorkspacePlugins(workspaceRoot);
+            }
+
+            if (isArchitectMode) {
+                parts.push(`[ARCHITECT MODE]
+You are operating as a Senior Systems Architect:
+1. Practical & Structured Architecture: Break down features into modular components, clear data flow, and reliable interfaces.
+2. Flexible & Adaptive: Adapt dynamically to the situation. For existing projects, protect working code and touch only the necessary delta. For new projects, scaffold modular foundations.
+3. Autonomous Execution: Execute steps directly without stopping to announce next steps in chat text. Implement code files completely without placeholders, verified by checks.`);
+            }
+
+            if (taskCategory === 'ui') parts.push(PromptBuilder.DESIGN_MODULE);
+
+            if (structuralRepoMap?.trim()) parts.push(`[REPO MAP]\n${structuralRepoMap.trim()}`);
+
+            basePrefix = parts.length ? '\n\n' + parts.join('\n\n') : '';
+            if (PromptBuilder.prefixCache.size > 8) PromptBuilder.prefixCache.clear();
+            PromptBuilder.prefixCache.set(key, basePrefix);
         }
+
+        // Dynamic living context: ALWAYS evaluated fresh per turn
+        const dynamicParts: string[] = [];
 
         if (workspaceRoot) {
             // 1. Living Architecture Blueprint injection (4-Tier MRU & Dependency Graph)
             try {
                 const bp = LivingIndex.buildBlueprintText(workspaceRoot, 4000);
-                if (bp) parts.push(`[ACTIVE LIVING ARCHITECTURE BLUEPRINT]\n${bp}`);
+                if (bp) dynamicParts.push(`[ACTIVE LIVING ARCHITECTURE BLUEPRINT]\n${bp}`);
             } catch {}
 
             // 2. Materialized Working Memory & Living State
             try {
                 const mem = SessionMemory.getInstance(workspaceRoot).renderWorkingMemory(3500);
-                if (mem) parts.push(mem);
+                if (mem) dynamicParts.push(mem);
             } catch {}
 
             // 3. Matching Specialized Skill (P0 Execution Guidance)
             try {
                 const activeSkill = SkillsManager.getMatchingSkillInstructions(userText, workspaceRoot);
                 if (activeSkill) {
-                    parts.push(`### ACTIVE SPECIALIZED SKILL:\n${activeSkill}\n`);
+                    dynamicParts.push(`### ACTIVE SPECIALIZED SKILL:\n${activeSkill}\n`);
                 }
             } catch {}
-
-            const profile = ProjectScanner.getProfile(workspaceRoot);
-            if (profile && profile.stack !== 'Unknown') {
-                const lines = [
-                    `Stack: ${profile.stack}`,
-                    `Framework: ${profile.framework}`,
-                    `Entry points: ${[...profile.entryPoints].sort().join(', ')}`,
-                    profile.devCommand ? `Run: ${profile.devCommand}` : ''
-                ].filter(Boolean);
-                parts.push(`[PROJECT]\n${lines.join('\n')}`);
-
-                if (isAgentMode && profile.framework) {
-                    const conv = FrameworkConventions.getConvention(profile.framework);
-                    if (conv) parts.push(`[PROJECT] Conventions\n${clip(conv, 1500)}`);
-                }
-            }
-
-            if (rulesFile) {
-                try {
-                    parts.push(`[PROJECT RULES] (user-defined, follow them)\n${clip(fs.readFileSync(rulesFile, 'utf8'), 2000)}`);
-                } catch { /* unreadable rules file: skip */ }
-            }
-
-            ToolRegistry.loadWorkspacePlugins(workspaceRoot);
         }
 
-        if (isArchitectMode) {
-            parts.push(`[ARCHITECT MODE]
-You are operating as a Senior Systems Architect:
-1. Practical & Structured Architecture: Break down features into modular components, clear data flow, and reliable interfaces.
-2. Flexible & Adaptive: Adapt dynamically to the situation. For existing projects, protect working code and touch only the necessary delta. For new projects, scaffold modular foundations.
-3. Autonomous Execution: Execute steps directly without stopping to announce next steps in chat text. Implement code files completely without placeholders, verified by checks.`);
-        }
-
-        if (taskCategory === 'ui') parts.push(PromptBuilder.DESIGN_MODULE);
-
-        if (structuralRepoMap?.trim()) parts.push(`[REPO MAP]\n${structuralRepoMap.trim()}`);
-
-        const out = parts.length ? '\n\n' + parts.join('\n\n') : '';
-        if (PromptBuilder.prefixCache.size > 8) PromptBuilder.prefixCache.clear();
-        PromptBuilder.prefixCache.set(key, out);
-        return out;
+        const dynamicStr = dynamicParts.length ? '\n\n' + dynamicParts.join('\n\n') : '';
+        return basePrefix + dynamicStr;
     }
 
     private static readonly DESIGN_MODULE = `[DESIGN]

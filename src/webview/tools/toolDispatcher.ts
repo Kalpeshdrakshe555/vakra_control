@@ -202,6 +202,11 @@ export class ToolDispatcher {
                 return "BLOCKED: 'python manage.py runserver' is a blocking continuous process and will freeze the agent loop. Use non-blocking verification instead: run 'python manage.py check' to validate models/settings/routes, or execute a verification test script in '.ultra-light-ai/scratch/'.";
             }
 
+            // Intercept naked multi-line Python / interactive python shell commands
+            if (/^(?:from\s+[A-Za-z0-9_.]+\s+import|import\s+[A-Za-z0-9_.]+)/.test(trimmed) || /^(?:class|def)\s+[A-Za-z0-9_]+/.test(trimmed) || /^(?:python|python3|py)\s*$/i.test(trimmed) || /^(?:python|python3|py)\s+-i\b/i.test(trimmed)) {
+                return "BLOCKED: Naked Python syntax or interactive REPL commands cannot run directly in the terminal shell. To execute Python code: write the code into a verification script with write_file (e.g. '.ultra-light-ai/scratch/verify.py') and then execute 'python .ultra-light-ai/scratch/verify.py', or use one-line 'python -c \"...\"'.";
+            }
+
             const cmd = (command || '').replace(/^[\$#>]\s*/, '').trim();
             const explanation = args.explanation || 'Running terminal command';
 

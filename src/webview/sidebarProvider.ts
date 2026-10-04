@@ -246,7 +246,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             const promptCategory = PromptClassifier.classifyPrompt(message.text);
             const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
-            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget);
+            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget, message.text);
 
             this.taskPlanner.syncWithDisk(workspaceRoot);
             this.currentTaskState = PromptBuilder.startTask(workspaceRoot, message.text);
