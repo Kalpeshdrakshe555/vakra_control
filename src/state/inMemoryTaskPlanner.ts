@@ -72,22 +72,29 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
 
     /* ---------------- model-facing tools ---------------- */
 
-    /** plan_set: Sets or re-initializes the execution steps. */
-    setPlan(goal: string, rawSteps: Array<string | { title: string; file?: string; command?: string; verify?: string }>): string {
-        const steps = rawSteps.slice(0, 8).map((s, i): PlanStep => {
+    private lastArchitecture?: { overview?: string; database?: string; ui_ux?: string; component_flow?: string };
+
+    /** plan_set: Sets or re-initializes the execution steps with architecture documentation. */
+    setPlan(
+        goal: string,
+        rawSteps: Array<string | { title: string; file?: string; command?: string; verify?: string }>,
+        architecture?: { overview?: string; database?: string; ui_ux?: string; component_flow?: string }
+    ): string {
+        const steps = rawSteps.slice(0, 10).map((s, i): PlanStep => {
             const o = typeof s === 'string' ? { title: s } : s;
             const checkCmd = (o as any).verify || o.command;
             const condition: StepCondition = o.file ? { kind: 'file_edited', pathIncludes: o.file }
                 : checkCmd ? { kind: 'command_ok', commandIncludes: checkCmd }
                 : { kind: 'manual' };
-            return { id: i + 1, title: (o.title || '').slice(0, 120), status: i === 0 ? 'active' : 'pending', condition };
+            return { id: i + 1, title: (o.title || '').slice(0, 160), status: i === 0 ? 'active' : 'pending', condition };
         });
         if (!steps.length) return 'Plan must contain at least one step.';
         this.goal = (goal || '').slice(0, 300);
         this.steps = steps;
+        this.lastArchitecture = architecture;
         this.planOnlyTurns = 0;
         this.commit();
-        return `Plan created with ${steps.length} steps. Start step 1 now: ${steps[0].title}`;
+        return `Plan created with ${steps.length} steps in PLAN.md. Start step 1 now: ${steps[0].title}`;
     }
 
     /** plan_done: for 'manual' steps only. */
@@ -258,7 +265,7 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
             this.postToWebview({ type: 'update_plan_stepper', goal: this.goal, steps: this.steps });
         }
 
-        // Live Disk Sync: Write readable markdown plan to .ultra-light-ai/PLAN.md
+        // Live Disk Sync: Write readable markdown plan to .ultra-light-ai/PLAN.md AND docs/
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
             try {
@@ -278,6 +285,14 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
                         if (s.note) md += `  - *Note:* ${s.note}\n`;
                     }
                     fs.writeFileSync(planPath, md, 'utf8');
+
+                    // Also mirror to root PLAN.md for workspace visibility if desired
+                    try {
+                        const rootPlanPath = path.join(root, 'PLAN.md');
+                        if (fs.existsSync(rootPlanPath)) {
+                            fs.writeFileSync(rootPlanPath, md, 'utf8');
+                        }
+                    } catch {}
                 }
             } catch (e) {
                 console.warn('Failed to write PLAN.md to disk', e);
@@ -296,8 +311,8 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
 export const planTools = [
     {
         name: 'plan_set',
-        description: 'Set a multi-step plan (3-6 steps max). Specify file or command condition for auto-advancement.',
-        signature: 'plan_set(goal: string, steps: {title: string, file?: string, command?: string}[])',
+        description: 'Set a multi-step plan. Automatically writes and updates PLAN.md in the workspace.',
+        signature: 'plan_set(goal: string, steps: {title: string, file?: string, command?: string}[], architecture?: {ui_ux?: string, database?: string, component_flow?: string})',
         parameters: {
             type: 'object',
             properties: {
@@ -313,6 +328,15 @@ export const planTools = [
                             command: { type: 'string', description: 'Terminal command that auto-completes this step when exited with code 0' }
                         },
                         required: ['title']
+                    }
+                },
+                architecture: {
+                    type: 'object',
+                    description: 'Optional architectural details included in PLAN.md',
+                    properties: {
+                        component_flow: { type: 'string', description: 'Component connections, module flow, and tech stack details' },
+                        database: { type: 'string', description: 'Database schema, entities, fields, and relationships' },
+                        ui_ux: { type: 'string', description: 'UI/UX design specs, layouts, color palette, and user flows' }
                     }
                 }
             },

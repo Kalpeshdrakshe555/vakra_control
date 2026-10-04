@@ -2,50 +2,32 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GeminiCloudClient } from '../router/realClients';
-import { applyDiffToActiveFile, applyRobustSearchReplace, resolveSafeWorkspacePath } from '../operations/diffPatcher';
-import { replaceSymbolTool } from '../operations/replaceSymbol';
-import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, ensureAgentConfig, AgentConfig } from '../config';
+import { getGeminiApiKeys, getGeminiModel, getGeminiTimeout, getAgentConfig, ensureAgentConfig } from '../config';
 import { ConversationHistory } from '../state/conversationHistory';
-import { buildTailBlock, ToolSpec, AgentLedger } from '../router/toolReanchor';
 import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
 import { skeletonizeFile, generateStructuralRepoMap } from '../utils/astSkeletonizer';
-import { extractBrandDNA, orchestrateAssets, DesignSemantics } from '../utils/designBrain';
 import { generateCacheKey, checkCache, saveCache } from '../utils/queryCache';
 import { ContextSelector } from '../utils/contextSelector';
-import { DependencyGraph } from '../utils/dependencyGraph';
-import { SettingsHandler } from './settingsHandler';
 import { PromptBuilder, TaskState } from './promptBuilder';
 import { PromptClassifier } from '../utils/promptClassifier';
-import { DiffValidator } from '../operations/diffValidator';
-import { ProjectScanner } from '../indexer/projectScanner';
-import { InMemoryTaskPlanner, planTools } from '../state/inMemoryTaskPlanner';
-import { FileVersioning } from '../operations/fileVersioning';
+import { InMemoryTaskPlanner } from '../state/inMemoryTaskPlanner';
 import { TerminalCapture } from '../tools/terminalCapture';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { SessionMemory } from '../state/sessionMemory';
 import { SkillsManager } from '../features/skillsManager';
-import { ToolRegistry } from '../tools/toolRegistry';
+import { ToolDispatcher } from './tools/toolDispatcher';
+import { MessageDispatcher, DispatchContext } from './handlers/messageDispatcher';
 import { autonomousPreFlightScout } from '../tools/scraper';
-import { captureLocalhostTool } from '../tools/visionCapture';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private conversationHistory: ConversationHistory;
     private taskPlanner: InMemoryTaskPlanner;
-    private currentStreamAbortController: AbortController | null = null;
-    private currentSeqOp: any = null; // Store reference to cancel Architect queue
+    private currentAbortController: AbortController | null = null;
     private isTerminalSessionAutoApproved: boolean = false;
+    private isEditSessionAutoApproved: boolean = false;
     private pendingTerminalResolvers: Map<string, (result: string) => void> = new Map();
-    private lastFailedCommand: string | null = null;
-    private filesModifiedSinceLastCommand: boolean = false;
-    private lastReadFiles: Set<string> = new Set<string>();
-    private consecutiveNoToolTurns: number = 0;
-    private recentFilesTouched: Set<string> = new Set<string>();
-    private lastToolResultText?: string;
-    private lastToolErrorText?: string;
     private currentTaskState?: TaskState;
-    private _onStartCb?: any;
-    private _onResetCb?: any;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -53,7 +35,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         private ragEngine?: any,
         private readonly _extensionContext?: vscode.ExtensionContext
     ) {
-        const config = require('../config').getAgentConfig(this._workspaceRoot);
+        const config = getAgentConfig(this._workspaceRoot);
         const historyLimit = config?.contextLimits?.historyLength || 10;
         this.conversationHistory = new ConversationHistory(historyLimit * 2, this._workspaceRoot);
         this.taskPlanner = new InMemoryTaskPlanner(this._extensionContext, (msg) => this.postMessageToWebview(msg));
@@ -72,458 +54,96 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         };
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
-        const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
+        const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : this._workspaceRoot;
         const modelName = getGeminiModel(workspaceRoot);
 
         const htmlPath = path.join(this._extensionUri.fsPath, 'src', 'webview', 'ui.html');
         try {
             let htmlContent = fs.readFileSync(htmlPath, 'utf8');
-            htmlContent = htmlContent.replace('gemma-4-31b-it', modelName);
 
-            // Inject local Tailwind CSS URI
-            const tailwindUri = webviewView.webview.asWebviewUri(
-                vscode.Uri.joinPath(this._extensionUri, 'dist', 'tailwind.css')
-            );
-            htmlContent = htmlContent.replace('{{TAILWIND_CSS_URI}}', tailwindUri.toString());
-            
-            // Inject local marked.js
-            const markedUri = webviewView.webview.asWebviewUri(
-                vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'marked', 'marked.min.js')
-            );
-            htmlContent = htmlContent.replace('{{MARKED_URI}}', markedUri.toString());
+            // 2. Replace model name using function replacer so '$' is never interpreted
+            htmlContent = htmlContent.replace('gemma-4-31b-it', () => modelName);
 
-            // Inject local highlight.js
-            const highlightJsUri = webviewView.webview.asWebviewUri(
-                vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js')
-            );
-            htmlContent = htmlContent.replace('{{HIGHLIGHT_JS_URI}}', highlightJsUri.toString());
+            // 3 & 4. Resolve placeholders, check file existence, and build URIs
+            const assetSpecs = [
+                {
+                    placeholder: '{{TAILWIND_CSS_URI}}',
+                    name: 'tailwind.css',
+                    segments: ['dist', 'tailwind.css']
+                },
+                {
+                    placeholder: '{{MARKED_URI}}',
+                    name: 'marked.min.js',
+                    segments: ['node_modules', 'marked', 'marked.min.js']
+                },
+                {
+                    placeholder: '{{HIGHLIGHT_JS_URI}}',
+                    name: 'highlight.min.js',
+                    segments: ['node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js']
+                },
+                {
+                    placeholder: '{{HIGHLIGHT_CSS_URI}}',
+                    name: 'atom-one-dark.min.css',
+                    segments: ['node_modules', '@highlightjs', 'cdn-assets', 'styles', 'atom-one-dark.min.css']
+                }
+            ];
 
-            // Inject local highlight.css
-            const highlightCssUri = webviewView.webview.asWebviewUri(
-                vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'atom-one-dark.min.css')
-            );
-            htmlContent = htmlContent.replace('{{HIGHLIGHT_CSS_URI}}', highlightCssUri.toString());
+            for (const asset of assetSpecs) {
+                const diskPath = path.join(this._extensionUri.fsPath, ...asset.segments);
+                if (!fs.existsSync(diskPath)) {
+                    console.error(`Ultra Light Agent: missing asset file on disk: ${diskPath}`);
+                    vscode.window.showWarningMessage(`Ultra Light Agent: missing asset ${asset.name}`);
+                }
+
+                const uri = webviewView.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, ...asset.segments)).toString();
+                htmlContent = htmlContent.split(asset.placeholder).join(uri);
+            }
+
+            // 5. Inject CSP <meta> right after <head>
+            const cspSource = webviewView.webview.cspSource;
+            const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src ${cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src ${cspSource} https://fonts.gstatic.com; script-src ${cspSource} 'unsafe-inline';">`;
+            htmlContent = htmlContent.replace(/<head>/i, `<head>\n    ${cspMeta}`);
 
             webviewView.webview.html = htmlContent;
-        } catch (error) {
+        } catch (error: any) {
             console.error('Failed to load Webview HTML:', error);
-            webviewView.webview.html = `<h3>Error loading webview template</h3><p>${error}</p>`;
+            const rawErrorMsg = String(error?.stack || error?.message || error);
+            const escapedError = rawErrorMsg
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+            webviewView.webview.html = `<h3>Error loading webview template</h3><p>${escapedError}</p>`;
         }
 
-        // Handle message events from Webview UI
-        webviewView.webview.onDidReceiveMessage(async message => {
-            if (message.command === 'ready') {
-                const config = getAgentConfig(workspaceRoot);
-                const vsConfig = vscode.workspace.getConfiguration('ultraLightAI');
-                this.postMessageToWebview({
-                    command: 'loadSettings',
-                    config: {
-                        mainBrain: config?.mainBrain,
-                        supportBrain: config?.supportBrain,
-                        providers: config?.providers,
-                        activeProvider: config?.activeProvider,
-                        timeoutSeconds: config?.providers?.cloud?.timeoutSeconds || 60,
-                        systemInstructions: config?.systemInstructions || 'You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks. Provide the complete code file content so it can be directly applied.',
-                        maxOutputTokens: config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192,
-                        maxContextTokens: config?.contextLimits?.maxContextTokens || 7000,
-                        historyLength: config?.contextLimits?.historyLength || 10,
-                        maxAutonomousToolSteps: config?.maxAutonomousToolSteps || 30,
-                        enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
-                        enableHoverExplanations: vsConfig.get('enableHoverExplanations', false)
-                    }
-                });
-
-                // Restore chat history
-                const messages = this.conversationHistory.getAllMessages();
-                if (messages && messages.length > 0) {
-                    this.postMessageToWebview({
-                        command: 'restoreHistory',
-                        messages: messages
-                    });
-                }
-                
-                // NEW: Trigger Cold Start Onboarding for new projects
-                if (workspaceRoot) {
-                    this.checkAndRunOnboarding(workspaceRoot);
-                }
-            } else if (message.command === 'start') {
-                this._onStartCb(message.data);
-            } else if (message.command === 'reset') {
-                this.conversationHistory.clear();
-                this.taskPlanner.clear();
-                PromptBuilder.invalidatePrefixCache();
-                this.consecutiveNoToolTurns = 0;
-                this.recentFilesTouched.clear();
-                this.lastToolResultText = undefined;
-                this.lastToolErrorText = undefined;
-                if (this._onResetCb) {
-                    this._onResetCb();
-                }
-                this.postMessageToWebview({ command: 'chatCleared' });
-            } else if (message.command === 'sendChat') {
-                await this.handleChatMessage(message.text, message.includeActiveFile);
-            } else if (message.command === 'sendChatStream') {
-                await this.handleChatMessageStream(message);
-            } else if (message.command === 'plan_skip_step' || message.type === 'plan_skip_step' || message.command === 'plan_clear' || message.type === 'plan_clear') {
-                this.taskPlanner.handleWebviewMessage(message);
-            } else if (message.command === 'applyDiff') {
-                try {
-                    const activeEditor = vscode.window.activeTextEditor;
-                    if (activeEditor) {
-                        const fullPath = activeEditor.document.uri.fsPath;
-                        this.conversationHistory.addFileBackupToLatestMessage(fullPath, activeEditor.document.getText());
-                    }
-                    await applyDiffToActiveFile(message.text);
-                    vscode.window.showInformationMessage('✨ Code applied successfully!');
-                } catch (error: any) {
-                    vscode.window.showErrorMessage(`Failed to apply code: ${error?.message || error}`);
-                }
-            } else if (message.command === 'saveSettings') {
-                await this.handleSaveSettings(message);
-            } else if (message.command === 'applyWorkspaceEdits') {
-                await this.handleApplyWorkspaceEdits(message);
-            } else if (message.command === 'openConfig') {
-                this.handleOpenConfig();
-            } else if (message.command === 'openMcpConfig') {
-                this.handleOpenMcpConfig();
-            } else if (message.command === 'openPluginsScript') {
-                this.handleOpenPluginsScript();
-            } else if (message.command === 'newChat') {
-                this.conversationHistory.clear();
-                this.taskPlanner.clear();
-                this.consecutiveNoToolTurns = 0;
-                this.recentFilesTouched.clear();
-                this.lastToolResultText = undefined;
-                this.lastToolErrorText = undefined;
-                if (this._onResetCb) {
-                    this._onResetCb();
-                }
-                this.postMessageToWebview({ command: 'chatCleared' });
-            } else if (message.command === 'rollbackChat') {
-                if (message.timestamp) {
-                    const messages = this.conversationHistory.getAllMessages();
-                    const targetIdx = messages.findIndex((m: any) => m.timestamp === message.timestamp);
-                    let revertedCount = 0;
-                    
-                    if (targetIdx !== -1) {
-                        const msgsToRevert = messages.slice(targetIdx);
-                        const revertEdit = new vscode.WorkspaceEdit();
-                        let hasEdits = false;
-                        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-                        
-                        const fileToOldestContent = new Map<string, string | null>();
-                        
-                        // 1. Collect oldest file backups from the messages being rolled back
-                        for (const msg of msgsToRevert) {
-                            if ((msg as any).fileBackups) {
-                                for (const backup of (msg as any).fileBackups) {
-                                    if (!fileToOldestContent.has(backup.filepath)) {
-                                        fileToOldestContent.set(backup.filepath, backup.content);
-                                    }
-                                }
-                            }
-                        }
-
-                        // 2. Fallback: Detect files mentioned in modified blocks that might lack explicit backup
-                        if (workspaceRoot) {
-                            for (const msg of msgsToRevert) {
-                                const fileMatches = (msg.text || '').matchAll(/(?:\*\*\`([^\`]+)\`\*\*|`([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`)/g);
-                                for (const m of fileMatches) {
-                                    const candidateRel = m[1] || m[2];
-                                    if (!candidateRel || candidateRel.includes(' ') || candidateRel.endsWith('.md')) continue;
-                                    const fullPath = path.isAbsolute(candidateRel) ? candidateRel : path.join(workspaceRoot, candidateRel);
-                                    if (!fileToOldestContent.has(fullPath)) {
-                                        const snap = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
-                                        if (snap !== null) {
-                                            fileToOldestContent.set(fullPath, snap);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 3. Revert both disk and VS Code Buffers
-                        for (const [filepath, content] of fileToOldestContent.entries()) {
-                            const fileUri = vscode.Uri.file(filepath);
-                            if (content === null) {
-                                // Newly created file in this session -> Delete from disk and workspace!
-                                if (fs.existsSync(filepath)) {
-                                    try {
-                                        fs.unlinkSync(filepath);
-                                    } catch (e) {
-                                        console.error("Failed to delete file on rollback", filepath, e);
-                                    }
-                                }
-                                revertEdit.deleteFile(fileUri, { ignoreIfNotExists: true });
-                                hasEdits = true;
-                                revertedCount++;
-                            } else {
-                                // Modified file -> Restore exact original state directly to disk AND VS Code buffer
-                                try {
-                                    fs.writeFileSync(filepath, content, 'utf8');
-                                    let doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
-                                    if (!doc && fs.existsSync(filepath)) {
-                                        doc = await vscode.workspace.openTextDocument(fileUri);
-                                    }
-                                    if (doc) {
-                                        const fullRange = new vscode.Range(
-                                            doc.positionAt(0),
-                                            doc.positionAt(doc.getText().length)
-                                        );
-                                        revertEdit.replace(fileUri, fullRange, content);
-                                    }
-                                    hasEdits = true;
-                                    revertedCount++;
-                                } catch (e) {
-                                    console.error("Failed to restore file on rollback", filepath, e);
-                                }
-                            }
-                        }
-
-                        if (hasEdits) {
-                            try {
-                                await vscode.workspace.applyEdit(revertEdit);
-                            } catch (e) {
-                                console.warn("Workspace applyEdit skipped or failed during rollback", e);
-                            }
-                            // Save any open documents to ensure zero unsaved dirty mismatch
-                            for (const filepath of fileToOldestContent.keys()) {
-                                const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
-                                if (doc && doc.isDirty) {
-                                    await doc.save();
-                                }
-                            }
-                        }
-
-                        // Restore the user's prompt directly into the chat input box!
-                        const userMsg = messages[targetIdx];
-                        if (userMsg && userMsg.role === 'user') {
-                            this.postMessageToWebview({
-                                command: 'injectChat',
-                                text: userMsg.text
-                            });
-                        }
-                    }
-
-                    const success = this.conversationHistory.rollbackToTimestamp(message.timestamp);
-                    if (success) {
-                        this.postMessageToWebview({
-                            command: 'restoreHistory',
-                            messages: this.conversationHistory.getAllMessages()
-                        });
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `⏪ Rollback complete: Reverted ${revertedCount} file(s) and restored prompt.`
-                        });
-                        vscode.window.showInformationMessage(`⏪ Chat rolled back. Reverted ${revertedCount} file(s) automatically.`);
-                    }
-                }
-            } else if (message.command === 'getSessions') {
-                this.postMessageToWebview({
-                    command: 'showSessions',
-                    sessions: this.conversationHistory.getAllSessionsSummary()
-                });
-            } else if (message.command === 'switchSession') {
-                if (message.id) {
-                    this.conversationHistory.switchSession(message.id);
-                    this.postMessageToWebview({
-                        command: 'restoreHistory',
-                        messages: this.conversationHistory.getAllMessages()
-                    });
-                }
-            } else if (message.command === 'deleteSession') {
-                if (message.id) {
-                    this.conversationHistory.deleteSession(message.id);
-                    this.postMessageToWebview({
-                        command: 'showSessions',
-                        sessions: this.conversationHistory.getAllSessionsSummary()
-                    });
-                    this.postMessageToWebview({
-                        command: 'restoreHistory',
-                        messages: this.conversationHistory.getAllMessages()
-                    });
-                }
-            } else if (message.command === 'executeCommand') {
-                // BUG-17 FIX: Route through the safe handleRunInTerminal which has sandboxing + confirmation modal
-                this.handleRunInTerminal(message.cmd);
-            } else if (message.command === 'deleteChat') {
-                if (message.timestamp) {
-                    const success = this.conversationHistory.deleteMessageByTimestamp(message.timestamp);
-                    if (success) {
-                        this.postMessageToWebview({
-                            command: 'restoreHistory',
-                            messages: this.conversationHistory.getAllMessages()
-                        });
-                    }
-                }
-            } else if (message.command === 'cancelChat') {
-                if (this.currentStreamAbortController) {
-                    this.currentStreamAbortController.abort();
-                    this.currentStreamAbortController = null;
-                }
-                if (this.currentSeqOp) {
-                    this.currentSeqOp.cancelQueue();
-                    this.currentSeqOp = null;
-                }
-                if (this.currentTaskState) {
-                    this.currentTaskState.event = 'user_pivot';
-                    this.currentTaskState.pivotText = 'Task stopped by user';
-                }
-                this.postMessageToWebview({ command: 'statusUpdate', text: '🛑 Generation stopped by user.' });
-                this.postMessageToWebview({ command: 'streamChunk', text: '\n\n*🛑 Generation stopped by user.*', done: true });
-            } else if (message.command === 'plan_clear') {
-                this.taskPlanner.clear();
-                if (this.currentTaskState) {
-                    this.currentTaskState.plan = [];
-                    this.currentTaskState.phase = this.currentTaskState.mode === 'new' ? 'plan' : 'audit';
-                }
-                this.postMessageToWebview({ type: 'update_plan_stepper', goal: '', steps: [] });
-            } else if (message.command === 'plan_skip_step') {
-                this.taskPlanner.handleWebviewMessage(message);
-            } else if (message.command === 'runInTerminal') {
-                this.handleRunInTerminal(message.text);
-            } else if (message.command === 'insertToEditor') {
-                await this.handleInsertToEditor(message.text);
-            } else if (message.command === 'copyToClipboard') {
-                await vscode.env.clipboard.writeText(message.text);
-                vscode.window.showInformationMessage('📋 Copied to clipboard!');
-            } else if (message.command === 'openFile') {
-                await this.handleOpenFile(message.filepath);
-            } else if (message.command === 'previewDiff') {
-                await this.handlePreviewDiff(message.file);
-            } else if (message.command === 'requestWorkspaceFiles') {
-                await this.handleRequestWorkspaceFiles(message.query);
-            } else if (message.command === 'clearCache') {
-                this.handleClearCache();
-            } else if (message.command === 'rollbackFile') {
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-                if (workspaceRoot && message.filepath) {
-                    const fullPath = path.isAbsolute(message.filepath) ? message.filepath : path.join(workspaceRoot, message.filepath);
-                    const content = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
-                    if (content !== null) {
-                        fs.writeFileSync(fullPath, content, 'utf8');
-                        const fileUri = vscode.Uri.file(fullPath);
-                        let doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
-                        if (doc) {
-                            const edit = new vscode.WorkspaceEdit();
-                            const fullRange = new vscode.Range(
-                                doc.positionAt(0),
-                                doc.positionAt(doc.getText().length)
-                            );
-                            edit.replace(fileUri, fullRange, content);
-                            await vscode.workspace.applyEdit(edit);
-                            await doc.save();
-                        }
-                        vscode.window.showInformationMessage(`✅ Rolled back ${path.basename(fullPath)} to previous snapshot.`);
-                    } else {
-                        vscode.window.showErrorMessage(`❌ No snapshots found for ${path.basename(fullPath)}`);
-                    }
-                }
-            } else if (message.command === 'resolveTerminalApproval') {
-                const { callId, action, cmd } = message;
-                const finalCmd = (cmd || '').replace(/^[\$#>]\s*/, '').trim();
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || this._workspaceRoot || '';
-
-                if (action === 'always') {
-                    this.isTerminalSessionAutoApproved = true;
-                }
-
-                const resolver = this.pendingTerminalResolvers.get(callId);
-                if (resolver) {
-                    this.pendingTerminalResolvers.delete(callId);
-                    if (action === 'skip') {
-                        resolver(`[COMMAND SKIPPED BY USER]\nCommand: '${finalCmd}' was skipped. Please adjust your plan or ask the user how to proceed.`);
-                    } else {
-                        vscode.window.showInformationMessage(`Running: ${finalCmd}`);
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `⚡ Running: ${finalCmd}...`
-                        });
-                        TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
-                            if (workspaceRoot) {
-                                SessionMemory.recordCommand(workspaceRoot, finalCmd, !res.error);
-                            }
-                            if (res.error) {
-                                this.lastFailedCommand = finalCmd;
-                                this.filesModifiedSinceLastCommand = false;
-                            } else {
-                                this.lastFailedCommand = null;
-                            }
-                            this.postMessageToWebview({
-                                command: 'terminalCommandCompleted',
-                                callId: callId,
-                                exitCode: res.exitCode,
-                                error: res.error,
-                                output: res.output,
-                                commandText: finalCmd
-                            });
-                            this.postMessageToWebview({
-                                command: 'statusUpdate',
-                                text: res.error ? `⚠️ Command finished (Exit Code: ${res.exitCode})` : `✅ Command completed (Exit Code: 0)`
-                            });
-                            const outputFeedback = `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'} - Exit Code: ${res.exitCode}]\nCommand: \`${finalCmd}\`\nOutput:\n\`\`\`\n${res.output || '(No output)'}\n\`\`\`\nNext step: ${res.error ? 'Analyze this error traceback and provide the exact fix.' : 'If you just scaffolded a project or app, you MUST use list_directory_tree first to verify the disk layout before editing files.'}`;
-                            resolver(outputFeedback);
-                        });
-                    }
-                } else if (action !== 'skip' && finalCmd && workspaceRoot) {
-                    // Fallback execution if no promise was actively waiting
-                    TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
-                        const feedbackPrompt = res.error
-                            ? `[TERMINAL EXECUTION FAILED - Exit Code: ${res.exitCode}]\nCommand: \`${finalCmd}\`\nOutput:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze this error output, explain what caused the failure, and provide the exact fix.`
-                            : `[TERMINAL EXECUTION SUCCESS - Exit Code: 0]\nCommand: \`${finalCmd}\`\nOutput:\n\`\`\`\n${res.output || 'Done.'}\n\`\`\`\n\nNext Step: If you just scaffolded a project or app (e.g. startproject, startapp, create-*), you MUST use 'list_directory_tree' first to verify the exact on-disk directory layout before editing any files. Otherwise, proceed with the next planned step.`;
-                        this.postMessageToWebview({
-                            command: 'injectChatAndSend',
-                            text: feedbackPrompt
-                        });
-                    });
-                }
-            } else if (message.command === 'runAndCapture') {
-                if (message.autoApproveSession) {
-                    this.isTerminalSessionAutoApproved = true;
-                }
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
-                if (workspaceRoot && message.cmd) {
-                    const isDaemon = TerminalCapture.isDaemonCommand(message.cmd);
-                    if (isDaemon) {
-                        this.handleRunInTerminal(message.cmd);
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `🚀 Started dev server in terminal: ${message.cmd}`
-                        });
-                        const serverFeedback = `[DEV SERVER STARTED]\nCommand: \`${message.cmd}\` is running in the background terminal.\nPlease use 'check_localhost_health' to verify if the server is responding, and inform the user of the live URL.`;
-                        this.postMessageToWebview({
-                            command: 'injectChatAndSend',
-                            text: serverFeedback
-                        });
-                        return;
-                    }
-
-                    vscode.window.showInformationMessage(`Running: ${message.cmd}`);
-                    TerminalCapture.runAndCapture(message.cmd, workspaceRoot).then(res => {
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: res.error
-                                ? `⚠️ Command failed (Exit Code: ${res.exitCode}). AI is analyzing output...`
-                                : `✅ Command completed (Exit Code: 0). AI reading output...`
-                        });
-
-                        const feedbackPrompt = res.error
-                            ? `[TERMINAL EXECUTION FAILED - Exit Code: ${res.exitCode}]\nCommand: \`${message.cmd}\`\nOutput:\n\`\`\`\n${res.output}\n\`\`\`\n\nPlease analyze this error output, explain what caused the failure, and provide the exact fix.`
-                            : `[TERMINAL EXECUTION SUCCESS - Exit Code: 0]\nCommand: \`${message.cmd}\`\nOutput:\n\`\`\`\n${res.output || 'Done.'}\n\`\`\`\n\nNext Step: If you just scaffolded a project or app (e.g. startproject, startapp, create-*), you MUST use 'list_directory_tree' first to verify the exact on-disk directory layout before editing any files. Otherwise, proceed with the next planned step.`;
-
-                        this.postMessageToWebview({
-                            command: 'injectChatAndSend',
-                            text: feedbackPrompt
-                        });
-                    });
+        const dispatchCtx: DispatchContext = {
+            workspaceRoot: workspaceRoot || '',
+            conversationHistory: this.conversationHistory,
+            taskPlanner: this.taskPlanner,
+            postMessage: (msg) => this.postMessageToWebview(msg),
+            handleChatMessageStream: async (msg) => this.handleChatMessageStream(msg),
+            handleRunInTerminal: async (cmd) => this.handleRunInTerminal(cmd),
+            handleRequestWorkspaceFiles: async (query) => this.handleRequestWorkspaceFiles(query),
+            isEditSessionAutoApproved: this.isEditSessionAutoApproved,
+            isTerminalSessionAutoApproved: this.isTerminalSessionAutoApproved,
+            setEditSessionAutoApproved: (val) => { this.isEditSessionAutoApproved = val; },
+            setTerminalSessionAutoApproved: (val) => { this.isTerminalSessionAutoApproved = val; },
+            pendingTerminalResolvers: this.pendingTerminalResolvers,
+            getAiMetaDir: (root) => this.getAiMetaDir(root),
+            abortCurrentStream: () => {
+                if (this.currentAbortController) {
+                    this.currentAbortController.abort();
+                    this.currentAbortController = null;
                 }
             }
+        };
+
+        webviewView.webview.onDidReceiveMessage(async (message) => {
+            await MessageDispatcher.dispatch(message, dispatchCtx);
         });
     }
 
-    /**
-     * Dynamic Multi-Root / Workspace Switch Update
-     */
     public updateWorkspaceRoot(newWorkspaceRoot: string, ragEngine?: any) {
         this._workspaceRoot = newWorkspaceRoot;
         this.ragEngine = ragEngine;
@@ -540,2431 +160,342 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /**
-     * Returns the path to the dedicated AI metadata directory for the workspace, creating it if it doesn't exist.
-     * @param workspaceRoot The root path of the current workspace.
-     */
-    private getAiMetaDir(workspaceRoot: string): string {
+    public getAiMetaDir(workspaceRoot: string): string {
         const dir = path.join(workspaceRoot, '.ultra-light-ai');
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
         return dir;
     }
-    /**
-     * Detects if a project is new (No ARCHITECTURE.md and > 1 file)
-     * Runs a silent background scan to build context without blocking the UI.
-     */
-    private async checkAndRunOnboarding(workspaceRoot: string): Promise<void> {
-        try {
-            await ProjectScanner.scanProject(workspaceRoot);
-
-            const archPath = path.join(workspaceRoot, 'ARCHITECTURE.md');
-            const newArchPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
-            if (fs.existsSync(archPath) || fs.existsSync(newArchPath)) return; // Already onboarded!
-            // Check if folder actually has files (ignoring hidden files and node_modules)
-            const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-            const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
-            
-            const filesInRoot = fs.readdirSync(workspaceRoot).filter(f => !f.startsWith('.') && !combinedIgnores.includes(f));
-            if (filesInRoot.length <= 1) return; // Too small or empty, skip onboarding
-
-            // 1. Show Loading UI
-            this.postMessageToWebview({ command: 'showOnboarding' });
-
-            // 2. Fetch lightweight file tree to save tokens (DO NOT read full files here)
-            const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
-            const vscodeFiles = await vscode.workspace.findFiles('**/*', excludePattern, 30);
-            const fileList = vscodeFiles.map(f => path.relative(workspaceRoot, f.fsPath));
-            
-            if (fileList.length === 0) {
-                this.postMessageToWebview({ command: 'onboardingFailed' });
-                return;
-            }
-
-            // 3. Use the Support Brain (Scout) to generate the file silently
-            const config = getAgentConfig(workspaceRoot);
-            const brain = config?.supportBrain?.model ? config.supportBrain : config?.mainBrain;
-            if (!brain || !brain.model) return;
-
-            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-            let client;
-            if (brain.providerType === 'local') {
-                client = new LocalOllamaClient(brain.model, brain.endpoint || 'http://127.0.0.1:11434', brain.apiKey);
-            } else {
-                client = new GeminiCloudClient([brain.apiKey?.trim() || ''], brain.model, 60);
-            }
-
-            const prompt = `You are a project analyzer. I am passing a list of files from a new project. Generate a very brief 'ARCHITECTURE.md' file explaining the probable Tech Stack, Entry Points, and Structure based strictly on these file names.\nReturn ONLY the markdown content. No conversational text.\n\nFiles:\n${fileList.join('\n')}`;
-            
-            const res = await client.complete(prompt);
-            const cleanArch = res.text.replace(/```markdown/gi, '').replace(/```/g, '').trim();
-            
-            fs.writeFileSync(newArchPath, cleanArch, 'utf8');
-            this.postMessageToWebview({ command: 'onboardingComplete' });
-        } catch (error) {
-            this.postMessageToWebview({ command: 'onboardingFailed' });
-        }
-    }
 
     private async handleRequestWorkspaceFiles(query: string = ''): Promise<void> {
         try {
             const workspaceFolders = vscode.workspace.workspaceFolders;
             if (!workspaceFolders || workspaceFolders.length === 0) return;
-            
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            // Use vscode findFiles to get max 20 files matching the query (if provided) or recent files
             const searchPattern = query ? `**/*${query}*` : '**/*';
             const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
             const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
             const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
-            
             const files = await vscode.workspace.findFiles(searchPattern, excludePattern, 25);
-            
-            // Map to relative paths
-            const relativeFiles = files.map(f => path.relative(workspaceRoot, f.fsPath));
-            
-            // Sort by shortest path/name matching query (primitive ranking)
-            relativeFiles.sort((a, b) => a.length - b.length);
-            
+            const relativeFiles = files.map(f => path.relative(workspaceRoot, f.fsPath)).sort((a, b) => a.length - b.length);
             this.postMessageToWebview({
                 command: 'provideWorkspaceFiles',
-                files: relativeFiles.slice(0, 15) // send top 15 results
+                files: relativeFiles.slice(0, 15)
             });
         } catch (e) {
-            console.error("Failed to query workspace files for mention popup", e);
+            console.error("Failed to query workspace files", e);
         }
     }
 
-    /**
-     * Applies 4-Tier matching logic to gracefully handle Search/Replace blocks
-     * Tier 1: Exact Match, Tier 2: Normalized Match, Tier 3: Line-Anchor, Tier 4: Best-Effort UI
-     */
-    private async applyPatchWithTiers(fileText: string, searchStr: string, replaceStr: string, filepath: string, isPreview: boolean = false): Promise<{ success: boolean, text: string, error?: string }> {
-        // BUG FIX: Prevent Markdown backtick corruption if LLM hallucinates them inside SEARCH/REPLACE blocks
-        if (!filepath.toLowerCase().endsWith('.md')) {
-            // Strip leading ```lang and trailing ``` from both search and replace blocks
-            searchStr = searchStr.replace(/^\s*```[a-zA-Z]*\r?\n/g, '').replace(/\r?\n```\s*$/g, '');
-            replaceStr = replaceStr.replace(/^\s*```[a-zA-Z]*\r?\n/g, '').replace(/\r?\n```\s*$/g, '');
+    private async handleRunInTerminal(command: string) {
+        const dangerousPatterns = [/rm\s+-r/i, /del\s+\/f/i, /format\s+/i, /diskpart/i, /rmdir\s+\/s/i, /mkfs/i, /shutdown/i];
+        if (dangerousPatterns.some(pattern => pattern.test(command))) {
+            vscode.window.showErrorMessage('🛡️ Sandbox Blocked: Potentially dangerous command.');
+            return;
         }
 
-        // Validate replacement content first - abort if lazy placeholders or accidental wipes are found
-        const val = DiffValidator.validateReplacementContent(replaceStr);
-        if (!val.valid) {
-            return { success: false, text: fileText, error: val.reason };
-        }
-
-        const patchResult = applyRobustSearchReplace(fileText, searchStr, replaceStr);
-        
-        // Tier 1: Exact Match / DiffPatcher
-        if (patchResult.success) {
-            return { success: true, text: patchResult.result || (patchResult as any).patched || fileText };
-        }
-
-        // Tier 2: Normalized Match
-        const escapeRegex = (s: string) => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-        const relaxedRegex = new RegExp(escapeRegex(searchStr).replace(/\s+/g, '\\s+'), 'g');
-        if (relaxedRegex.test(fileText)) {
-            return { success: true, text: fileText.replace(relaxedRegex, replaceStr) };
-        }
-
-        // Tier 3: Line-Anchor Match
-        const searchLines = searchStr.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        if (searchLines.length >= 2) {
-            const firstLine = searchLines[0];
-            const lastLine = searchLines[searchLines.length - 1];
-            const fileLines = fileText.split('\n');
-            
-            const startIdx = fileLines.findIndex(l => l.includes(firstLine));
-            if (startIdx !== -1) {
-                const endIdx = fileLines.findIndex((l, idx) => idx > startIdx && l.includes(lastLine));
-                if (endIdx !== -1) {
-                    fileLines.splice(startIdx, endIdx - startIdx + 1, ...replaceStr.split('\n'));
-                    return { success: true, text: fileLines.join('\n') };
-                }
-            }
-        }
-
-        // Job 1: SEARCH Block Healer (Micro-Task)
-        try {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (workspaceFolders && workspaceFolders.length > 0) {
-                const config = require('../config').getAgentConfig(workspaceFolders[0].uri.fsPath);
-                const brain = config?.supportBrain?.model ? config.supportBrain : config?.mainBrain;
-                if (brain?.model) {
-                    const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-                    let scoutClient;
-                    if (brain.providerType === 'local') {
-                        scoutClient = new LocalOllamaClient(brain.model || 'llama-3.1-8b-instant', brain.endpoint || 'http://127.0.0.1:11434', brain.apiKey);
-                    } else {
-                        const keyStr = brain.apiKey?.trim() || '';
-                        if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(brain.model, 'https://api.groq.com/openai', keyStr);
-                        else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(brain.model, 'https://api.openai.com', keyStr);
-                        else scoutClient = new GeminiCloudClient([keyStr], brain.model || 'gemini-1.5-flash', 60);
-                    }
-                    
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🩺 Auto-Healer: Attempting to fix broken SEARCH block in ${path.basename(filepath)}...` });
-                    
-                    const healerPrompt = `The AI generated a SEARCH block to edit a file, but it doesn't match the file exactly.\n\nBroken SEARCH block:\n\`\`\`\n${searchStr}\n\`\`\`\n\nActual file content (first 200 lines):\n\`\`\`\n${fileText.split('\n').slice(0, 200).join('\n')}\n\`\`\`\n\nReturn ONLY the corrected SEARCH block that perfectly matches the actual file content. Do NOT include markdown fences, just the exact raw text lines that need to be replaced. Do not explain.`;
-                    
-                    const healerResponse = await scoutClient.complete(healerPrompt);
-                    const healedSearchStr = healerResponse.text.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
-                    
-                    const healedPatchResult = applyRobustSearchReplace(fileText, healedSearchStr, replaceStr);
-                    if (healedPatchResult.success) {
-                        return { success: true, text: healedPatchResult.result || (healedPatchResult as any).patched || fileText };
-                    }
-                }
-            }
-        } catch (e) {
-            console.error("Scout SEARCH Healer failed", e);
-        }
-
-        // Tier 4: AST Symbol Fallback (if targeting a function, class, or method)
-        try {
-            const symbolRegex = /(?:function|class|interface|type|const|let|var|def|async\s+function)\s+([a-zA-Z0-9_$]+)/;
-            const symMatch = searchStr.match(symbolRegex);
-            if (symMatch && symMatch[1]) {
-                const targetSymbolName = symMatch[1];
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (workspaceFolders && workspaceFolders.length > 0) {
-                    const workspaceRoot = workspaceFolders[0].uri.fsPath;
-                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                    if (safeCheck.safe && fs.existsSync(safeCheck.resolvedPath)) {
-                        const uri = vscode.Uri.file(safeCheck.resolvedPath);
-                        const symbols: vscode.DocumentSymbol[] | undefined = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
-                        if (symbols && symbols.length > 0) {
-                            const findSymbol = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
-                                for (const s of syms) {
-                                    if (s.name === targetSymbolName) return s;
-                                    if (s.children) { const c = findSymbol(s.children); if (c) return c; }
-                                }
-                            };
-                            const target = findSymbol(symbols);
-                            if (target) {
-                                const fileLines = fileText.split('\n');
-                                const startLine = target.range.start.line;
-                                const endLine = target.range.end.line;
-                                if (startLine >= 0 && endLine < fileLines.length) {
-                                    fileLines.splice(startLine, endLine - startLine + 1, ...replaceStr.split('\n'));
-                                    return { success: true, text: fileLines.join('\n') };
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn("AST Symbol Fallback failed", e);
-        }
-
-        // Tier 5: Diff Validator Guard - Never silently append code to prevent file corruption
-        const validation = DiffValidator.validatePatch(fileText, searchStr);
-        const errorMsg = patchResult.error || validation.reason || `Search block could not be matched safely in ${path.basename(filepath)}. No changes were applied to prevent file corruption.`;
-        if (isPreview) {
-            return { success: false, text: `/* 🚫 BLOCKED: ${errorMsg} */\n` + fileText, error: errorMsg };
-        } else {
-            return { success: false, text: fileText, error: errorMsg };
-        }
+        let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI') || vscode.window.createTerminal('Ultra Light AI');
+        terminal.show();
+        const safeCommand = command.trim().split(/\r?\n/).filter(line => line.trim().length > 0).join(' && ');
+        terminal.sendText(safeCommand, true);
     }
 
-    private async handlePreviewDiff(fileInfo: any): Promise<void> {
-        try {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders || workspaceFolders.length === 0) {
-                throw new Error('No workspace folder open.');
-            }
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            const fullPath = path.join(workspaceRoot, fileInfo.filepath);
-            
-            let originalContent = '';
-            if (fs.existsSync(fullPath)) {
-                originalContent = fs.readFileSync(fullPath, 'utf8');
-            }
-
-            let newContent = originalContent;
-            
-            // Check if the AI used Search/Replace blocks
-            if (fileInfo.content.includes('<<<<<<< SEARCH') && fileInfo.content.includes('>>>>>>> REPLACE')) {
-                const blockRegex = /<<<<<<<\s*SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
-                let match;
-                let blocksFound = false;
-                
-                while ((match = blockRegex.exec(fileInfo.content)) !== null) {
-                    blocksFound = true;
-                    const searchStr = match[1];
-                    const replaceStr = match[2];
-                    const patchResult = await this.applyPatchWithTiers(newContent, searchStr, replaceStr, fileInfo.filepath, true);
-                    if (patchResult.success) {
-                        newContent = patchResult.text;
-                    }
-                }
-                
-                // Removed old Scout Regex Fallback -> Replaced by Job 1 SEARCH Healer above
-                if (!blocksFound) {
-                    newContent = fileInfo.content;
-                }
-            } else {
-                newContent = fileInfo.content;
-            }
-
-            // Create temporary files for diff
-            const os = require('os');
-            const tempDir = os.tmpdir();
-            const originalFile = path.join(tempDir, `original_${path.basename(fileInfo.filepath)}`);
-            const modifiedFile = path.join(tempDir, `modified_${path.basename(fileInfo.filepath)}`);
-            
-            fs.writeFileSync(originalFile, originalContent, 'utf8');
-            fs.writeFileSync(modifiedFile, newContent, 'utf8');
-            
-            await vscode.commands.executeCommand('vscode.diff', 
-                vscode.Uri.file(originalFile), 
-                vscode.Uri.file(modifiedFile), 
-                `Preview: ${fileInfo.filepath}`
-            );
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Failed to preview diff: ${e.message}`);
-        }
-    }
-
-    /**
-     * Handle chat message — non-streaming (fallback)
-     */
-    private async handleChatMessage(text: string, includeActiveFile: boolean = false): Promise<void> {
-        try {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
-            const keys = getGeminiApiKeys(workspaceRoot);
-            const model = getGeminiModel(workspaceRoot);
-            const timeout = getGeminiTimeout(workspaceRoot);
-            const config = getAgentConfig(workspaceRoot);
-            
-            const maxOutputTokens = config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192;
-            const maxContextTokens = config?.contextLimits?.maxContextTokens || 7000;
-
-            let client;
-            const keyStr = keys[0]?.trim() || '';
-            if (config?.activeProvider === 'local') {
-                const { LocalOllamaClient } = require('../router/realClients');
-                const endpoint = config.providers?.local?.endpoint || 'http://127.0.0.1:11434';
-                const localModel = config.providers?.local?.model || 'llama3';
-                client = new LocalOllamaClient(localModel, endpoint, keyStr);
-            } else {
-                const { LocalOllamaClient } = require('../router/realClients');
-                if (keyStr.startsWith('gsk_')) {
-                    client = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
-                } else if (keyStr.startsWith('sk-or-')) {
-                    client = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
-                } else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) {
-                    client = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
-                } else {
-                    client = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
-                }
-            }
-            
-            // Note: message isn't passed here as this method is called via fallback, but let's assume agentMode is false for now
-            // if we need it we can update the signature later.
-            const category = PromptClassifier.classifyPrompt(text);
-            const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
-            const systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, false, category, repoMap);
-            TokenAccountant.measureSystemPrompt(systemInstruction);
-            let finalPrompt = await this.buildPrompt(text, includeActiveFile, false, false, workspaceRoot);
-
-            // Add ONLY the user's raw message to history (BUG-03 FIX)
-            this.conversationHistory.addMessage('user', text);
-
-            const historyLimit = config?.contextLimits?.historyLength || 10;
-            const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
-
-            // Resilient 2-Tier Memory: Preserves full UI history on disk while passing compressed context to LLM
-            const history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
-
-            // Remove the last user message from history since we pass it separately
-            const historyWithoutLast = history.slice(0, -1);
-            
-            const cacheKey = workspaceRoot ? generateCacheKey(systemInstruction, historyWithoutLast, finalPrompt) : null;
-            if (cacheKey && workspaceRoot) {
-                const cachedResponse = checkCache(workspaceRoot, cacheKey);
-                if (cachedResponse) {
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `⚡ Cache Hit: Zero-cost instant response loaded!`
-                    });
-                    const cleanResponseText = cachedResponse.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
-                    this.conversationHistory.addMessage('model', cleanResponseText);
-                    this.postMessageToWebview({
-                        command: 'receiveChat',
-                        text: cachedResponse
-                    });
-                    return;
-                }
-            }
-
-            this.postMessageToWebview({
-                command: 'statusUpdate',
-                text: `📚 Context Window: Sending previous ${historyWithoutLast.length} messages...`
-            });
-
-            const reply = await client.completeWithHistory(
-                systemInstruction,
-                historyWithoutLast,
-                finalPrompt
-            );
-
-            if (cacheKey && workspaceRoot && reply.text) {
-                saveCache(workspaceRoot, cacheKey, reply.text);
-            }
-
-            // Strip <think> tags before saving to history
-            const cleanResponseText = reply.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
-            this.conversationHistory.addMessage('model', cleanResponseText, reply.usage);
-
-            this.postMessageToWebview({
-                command: 'receiveChat',
-                text: reply.text,
-                usage: reply.usage
-            });
-        } catch (error: any) {
-            this.postMessageToWebview({
-                command: 'receiveChat',
-                text: `Error: ${error?.message || error}`
-            });
-        }
-    }
-
-    /**
-     * Handle chat message — streaming (preferred)
-     */
     private async handleChatMessageStream(message: any): Promise<void> {
         try {
             const workspaceFolders = vscode.workspace.workspaceFolders;
-            const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
+            const workspaceRoot = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : this._workspaceRoot;
             const keys = getGeminiApiKeys(workspaceRoot);
             const model = getGeminiModel(workspaceRoot);
             const timeout = getGeminiTimeout(workspaceRoot);
             const config = getAgentConfig(workspaceRoot);
 
-            let mainClient;
-            let supportClient = null;
-            
-            const maxOutputTokens = config?.contextLimits?.maxOutputTokens || config?.contextLimits?.maxTokens || 8192;
+            const maxOutputTokens = config?.contextLimits?.maxOutputTokens || 8192;
             const maxContextTokens = config?.contextLimits?.maxContextTokens || 7000;
+            const maxToolSteps = config?.maxAutonomousToolSteps || 40;
 
             const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
+            let mainClient;
 
-            // Initialize Main Brain
             const mainBrain = config?.mainBrain;
-            if (mainBrain) {
-                if (mainBrain.providerType === 'local') {
-                    mainClient = new LocalOllamaClient(mainBrain.model || 'llama3', mainBrain.endpoint || 'http://127.0.0.1:11434', mainBrain.apiKey);
-                } else {
-                    const keyStr = mainBrain.apiKey?.trim() || '';
-                    if (keyStr.startsWith('gsk_')) {
-                        mainClient = new LocalOllamaClient(mainBrain.model, 'https://api.groq.com/openai', keyStr);
-                    } else if (keyStr.startsWith('sk-or-')) {
-                        mainClient = new LocalOllamaClient(mainBrain.model, 'https://openrouter.ai/api', keyStr);
-                    } else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) {
-                        mainClient = new LocalOllamaClient(mainBrain.model, 'https://api.openai.com', keyStr);
-                    } else {
-                        const activeKeys = keyStr ? [keyStr] : keys;
-                        mainClient = new GeminiCloudClient(activeKeys, mainBrain.model || 'gemini-1.5-pro', timeout, maxOutputTokens);
-                    }
-                }
+            const providerType = mainBrain?.providerType || 'cloud';
+            const customEndpoint = mainBrain?.endpoint?.trim();
+            const keyStr = mainBrain?.apiKey?.trim() || keys[0]?.trim() || '';
+
+            if (providerType === 'apinex') {
+                const ep = customEndpoint || 'https://api.apinex.bond/v1';
+                mainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', ep, keyStr);
+            } else if (providerType === 'openai') {
+                const ep = customEndpoint || 'https://api.openai.com/v1';
+                mainClient = new LocalOllamaClient(mainBrain?.model || 'gpt-4o', ep, keyStr);
+            } else if (customEndpoint && customEndpoint !== 'http://127.0.0.1:11434' && customEndpoint !== 'http://localhost:11434') {
+                mainClient = new LocalOllamaClient(mainBrain?.model || model || 'deepseek-chat', customEndpoint, keyStr);
+            } else if (providerType === 'local') {
+                mainClient = new LocalOllamaClient(mainBrain?.model || 'llama3', mainBrain?.endpoint || 'http://127.0.0.1:11434', keyStr);
             } else {
-                // Fallback to legacy config
-                if (config?.activeProvider === 'local') {
-                    mainClient = new LocalOllamaClient(config.providers?.local?.model || 'llama3', config.providers?.local?.endpoint || 'http://127.0.0.1:11434', keys[0]?.trim());
-                } else {
-                    const keyStr = keys[0]?.trim() || '';
-                    if (keyStr.startsWith('gsk_')) mainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
-                    else if (keyStr.startsWith('sk-or-')) mainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
-                    else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) mainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
-                    else mainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
-                }
+                if (keyStr.startsWith('sk-apx')) mainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', 'https://api.apinex.bond/v1', keyStr);
+                else if (keyStr.startsWith('gsk_')) mainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
+                else if (keyStr.startsWith('sk-or-')) mainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
+                else if (keyStr.startsWith('sk-')) mainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
+                else mainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
             }
-            const configuredTemp = typeof config?.temperature === 'number' 
-                ? config.temperature 
-                : (typeof mainBrain?.temperature === 'number' ? mainBrain.temperature : 0.4);
+
             if (mainClient) {
-                mainClient.temperature = configuredTemp;
-                mainClient.maxToolIterations = config?.maxAutonomousToolSteps || 30;
-            }
-            
-            const client = mainClient;
-
-            // Auto-inject ARCHITECTURE.md ALWAYS
-            let architectureContext = '';
-            if (workspaceRoot) {
-                const archPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
-                if (fs.existsSync(archPath)) {
-                    architectureContext = `\n<project_architecture>\n${fs.readFileSync(archPath, 'utf8')}\n</project_architecture>\n`;
-                }
+                mainClient.maxToolIterations = maxToolSteps;
             }
 
-            // Build system instruction
             const promptCategory = PromptClassifier.classifyPrompt(message.text);
             const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
-            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap);
-            
-            // Task State & Phase Machine (Head-v4 Architecture)
+            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget);
+
             this.taskPlanner.syncWithDisk(workspaceRoot);
-
-            const isNewWorkspace = workspaceRoot ? PromptBuilder.classifyWorkspace(workspaceRoot).mode === 'new' : true;
-            const diskPlanExists = workspaceRoot ? fs.existsSync(path.join(workspaceRoot, '.ultra-light-ai', 'PLAN.md')) : false;
-
-            // If workspace was wiped or has no files on disk, purge any stale ghost plan immediately!
-            if (isNewWorkspace && !diskPlanExists) {
-                this.taskPlanner.clear();
-                this.currentTaskState = undefined;
-            }
-
-            if (!this.currentTaskState || this.currentTaskState.phase === 'done' || !this.taskPlanner.hasActivePlan()) {
-                this.currentTaskState = PromptBuilder.startTask(workspaceRoot, message.text);
-            } else {
-                this.currentTaskState = PromptBuilder.applyPivot(this.currentTaskState, message.text);
-            }
+            this.currentTaskState = PromptBuilder.startTask(workspaceRoot, message.text);
             this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
-            if (this.currentTaskState.plan.length > 0) {
-                const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
-                if (!hasUndone) {
-                    this.currentTaskState.phase = 'verify';
-                } else if (this.currentTaskState.phase === 'audit' || this.currentTaskState.phase === 'plan') {
-                    this.currentTaskState.phase = 'execute';
-                }
-            }
 
-            // Volatile per-turn context (terminal output, session notes) for the dynamic tail block
-            const vol = PromptBuilder.buildVolatile(workspaceRoot);
-            
-            TokenAccountant.measureSystemPrompt(systemInstruction);
-            let finalPrompt = await this.buildPrompt(message.text, false, false /* Disable hardcoded search */, false, workspaceRoot);
+            let finalPrompt = await this.buildPrompt(message.text, workspaceRoot);
 
-            // Autonomous Pre-Flight Scout: Injects live package registry documentation if library detected
             try {
                 const liveDocs = await autonomousPreFlightScout(message.text);
-                if (liveDocs) {
-                    finalPrompt = `${liveDocs}\n\n${finalPrompt}`;
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `🔍 Pre-Flight Scout: Injected live registry documentation into context`
-                    });
-                }
+                if (liveDocs) finalPrompt = `${liveDocs}\n\n${finalPrompt}`;
             } catch {}
-            
 
-            
-            if (workspaceRoot) {
-                const skillsInstructions = SkillsManager.getMatchingSkillInstructions(message.text, workspaceRoot);
-                if (skillsInstructions) {
-                    systemInstruction += skillsInstructions;
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `✨ Activated custom workspace skill instructions.` });
-                }
-            }
-
-            if (architectureContext) {
-                finalPrompt = architectureContext + '\n' + finalPrompt;
-            }
-
-            // Add ONLY the user's raw message to history to prevent infinite context scaling
             this.conversationHistory.addMessage('user', message.text, undefined, message.timestamp);
-            
+
             const historyLimit = config?.contextLimits?.historyLength || 10;
             const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
-
-            // Resilient 2-Tier Memory: Preserves full UI history on disk while passing compressed context to LLM
-            let history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
-
+            const history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
             const historyWithoutLast = history.slice(0, -1);
-            
-            const cacheKey = workspaceRoot ? generateCacheKey(systemInstruction, historyWithoutLast, finalPrompt) : null;
-            if (cacheKey && workspaceRoot) {
-                const cachedResponse = checkCache(workspaceRoot, cacheKey);
-                if (cachedResponse) {
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `⚡ Cache Hit: Zero-cost instant response loaded!`
-                    });
-                    this.postMessageToWebview({
-                        command: 'streamChunk',
-                        text: cachedResponse,
-                        done: true
-                    });
-                    const cleanResponseText = cachedResponse.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '');
-                    this.conversationHistory.addMessage('model', cleanResponseText);
-                    return;
-                }
-            }
 
-            this.postMessageToWebview({
-                command: 'statusUpdate',
-                text: `📚 Context Window: Sending previous ${historyWithoutLast.length} messages...`
-            });
+            this.currentAbortController = new AbortController();
 
-            this.currentStreamAbortController = new AbortController();
-
-            const tools: any[] = [
+            const tools = [
                 {
                     functionDeclarations: [
                         {
                             name: "read_multiple_files",
-                            description: "Reads multiple files from the workspace at once. Use this to read ARCHITECTURE.md and key files simultaneously to save time.",
-                            parameters: { 
-                                type: "object", 
-                                properties: { 
-                                    filepaths: { 
-                                        type: "array", 
-                                        items: { type: "string" },
-                                        description: "Array of relative paths to the files you want to read." 
-                                    } 
-                                },
-                                required: ["filepaths"]
-                            }
+                            description: "Reads workspace files. Max 3 at once.",
+                            parameters: { type: "object", properties: { filepaths: { type: "array", items: { type: "string" } } }, required: ["filepaths"] }
                         },
                         {
-                            name: "update_architecture_context",
-                            description: "Updates or creates ARCHITECTURE.md with the latest project context, architecture, and recent changes. ONLY use this AFTER you have successfully added a feature or modified files. DO NOT hallucinate details for an empty/new project.",
-                            parameters: { type: "object", properties: { content: { type: "string", description: "The full markdown content for the ARCHITECTURE.md file" } } }
-                        },
-                        {
-                            name: "search_codebase",
-                            description: "Performs a semantic BM25 search to find related code snippets when you are looking for a feature but don't know the file name.",
-                            parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } } }
-                        },
-                        {
-                            name: "find_references",
-                            description: "AST/LSP Tool: Uses VS Code's internal Language Server (F12) to find exact usages and references of a function or class.",
-                            parameters: { type: "object", properties: { symbolName: { type: "string", description: "Name of the function or class to search for" } }, required: ["symbolName"] }
-                        },
-                        {
-                            name: "replace_symbol",
-                            description: "AST-Aware Patching: Completely replaces a function or class safely without regex matching. It uses the language server to find the exact symbol boundary.",
-                            parameters: { type: "object", properties: { filepath: { type: "string" }, symbolName: { type: "string" }, newCode: { type: "string", description: "The new code to replace it with" } }, required: ["filepath", "symbolName", "newCode"] }
-                        },
-                        {
-                            name: "generate_ui_blueprint",
-                            description: "Generates a deterministic Brand DNA (Colors, Fonts, Inline SVG, Image URLs) for UI/UX tasks. Use this BEFORE writing frontend code for a new website/component.",
+                            name: "create_skill",
+                            description: "Creates and registers a reusable workspace skill. Use this when instructed to create a skill or after analyzing samples (blogs, code patterns) to codify permanent rules.",
                             parameters: {
                                 type: "object",
                                 properties: {
-                                    industry: { type: "string", description: "e.g., fitness, fintech, healthcare, saas, ecommerce, default" },
-                                    audience: { type: "string" },
-                                    emotion: { type: "string" },
-                                    palette_mood: { type: "string", enum: ["dark", "light"] },
-                                    sections: { type: "array", items: { type: "string" }, description: "List of sections needed, e.g., ['hero', 'features', 'testimonials']" },
-                                    layout: { type: "string", description: "e.g., full-width landing, dashboard" },
-                                    typography_feel: { type: "string", description: "e.g., bold, elegant, modern, friendly" },
-                                    corner_style: { type: "string", enum: ["sharp", "rounded", "pill"], description: "OPTIONAL: The corner style for buttons and cards. Defaults to 'rounded'." },
-                                    custom_colors: { type: "object", properties: { primary: { type: "string" }, accent: { type: "string" }, surface: { type: "string" } }, description: "OPTIONAL: Use ONLY if the user explicitly requested specific colors (e.g. Neon Pink, Hacker Green). Otherwise leave blank." },
-                                    custom_font: { type: "string", description: "OPTIONAL: Use ONLY if the user explicitly requested a specific font family. Otherwise leave blank." }
+                                    name: { type: "string", description: "Name of the skill (e.g. \"tech-blog-writer\", \"fastapi-crud\")" },
+                                    description: { type: "string", description: "What this skill does" },
+                                    trigger_rules: { type: "array", items: { type: "string" }, description: "Keywords or phrases that trigger this skill automatically" },
+                                    instructions: { type: "string", description: "Detailed step-by-step rules, patterns, tone guidelines, and execution protocols for this skill" }
                                 },
-                                required: ["industry", "audience", "emotion", "palette_mood", "sections", "layout", "typography_feel"]
+                                required: ["name", "instructions"]
                             }
+                        },
+                        {
+                            name: 'finish',
+                            description: 'Concludes the task. Call this when all checklist items and verifications pass.',
+                            parameters: {
+                                type: 'object',
+                                properties: {
+                                    summary: { type: 'string', description: 'Concise 2-3 sentence overview of changes made and verification results. No code blocks.' }
+                                },
+                                required: ['summary']
+                            }
+                        },
+                        {
+                            name: "write_file",
+                            description: "Writes full file content to disk. Used to create files.",
+                            parameters: { type: "object", properties: { filepath: { type: "string" }, content: { type: "string" } }, required: ["filepath", "content"] }
+                        },
+                        {
+                            name: "edit_file",
+                            description: "Replaces exact old_text snippet with new_text in an existing file.",
+                            parameters: { type: "object", properties: { filepath: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, required: ["filepath", "old_text", "new_text"] }
+                        },
+                        {
+                            name: "execute_terminal_command",
+                            description: "Executes a shell command in the integrated terminal.",
+                            parameters: { type: "object", properties: { command: { type: "string" }, explanation: { type: "string" } }, required: ["command"] }
+                        },
+                        {
+                            name: "list_directory_tree",
+                            description: "Explores the workspace directory structure.",
+                            parameters: { type: "object", properties: { dir: { type: "string" }, depth: { type: "number" } } }
+                        },
+                        {
+                            name: "research_web_docs",
+                            description: "Researches official online web docs, package APIs, and library guides.",
+                            parameters: { type: "object", properties: { query: { type: "string" }, urls: { type: "array", items: { type: "string" } } }, required: ["query"] }
                         }
                     ]
                 }
             ];
 
-            // Add Terminal Command execution tool
-            const executeTerminalTool: any = {
-                name: "execute_terminal_command",
-                description: "Requests execution of a terminal shell command (e.g. npm test, npm install, build scripts). The command will be displayed transparently in the UI for user review and approval before running in the Integrated Terminal.",
-                parameters: {
-                    type: "object",
-                    properties: {
-                        command: { type: "string", description: "The exact terminal command to execute." },
-                        explanation: { type: "string", description: "A brief reason why this command needs to be executed." }
-                    },
-                    required: ["command"]
-                }
-            };
-            tools[0].functionDeclarations.push(executeTerminalTool);
-
-            // Essential Agent & Research Tools
-            tools[0].functionDeclarations.push(
-                {
-                    name: "research_web_docs",
-                    description: "Autonomous Deep Researcher: Gathers official live documentation, API references, and verified code patterns from the web. Strips noise and saves a full reference guide to .ultra-light-ai/research/<topic>.md while returning an executive summary.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            query: { type: "string", description: "The specific topic or library API to research, e.g. 'Next.js 15 Server Actions' or 'Tailwind v4 theme'" },
-                            urls: { type: "array", items: { type: "string" }, description: "Optional specific documentation URLs to scrape" }
-                        },
-                        required: ["query"]
-                    }
-                },
-                {
-                    name: "list_directory_tree",
-                    description: "Returns the workspace directory tree up to a given depth. Use this to understand the project structure without guessing file paths.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            dir: { type: "string", description: "Optional subfolder path relative to workspace root (defaults to root)" },
-                            depth: { type: "number", description: "Tree depth limit (default 2, max 4)" }
-                        }
-                    }
-                },
-                {
-                    name: "get_code_diagnostics",
-                    description: "Inspects active Language Server (LSP) compiler errors and red squiggles in a target file or workspace. Use this to verify your changes or inspect compilation issues without running terminal commands.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            filepath: { type: "string", description: "Target file path relative to workspace root (leave empty for workspace-wide errors)" }
-                        }
-                    }
-                },
-                {
-                    name: "get_symbol_outline",
-                    description: "Returns the AST outline of classes, methods, functions, and interfaces for a file without reading all lines. Saves tokens when exploring large files.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            filepath: { type: "string", description: "Target file path relative to workspace root" }
-                        },
-                        required: ["filepath"]
-                    }
-                },
-                {
-                    name: "check_localhost_health",
-                    description: "Pings a local dev server port (e.g. 3000, 5173, 8000, 8080) to verify if the server is running and responding.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            port: { type: "number", description: "Local port number (default 3000)" }
-                        }
-                    }
-                }
-            );
-
-            const searchWebTool: any = {
-                name: "search_web",
-                description: "Searches the internet for information, documentation, or code examples when you do not know the answer. ONLY use this when you explicitly need external information.",
-                parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] }
-            };
-            tools[0].functionDeclarations.push(searchWebTool);
-            tools[0].functionDeclarations.push(captureLocalhostTool);
-
-            // Core file writing & editing tools
-            tools[0].functionDeclarations.push(
-                {
-                    name: "write_file",
-                    description: "Writes a full file to disk. Use this to create new files. For existing files, read them first before overwriting, or use replace_symbol/edit_file.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            filepath: { type: "string", description: "Target file path relative to workspace root" },
-                            content: { type: "string", description: "The complete file content to write" }
-                        },
-                        required: ["filepath", "content"]
-                    }
-                },
-                {
-                    name: "edit_file",
-                    description: "Edits an existing file by replacing an exact text snippet (old_text) with new_text. Use this for configs, imports, CSS, HTML, and small edits.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            filepath: { type: "string", description: "Target file path relative to workspace root" },
-                            old_text: { type: "string", description: "Exact text snippet to replace (must match current file content)" },
-                            new_text: { type: "string", description: "Replacement text" }
-                        },
-                        required: ["filepath", "old_text", "new_text"]
-                    }
-                },
-                {
-                    name: "plan_update",
-                    description: "Updates the execution plan: marks a step done, drops obsolete steps with a reason, or updates plan steps on a pivot.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            stepId: { type: "number", description: "Step number to update (optional, defaults to current active step)" },
-                            status: { type: "string", enum: ["done", "dropped", "active"], description: "New status for the step" },
-                            reason: { type: "string", description: "Reason if dropping or skipping a step" },
-                            note: { type: "string", description: "Completion note or verify check confirmation" },
-                            steps: { type: "array", items: { type: "string" }, description: "Optional new step list if revising plan" }
-                        }
-                    }
-                }
-            );
-
-            const allowedPlan = this.taskPlanner.allowedPlanTools();
-            if (allowedPlan.includes('plan_set')) {
-                tools[0].functionDeclarations.push(planTools[0]);
-            }
-            if (allowedPlan.includes('plan_done')) {
-                tools[0].functionDeclarations.push(planTools[1]);
-            }
-
-            // Head-v4 Tool Gating: strictly limit exposed tools to the current phase
-            const isUiTask = promptCategory === 'ui';
-            const phaseAllowed = new Set(PromptBuilder.allowedTools(this.currentTaskState!, isUiTask));
-            tools[0].functionDeclarations = tools[0].functionDeclarations.filter((f: any) => phaseAllowed.has(f.name));
-
-            const filteredTools = PromptClassifier.filterTools(promptCategory, tools);
-
-            const toolSpecs: ToolSpec[] = (filteredTools[0]?.functionDeclarations || []).map((f: any) => ({
-                name: f.name,
-                signature: `${f.name}(${Object.keys(f.parameters?.properties || {}).join(', ')})`,
-                parameters: f.parameters || { properties: {} }
-            }));
-
-            const toolCard = toolSpecs.map(t => `- ${t.signature}`).join('\n');
-            const stateBlock = PromptBuilder.buildStateBlock(this.currentTaskState!, toolCard, vol);
-            finalPrompt = `${finalPrompt}\n\n${stateBlock}`;
-
-            let consecutiveReadCount = 0;
-            const readFilesThisTurn = new Set<string>();
-            const executedToolActions: string[] = [];
-
-            const rawOnToolCall = async (functionCall: any) => {
-                if (this.currentStreamAbortController?.signal?.aborted) {
-                    throw new Error('Operation aborted by user.');
-                }
-                if (functionCall.name === 'read_multiple_files') {
-                    // Maximum of 3 consecutive read actions before forcing a synthesis or plan turn
-                    if (consecutiveReadCount >= 3) {
-                        return "Throttling Limit: You have reached the limit of 3 consecutive file read operations. You must now synthesize your findings, present a concrete plan, or output your code changes before requesting further file reads.";
-                    }
-                    consecutiveReadCount++;
-
-                    const filepaths = functionCall.args?.filepaths;
-                    if (!filepaths || !Array.isArray(filepaths) || !workspaceRoot) return "Error: No filepaths array or workspace.";
-
-                    // Redundant read circuit breaker: prevent looping on inspecting identical files without editing
-                    if (this.lastReadFiles.size > 0 && !this.filesModifiedSinceLastCommand) {
-                        const isSame = filepaths.every((f: string) => this.lastReadFiles.has(f.trim().replace(/\\/g, '/')));
-                        if (isSame && filepaths.length === this.lastReadFiles.size) {
-                            return `[REDUNDANT READ BLOCKED]: You already inspected '${filepaths.join(', ')}' and they have not changed. Re-reading is blocked to prevent loops. NEXT ACTION: Proceed directly to applying your fix using edit_file (filepath, old_text, new_text) or replace_symbol (filepath, symbolName, newCode).`;
-                        }
-                    }
-
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'read_multiple_files',
-                        title: 'Inspecting Files',
-                        data: { count: filepaths.length, files: filepaths.join(', ') }
-                    });
-                    
-                    let combinedResult = '';
-                    for (const filepath of filepaths) {
-                        const normalizedKey = filepath.trim().replace(/\\/g, '/');
-                        if (readFilesThisTurn.has(normalizedKey)) {
-                            combinedResult += `\n--- File: ${filepath} [CACHED / ALREADY INSPECTED] ---\n(File content was already provided earlier in this turn. Please use the previously retrieved context.)\n`;
-                            continue;
-                        }
-                        readFilesThisTurn.add(normalizedKey);
-
-                        const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                        if (!safeCheck.safe) {
-                            combinedResult += `\n--- File: ${filepath} (Blocked: Path resolves outside workspace) ---\n`;
-                            continue;
-                        }
-                        const fullPath = safeCheck.resolvedPath;
-
-                        if (fs.existsSync(fullPath)) {
-                            let content = fs.readFileSync(fullPath, 'utf8');
-                            if (estimateTokens(content) > 3000) {
-                                content = truncateToTokens(content, 3000) + '\n\n... (File truncated to stay within limits. Use search_codebase to find specific functions.)';
-                            }
-                            combinedResult += `\n--- File: ${filepath} ---\n${content}\n`;
-                            
-                            // Step 3: Inject dependencies to give inter-file context
-                            if (content.trim().length > 0) {
-                                const skeletons = await DependencyGraph.getImportSkeletons(fullPath, content, workspaceRoot);
-                                if (skeletons) {
-                                    combinedResult += skeletons;
-                                }
-                            }
-                        } else if (filepath.includes('ARCHITECTURE')) {
-                            const ruleFiles = ['ARCHITECTURE.md', 'AI_RULES.md', '.cursorrules', '.agent-rules.md'];
-                            let found = false;
-                            for (const ruleFile of ruleFiles) {
-                                const rulePath = ruleFile === 'ARCHITECTURE.md' ? path.join(this.getAiMetaDir(workspaceRoot), ruleFile) : path.join(workspaceRoot, ruleFile);
-                                if (fs.existsSync(rulePath)) {
-                                    combinedResult += `\n--- File: ${ruleFile} ---\n${fs.readFileSync(rulePath, 'utf8')}\n`;
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) combinedResult += `\n--- File: ${filepath} (Not Found) ---\n`;
-                        } else {
-                            // Subdirectory fallback: search for target filename across workspace (e.g. urls.py -> ecommerce_project/urls.py)
-                            let resolvedAltPath: string | null = null;
-                            const targetBase = path.basename(filepath);
-                            const ignoreDirs = new Set(['node_modules', '.git', '.venv', 'env', '__pycache__', 'dist', 'build', '.ultra-light-ai']);
-                            
-                            const scanSubdirs = (currentDir: string, depth: number): string | null => {
-                                if (depth > 4) return null;
-                                try {
-                                    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
-                                    for (const entry of entries) {
-                                        if (entry.isDirectory()) {
-                                            if (!ignoreDirs.has(entry.name)) {
-                                                const found = scanSubdirs(path.join(currentDir, entry.name), depth + 1);
-                                                if (found) return found;
-                                            }
-                                        } else if (entry.isFile()) {
-                                            if (entry.name.toLowerCase() === targetBase.toLowerCase()) {
-                                                return path.join(currentDir, entry.name);
-                                            }
-                                        }
-                                    }
-                                } catch { /* ignore */ }
-                                return null;
-                            };
-
-                            resolvedAltPath = scanSubdirs(workspaceRoot, 0);
-
-                            if (resolvedAltPath && fs.existsSync(resolvedAltPath)) {
-                                const relPath = path.relative(workspaceRoot, resolvedAltPath).replace(/\\/g, '/');
-                                let content = fs.readFileSync(resolvedAltPath, 'utf8');
-                                if (estimateTokens(content) > 3000) {
-                                    content = truncateToTokens(content, 3000) + '\n\n... (File truncated to stay within limits.)';
-                                }
-                                combinedResult += `\n--- File: ${relPath} (Auto-located from '${filepath}') ---\n${content}\n`;
-                            } else {
-                                combinedResult += `\n--- File: ${filepath} (Not Found in workspace. Use list_directory_tree to verify paths) ---\n`;
-                            }
-                        }
-                    }
-
-                    this.lastReadFiles = new Set(filepaths.map((f: string) => f.trim().replace(/\\/g, '/')));
-                    if (this.currentTaskState && this.currentTaskState.phase === 'audit') {
-                        this.currentTaskState.auditCalls++;
-                        this.currentTaskState.phase = 'execute';
-                    }
-
-                    combinedResult += `\n[INSPECTION COMPLETE]: File content loaded above. NEXT STEP: Use edit_file (with exact old_text/new_text) or replace_symbol to apply your code fix now, then verify with a check command. Do NOT call read_multiple_files again on these files.\n`;
-                    return combinedResult;
-                } else {
-                    consecutiveReadCount = 0;
-                }
-
-                if (functionCall.name === 'update_architecture_context') {
-                    if (!workspaceRoot) return "Error: No workspace.";
-                    const content = functionCall.args?.content || '';
-                    const archPath = path.join(this.getAiMetaDir(workspaceRoot), 'ARCHITECTURE.md');
-                    fs.writeFileSync(archPath, content, 'utf8');
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `📝 AI updated ARCHITECTURE.md to save context.`
-                    });
-                    return "Successfully updated ARCHITECTURE.md. Memory saved.";
-                } else if (functionCall.name === 'search_codebase') {
-                    if (!this.ragEngine) return "Search engine not initialized.";
-                    const query = functionCall.args?.query || '';
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'search_codebase',
-                        title: 'Searching Codebase',
-                        data: { query: query }
-                    });
-                    
-                    let results;
-                    const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_tool', [], query) : null;
-                    const rawCache = ragCacheKey ? checkCache(workspaceRoot!, ragCacheKey) : null;
-                    
-                    if (rawCache) {
-                        try { results = JSON.parse(rawCache); } catch(e) {}
-                    }
-                    
-                    if (results) {
-                        this.postMessageToWebview({ command: 'statusUpdate', text: `⚡ RAG Cache Hit for tool search!` });
-                    } else {
-                        results = await this.ragEngine.search(query, 3);
-                        if (ragCacheKey && results && results.length > 0) {
-                            saveCache(workspaceRoot!, ragCacheKey, JSON.stringify(results));
-                        }
-                    }
-
-                    if (!results || results.length === 0) return "No matches found.";
-                    return results.map((r: any) => `File: ${r.filepath}\n\n${r.content}`).join('\n\n---\n\n');
-                } else if (functionCall.name === 'find_references') {
-                    if (!workspaceRoot) return "Error: No workspace.";
-                    const sym = functionCall.args?.symbolName;
-                    try {
-                                const symbols: vscode.SymbolInformation[] | undefined = await Promise.race([
-                                    Promise.resolve(vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', sym)),
-                                    new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 2000))
-                                ]);
-                        if (!symbols || symbols.length === 0) return `Symbol ${sym} not found.`;
-                        const target = symbols[0];
-                        const refs: vscode.Location[] | undefined = await vscode.commands.executeCommand('vscode.executeReferenceProvider', target.location.uri, target.location.range.start);
-                        if (!refs || refs.length === 0) return `No references found for ${sym}.`;
-                        const summaries = refs.slice(0, 10).map(r => `File: ${path.relative(workspaceRoot, r.uri.fsPath)}, Line: ${r.range.start.line}`);
-                        return `Found ${refs.length} references:\n` + summaries.join('\n');
-                    } catch (e: any) { return `LSP Error: ${e.message}`; }
-                } else if (functionCall.name === 'replace_symbol') {
-                    if (!workspaceRoot) return "Error: No workspace.";
-                    let { filepath, symbolName, newCode } = functionCall.args;
-                    
-                    // Bug Fix: Strip markdown backticks injected by LLM before replacing AST
-                    newCode = newCode.replace(/^```[a-zA-Z]*\r?\n/, '').replace(/\r?\n```$/, '');
-                    
-                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                    if (!safeCheck.safe) return safeCheck.error || `Invalid path: ${filepath}`;
-                    const fullPath = safeCheck.resolvedPath;
-                    if (!fs.existsSync(fullPath)) return `File not found: ${filepath}`;
-                    try {
-                        const uri = vscode.Uri.file(fullPath);
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        const symbols: vscode.DocumentSymbol[] | undefined = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
-                        
-                        const findSymbol = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
-                            for (const s of syms) {
-                                if (s.name === symbolName) return s;
-                                if (s.children) { const c = findSymbol(s.children); if (c) return c; }
-                            }
-                        };
-                        const target = symbols ? findSymbol(symbols) : undefined;
-                        if (!target) return `Symbol ${symbolName} not found in ${filepath}. Make sure you provide the exact function/class name.`;
-                        
-                        const edit = new vscode.WorkspaceEdit();
-                        edit.replace(uri, target.range, newCode);
-                        
-                        this.conversationHistory.addFileBackupToLatestMessage(fullPath, doc.getText());
-                        await vscode.workspace.applyEdit(edit);
-                        this.filesModifiedSinceLastCommand = true;
-                        this.lastReadFiles.clear();
-                        return `Successfully replaced ${symbolName} in ${filepath} using AST boundaries.`;
-                    } catch (e: any) { return `AST Patching Error: ${e.message}`; }
-                } else if (functionCall.name === 'generate_ui_blueprint') {
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🎨 Generating Brand DNA & UI Blueprint...` });
-                    try {
-                        const args = functionCall.args as DesignSemantics;
-                        const dna = extractBrandDNA(args);
-                        const assets = orchestrateAssets(args);
-                        
-                        const result = `
-### BRAND DNA EXTRACTED LOCALLY
-Use these exact variables, colors, fonts, and assets in your code. DO NOT invent new colors or use broken image links.
-
-**CSS Variables (Inject into your styles):**
-${dna.cssVars}
-
-**Inline Logo SVG:**
-${dna.logoSVG}
-
-**Pre-Orchestrated Assets (Use these exact URLs in your <img> tags):**
-${JSON.stringify(assets, null, 2)}
-
-**Spacing Strategy:** ${dna.spacing},
-**Border Radius:** ${dna.borderRadius}
-`;
-                        return result;
-                    } catch (e: any) { return `Blueprint Generation Error: ${e.message}`; }
-                } else if (functionCall.name === 'search_web') {
-                    const query = functionCall.args?.query;
-                    if (!query) return "Error: No query provided.";
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'search_web',
-                        title: 'Web Search',
-                        data: { query: query }
-                    });
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🌐 AI Web Search: ${query}` });
-                    try {
-                        const { searchWeb } = require('../tools/scraper');
-                        const results = await searchWeb(query);
-                        const urls: string[] = [];
-                        const urlMatches = results.matchAll(/\[Source \d+\] (http[^\n]+)/g);
-                        for (const u of urlMatches) {
-                            try { urls.push(`[Source: ${new URL(u[1]).hostname}](${u[1]})`); } catch { /* ignore */ }
-                        }
-                        if (urls.length > 0) {
-                            this.postMessageToWebview({
-                                command: 'streamChunk',
-                                text: `*🌐 Web Sources:* ${urls.join(' | ')}\n\n---\n\n`,
-                                done: false
-                            });
-                        }
-                        return results;
-                    } catch (e: any) {
-                        return `Web Search Error: ${e.message}`;
-                    }
-
-                } else if (functionCall.name === 'execute_terminal_command') {
-                    const rawCmd = (functionCall.args?.command || '').trim();
-                    // Strip leading prompt symbols ($ / > / #) that LLMs often copy from bash snippets
-                    const cmd = rawCmd.replace(/^[\$#>]\s*/, '').trim();
-                    const explanation = functionCall.args?.explanation || 'AI requested terminal execution';
-                    if (!cmd) return 'Error: No command provided to execute_terminal_command.';
-
-                    // Guard: Circuit breaker for repeated failing commands without code changes
-                    if (this.lastFailedCommand && this.lastFailedCommand === cmd && !this.filesModifiedSinceLastCommand) {
-                        return `[REPEAT FAILED COMMAND BLOCKED]: The command '${cmd}' already failed. Repeating the same failing command without modifying any files or resolving the error is blocked to prevent execution loops. Please inspect the error traceback, read the relevant files with read_multiple_files, or apply fixes before re-testing.`;
-                    }
-
-                    // Guard: Block interactive REPLs (like python manage.py shell, bare python, bare node) that hang waiting for stdin
-                    if (/\bmanage\.py\s+shell\b/i.test(cmd)) {
-                        return `[INTERACTIVE REPL BLOCKED]: 'python manage.py shell' opens an interactive Python prompt which cannot be automated. To safely verify your Django configuration, models, and imports without hanging, run 'python manage.py check'.`;
-                    }
-                    if (/^(python\d?|node|bash|sh|cmd|powershell)\s*$/i.test(cmd)) {
-                        return `[INTERACTIVE REPL BLOCKED]: '${cmd}' opens an interactive shell which hangs waiting for manual user input. Execute specific non-interactive scripts or commands instead.`;
-                    }
-
-                    // Guard: If manage.py is called, verify if it exists in workspace root or subfolder
-                    if (/\bmanage\.py\b/i.test(cmd) && workspaceRoot) {
-                        const rootManage = path.join(workspaceRoot, 'manage.py');
-                        if (!fs.existsSync(rootManage)) {
-                            // Search if manage.py exists in any subdirectory (e.g. backend/manage.py)
-                            const findManagePy = (d: string, depth = 0): string | null => {
-                                if (depth > 3) return null;
-                                try {
-                                    const entries = fs.readdirSync(d, { withFileTypes: true });
-                                    for (const e of entries) {
-                                        if (e.isDirectory() && !['node_modules', '.git', '.venv', 'venv', '__pycache__'].includes(e.name)) {
-                                            const sub = path.join(d, e.name);
-                                            if (fs.existsSync(path.join(sub, 'manage.py'))) {
-                                                return path.relative(workspaceRoot, path.join(sub, 'manage.py')).replace(/\\/g, '/');
-                                            }
-                                            const res = findManagePy(sub, depth + 1);
-                                            if (res) return res;
-                                        }
-                                    }
-                                } catch {}
-                                return null;
-                            };
-                            const subManage = findManagePy(workspaceRoot);
-                            if (subManage) {
-                                return `[MANAGE.PY SUBDIRECTORY]: 'manage.py' is located at '${subManage}', not in the workspace root. To run Django commands, execute: 'python ${subManage} ${cmd.replace(/.*manage\.py\s*/, '')}'`;
-                            } else {
-                                return `[FILE NOT FOUND]: 'manage.py' does not exist in this workspace. Call list_directory_tree to inspect the real project structure and package manifests before running framework commands.`;
-                            }
-                        }
-                    }
-
-                    // Scaffolding Guard: Block destructive CLI generators in existing projects
-                    if (this.currentTaskState?.mode === 'existing') {
-                        const isScaffold = /^(npx\s+|npm\s+|pnpm\s+|yarn\s+)?(create-|create\s+|init\s+)|django-admin\s+startproject|flutter\s+create|cargo\s+new|vue\s+create|ng\s+new/i.test(cmd);
-                        if (isScaffold) {
-                            return `[SCAFFOLDING GUARD BLOCKED]: Workspace already has existing source files (EXISTING project). Running CLI scaffold generator '${cmd}' is blocked to prevent wiping or corrupting existing files. Instead, audit the existing structure, create missing files with write_file, or install packages with install commands.`;
-                        }
-                    }
-
-                    const isDaemon = TerminalCapture.isDaemonCommand(cmd);
-                    if (isDaemon) {
-                        this.handleRunInTerminal(cmd);
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `🚀 Background dev server started: ${cmd}`
-                        });
-                        return `[DEV SERVER STARTED]\nCommand '${cmd}' has been launched in the background terminal.\nYou can use 'check_localhost_health' to verify if the server is responding, and inform the user of the live URL.`;
-                    }
-
-                    if (this.isTerminalSessionAutoApproved) {
-                        const autoCallId = 'cmd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-                        this.postMessageToWebview({
-                            command: 'toolCallEvent',
-                            tool: 'execute_terminal_command',
-                            title: 'Terminal Command (Session Auto-Approved)',
-                            data: { command: cmd, explanation: explanation, callId: autoCallId, isAutoApproved: true }
-                        });
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: `⚡ Auto-running: ${cmd}...`
-                        });
-                        const targetRoot = workspaceRoot || this._workspaceRoot || '';
-                        const res = await TerminalCapture.runAndCapture(cmd, targetRoot);
-                        if (targetRoot) {
-                            SessionMemory.recordCommand(targetRoot, cmd, !res.error);
-                        }
-                        if (res.error) {
-                            this.lastFailedCommand = cmd;
-                            this.filesModifiedSinceLastCommand = false;
-                        } else {
-                            this.lastFailedCommand = null;
-                        }
-                        this.postMessageToWebview({
-                            command: 'terminalCommandCompleted',
-                            callId: autoCallId,
-                            exitCode: res.exitCode,
-                            error: res.error,
-                            output: res.output,
-                            commandText: cmd
-                        });
-                        this.postMessageToWebview({
-                            command: 'statusUpdate',
-                            text: res.error ? `⚠️ Command finished (Exit Code: ${res.exitCode})` : `✅ Command completed (Exit Code: 0)`
-                        });
-                        return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'} - Exit Code: ${res.exitCode}]\nCommand: \`${cmd}\`\nOutput:\n\`\`\`\n${res.output || '(No output)'}\n\`\`\`\nNext step: ${res.error ? 'Analyze this error traceback and provide the exact fix.' : 'If you just scaffolded a project or app, use list_directory_tree to verify the disk layout before editing files.'}`;
-                    }
-
-                    // Interactive approval requested: post card to webview and await user response
-                    const callId = 'cmd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'execute_terminal_command',
-                        title: 'Terminal Command Requested',
-                        data: { command: cmd, explanation: explanation, callId: callId }
-                    });
-
-                    return await new Promise<string>((resolve) => {
-                        const timer = setTimeout(() => {
-                            if (this.pendingTerminalResolvers.has(callId)) {
-                                this.pendingTerminalResolvers.delete(callId);
-                                resolve(`[COMMAND TIMEOUT]\nTerminal command '${cmd}' execution timed out waiting for user confirmation.`);
-                            }
-                        }, 180000);
-
-                        this.pendingTerminalResolvers.set(callId, (result: string) => {
-                            clearTimeout(timer);
-                            resolve(result);
-                        });
-                    });
-
-                } else if (functionCall.name === 'research_web_docs') {
-                    const query = functionCall.args?.query || 'Documentation';
-                    const urls = functionCall.args?.urls || [];
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'research_web_docs',
-                        title: 'Deep Doc Research',
-                        data: { query: query }
-                    });
-                    const { researchWebDocs } = require('../tools/scraper');
-                    return await researchWebDocs(query, urls, workspaceRoot || '');
-
-                } else if (functionCall.name === 'list_directory_tree') {
-                    const dir = functionCall.args?.dir || '.';
-                    const depth = functionCall.args?.depth || 2;
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'list_directory_tree',
-                        title: 'Directory Tree',
-                        data: { dir: dir, depth: depth }
-                    });
-                    return await ToolRegistry.executeTool('list_directory_tree', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
-
-                } else if (functionCall.name === 'get_code_diagnostics') {
-                    const filepath = functionCall.args?.filepath;
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'get_code_diagnostics',
-                        title: 'LSP Compiler Diagnostics',
-                        data: { filepath: filepath || 'Workspace' }
-                    });
-                    return await ToolRegistry.executeTool('get_code_diagnostics', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
-
-                } else if (functionCall.name === 'get_symbol_outline') {
-                    const filepath = functionCall.args?.filepath;
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'get_symbol_outline',
-                        title: 'AST Symbol Outline',
-                        data: { filepath: filepath }
-                    });
-                    return await ToolRegistry.executeTool('get_symbol_outline', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
-
-                } else if (functionCall.name === 'check_localhost_health') {
-                    const port = functionCall.args?.port || 3000;
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'check_localhost_health',
-                        title: 'Checking Dev Server Health',
-                        data: { port: port }
-                    });
-                    return await ToolRegistry.executeTool('check_localhost_health', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
-
-                } else if (functionCall.name === 'replace_symbol') {
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'replace_symbol',
-                        title: 'Surgical Symbol Edit',
-                        data: { filepath: functionCall.args?.filepath, symbol: functionCall.args?.symbolName }
-                    });
-                    return await ToolRegistry.executeTool('replace_symbol', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
-
-                } else if (functionCall.name === 'write_file') {
-                    if (!workspaceRoot) return "Error: No workspace open.";
-                    const filepath = functionCall.args?.filepath;
-                    let content = functionCall.args?.content;
-                    if (!filepath || content === undefined) return "Error: write_file requires filepath and content.";
-
-                    content = content.replace(/^```[a-zA-Z]*\r?\n/, '').replace(/\r?\n```$/, '');
-
-                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                    if (!safeCheck.safe) return safeCheck.error || `Invalid path: ${filepath}`;
-                    const fullPath = safeCheck.resolvedPath;
-
-                    const fileAlreadyExists = fs.existsSync(fullPath);
-                    if (fileAlreadyExists) {
-                        const normalizedKey = filepath.trim().replace(/\\/g, '/');
-                        const wasRead = readFilesThisTurn.has(normalizedKey) || this.recentFilesTouched.has(filepath);
-                        if (!wasRead) {
-                            return `Guard Rejection: '${filepath}' already exists on disk. You must inspect it first with read_multiple_files before overwriting, or use edit_file / replace_symbol for surgical changes.`;
-                        }
-                    }
-
-                    const parentDir = path.dirname(fullPath);
-                    if (!fs.existsSync(parentDir)) {
-                        fs.mkdirSync(parentDir, { recursive: true });
-                    }
-
-                    if (fileAlreadyExists) {
-                        try {
-                            const oldContent = fs.readFileSync(fullPath, 'utf8');
-                            FileVersioning.saveSnapshot(workspaceRoot, fullPath, oldContent);
-                        } catch {}
-                    }
-
-                    fs.writeFileSync(fullPath, content, 'utf8');
-                    SessionMemory.recordFileApplied(workspaceRoot, filepath, content);
-                    this.filesModifiedSinceLastCommand = true;
-                    this.lastReadFiles.clear();
-
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'write_file',
-                        title: fileAlreadyExists ? 'Updated File' : 'Created File',
-                        data: { filepath, length: content.length }
-                    });
-
-                    return `Successfully wrote file: ${filepath} (${content.length} characters).`;
-
-                } else if (functionCall.name === 'edit_file') {
-                    if (!workspaceRoot) return "Error: No workspace open.";
-                    const filepath = functionCall.args?.filepath;
-                    const oldText = functionCall.args?.old_text ?? functionCall.args?.oldText;
-                    const newText = functionCall.args?.new_text ?? functionCall.args?.newText;
-                    if (!filepath || oldText === undefined || newText === undefined) {
-                        return "Error: edit_file requires filepath, old_text, and new_text.";
-                    }
-
-                    const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                    if (!safeCheck.safe) return safeCheck.error || `Invalid path: ${filepath}`;
-                    const fullPath = safeCheck.resolvedPath;
-
-                    if (!fs.existsSync(fullPath)) {
-                        return `Error: File not found: ${filepath}. Use write_file to create new files.`;
-                    }
-
-                    let fileContent = fs.readFileSync(fullPath, 'utf8');
-                    if (fileContent.includes(oldText)) {
-                        FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
-                        fileContent = fileContent.replace(oldText, newText);
-                        fs.writeFileSync(fullPath, fileContent, 'utf8');
-                        SessionMemory.recordFileApplied(workspaceRoot, filepath, fileContent);
-                        this.filesModifiedSinceLastCommand = true;
-                        this.lastReadFiles.clear();
-                        this.postMessageToWebview({
-                            command: 'toolCallEvent',
-                            tool: 'edit_file',
-                            title: 'Edited File',
-                            data: {
-                                filepath,
-                                oldText: oldText.length > 80 ? oldText.substring(0, 80) + '...' : oldText,
-                                newText: newText.length > 80 ? newText.substring(0, 80) + '...' : newText
-                            }
-                        });
-                        return `Successfully edited ${filepath}.`;
-                    }
-
-                    const normOld = oldText.replace(/\r\n/g, '\n').trim();
-                    const normContent = fileContent.replace(/\r\n/g, '\n');
-                    if (normContent.includes(normOld)) {
-                        FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
-                        const updated = normContent.replace(normOld, newText.replace(/\r\n/g, '\n'));
-                        fs.writeFileSync(fullPath, updated, 'utf8');
-                        SessionMemory.recordFileApplied(workspaceRoot, filepath, updated);
-                        this.filesModifiedSinceLastCommand = true;
-                        this.lastReadFiles.clear();
-                        this.postMessageToWebview({
-                            command: 'toolCallEvent',
-                            tool: 'edit_file',
-                            title: 'Edited File (Normalized)',
-                            data: {
-                                filepath,
-                                oldText: normOld.length > 80 ? normOld.substring(0, 80) + '...' : normOld,
-                                newText: newText.length > 80 ? newText.substring(0, 80) + '...' : newText
-                            }
-                        });
-                        return `Successfully edited ${filepath} (matched with normalized whitespace).`;
-                    }
-
-                    // Step 3: Line-by-line whitespace-tolerant matching for small LLMs
-                    const contentLines = fileContent.split(/\r?\n/);
-                    const rawOldLines = oldText.split(/\r?\n/);
-                    while (rawOldLines.length > 0 && rawOldLines[0].trim() === '') rawOldLines.shift();
-                    while (rawOldLines.length > 0 && rawOldLines[rawOldLines.length - 1].trim() === '') rawOldLines.pop();
-
-                    if (rawOldLines.length > 0) {
-                        const targetTrimmed = rawOldLines.map((l: string) => l.trim());
-                        let matchStart = -1;
-                        for (let i = 0; i <= contentLines.length - targetTrimmed.length; i++) {
-                            let match = true;
-                            for (let j = 0; j < targetTrimmed.length; j++) {
-                                if (contentLines[i + j].trim() !== targetTrimmed[j]) {
-                                    match = false;
-                                    break;
-                                }
-                            }
-                            if (match) {
-                                matchStart = i;
-                                break;
-                            }
-                        }
-
-                        if (matchStart !== -1) {
-                            FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
-                            const leadingIndent = contentLines[matchStart].match(/^\s*/)?.[0] || '';
-                            const newLines = newText.split(/\r?\n/).map((l: string, idx: number) => {
-                                if (idx === 0 && l.startsWith(leadingIndent)) return l;
-                                if (idx === 0 && !l.startsWith(' ') && !l.startsWith('\t')) return leadingIndent + l;
-                                return l;
-                            });
-                            contentLines.splice(matchStart, targetTrimmed.length, ...newLines);
-                            const updated = contentLines.join('\n');
-                            fs.writeFileSync(fullPath, updated, 'utf8');
-                            SessionMemory.recordFileApplied(workspaceRoot, filepath, updated);
-                            this.filesModifiedSinceLastCommand = true;
-                            this.lastReadFiles.clear();
-                            this.postMessageToWebview({
-                                command: 'toolCallEvent',
-                                tool: 'edit_file',
-                                title: 'Edited File (Line-Matched)',
-                                data: {
-                                    filepath,
-                                    oldText: targetTrimmed.slice(0, 3).join(' '),
-                                    newText: newLines.slice(0, 3).join(' ')
-                                }
-                            });
-                            return `Successfully edited ${filepath} (matched lines with whitespace tolerance).`;
-                        }
-                    }
-
-                    return `edit_file failed: Could not find matching old_text in ${filepath}. Tip: For functions or classes, use replace_symbol which is AST-aware and doesn't require exact text matching.`;
-
-                } else if (functionCall.name === 'plan_set') {
-                    const goal = functionCall.args?.goal || '';
-                    const steps = functionCall.args?.steps || [];
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'plan_set',
-                        title: 'Setting Execution Plan',
-                        data: { goal, stepCount: steps.length }
-                    });
-                    const res = this.taskPlanner.setPlan(goal, steps);
-                    if (this.currentTaskState) {
-                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
-                        this.currentTaskState.phase = 'execute';
-                    }
-                    return res;
-
-                } else if (functionCall.name === 'plan_update') {
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'plan_update',
-                        title: 'Updating Execution Plan',
-                        data: functionCall.args || {}
-                    });
-                    const res = this.taskPlanner.updatePlan(functionCall.args || {});
-                    if (this.currentTaskState) {
-                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
-                        if (this.currentTaskState.event === 'user_pivot') {
-                            this.currentTaskState.event = 'none';
-                            this.currentTaskState.pivotText = undefined;
-                        }
-                        const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
-                        if (!hasUndone) {
-                            this.currentTaskState.phase = 'verify';
-                        }
-                    }
-                    return res;
-
-                } else if (functionCall.name === 'plan_done') {
-                    const note = functionCall.args?.note;
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'plan_done',
-                        title: 'Step Completed',
-                        data: { note }
-                    });
-                    const res = this.taskPlanner.markCurrentDone(note);
-                    if (this.currentTaskState) {
-                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
-                        const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
-                        if (!hasUndone) {
-                            this.currentTaskState.phase = 'verify';
-                        }
-                    }
-                    return res;
-
-                } else if (functionCall.name === 'capture_localhost_preview') {
-                    const url = functionCall.args?.url || 'http://localhost:3000';
-                    this.postMessageToWebview({
-                        command: 'toolCallEvent',
-                        tool: 'capture_localhost_preview',
-                        title: 'Capturing Local Preview',
-                        data: { url }
-                    });
-                    return await ToolRegistry.executeTool('capture_localhost_preview', JSON.stringify(functionCall.args || {}), workspaceRoot || '');
-                }
-                return `Unknown tool: ${functionCall.name}`;
-            };
+            const turnExecutedToolCards: Array<{ tool: string; title: string; data: any }> = [];
 
             const onToolCall = async (functionCall: any) => {
-                const toolName = functionCall?.name || 'unknown';
-                const toolArgs = functionCall?.args || {};
-                const argsSummary = JSON.stringify(toolArgs).substring(0, 150);
-                const touched = toolArgs.filepath || toolArgs.path || (Array.isArray(toolArgs.filepaths) ? toolArgs.filepaths[0] : null);
-                if (touched && typeof touched === 'string') {
-                    this.recentFilesTouched.add(touched);
-                }
-
-                try {
-                    const res = await rawOnToolCall(functionCall);
-                    const resStr = typeof res === 'string' ? res : JSON.stringify(res || '');
-                    this.lastToolResultText = resStr.substring(0, 300);
-                    this.lastToolErrorText = undefined;
-                    executedToolActions.push(`Called ${toolName}(${argsSummary}) -> ${resStr.substring(0, 150)}`);
-                    
-                    // Notify in-memory task planner of tool event
-                    this.taskPlanner.onToolEvent({
-                        tool: toolName,
-                        ok: true,
-                        filepath: typeof touched === 'string' ? touched : undefined,
-                        command: toolArgs.command
-                    });
-
-                    if (this.currentTaskState) {
-                        this.currentTaskState.lastResult = resStr.substring(0, 1500);
-                        this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
-                        const hasUndone = this.currentTaskState.plan.some(s => !s.done && !s.dropped);
-                        if (this.currentTaskState.plan.length > 0 && !hasUndone) {
-                            this.currentTaskState.phase = 'verify';
+                return await ToolDispatcher.dispatch(functionCall, {
+                    workspaceRoot: workspaceRoot || '',
+                    postMessage: (msg) => {
+                        if (msg.command === 'toolCallEvent') {
+                            turnExecutedToolCards.push({ tool: msg.tool, title: msg.title, data: msg.data });
                         }
-                    }
-
-                    return res;
-                } catch (err: any) {
-                    const errStr = err?.message || String(err);
-                    this.lastToolErrorText = errStr;
-                    executedToolActions.push(`Called ${toolName}(${argsSummary}) -> ERROR: ${errStr.substring(0, 150)}`);
-                    this.taskPlanner.onToolEvent({
-                        tool: toolName,
-                        ok: false,
-                        filepath: typeof touched === 'string' ? touched : undefined,
-                        command: toolArgs.command
-                    });
-                    if (this.currentTaskState) {
-                        this.currentTaskState.lastResult = `ERROR: ${errStr.substring(0, 1500)}`;
-                    }
-                    throw err;
-                }
+                        this.postMessageToWebview(msg);
+                    },
+                    signal: this.currentAbortController?.signal,
+                    isEditSessionAutoApproved: this.isEditSessionAutoApproved,
+                    isTerminalSessionAutoApproved: this.isTerminalSessionAutoApproved,
+                    pendingTerminalResolvers: this.pendingTerminalResolvers,
+                    taskPlanner: this.taskPlanner,
+                    currentTaskState: this.currentTaskState,
+                    ragEngine: this.ragEngine
+                });
             };
 
-            // Stream response
-            let result: any;
-            if (typeof client.completeWithHistory === 'function') {
-                result = await client.completeWithHistory(
-                    systemInstruction,
-                    historyWithoutLast,
-                    finalPrompt,
-                    true, // stream
-                    (chunk: any) => {
+            let currentTurnBuffer = '';
+            const detectedToolCalls: any[] = [];
+
+            const result = await mainClient.completeWithHistory(
+                systemInstruction,
+                historyWithoutLast,
+                finalPrompt,
+                true,
+                (chunk: any) => {
+                    if (this.currentAbortController?.signal?.aborted) return;
+
+                    if (chunk.text) {
+                        currentTurnBuffer += chunk.text;
+                        // Forward thinking/reasoning text to UI
                         this.postMessageToWebview({
-                            command: 'streamChunk',
-                            text: chunk.text,
-                            done: chunk.done,
-                            usage: chunk.usage
+                            command: 'thinkingChunk',
+                            text: chunk.text
                         });
-                    },
-                    this.currentStreamAbortController?.signal,
-                    filteredTools,
-                    onToolCall
-                );
-            }
-
-            this.currentStreamAbortController = null;
-
-            if (!result) return; // Guard for clients not implementing completeWithHistory completely
-
-            if (executedToolActions.length > 0) {
-                this.consecutiveNoToolTurns = 0;
-            } else {
-                this.consecutiveNoToolTurns++;
-            }
-
-            // Strip <think> tags robustly before saving to history to prevent context pollution
-            let cleanResponseText = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '').trim();
-            if (executedToolActions.length > 0) {
-                const actionsBlock = `\n\n[Agent Actions Taken]:\n${executedToolActions.map(a => '- ' + a).join('\n')}`;
-                cleanResponseText = cleanResponseText ? (cleanResponseText + '\n' + actionsBlock) : actionsBlock;
-            }
-            this.conversationHistory.addMessage('model', cleanResponseText, result.usage);
-
-            // Job 2: Session Summarizer & Long-term Memory updater
-            if (workspaceRoot) {
-                const config = getAgentConfig(workspaceRoot);
-                const brainForSummary = config?.supportBrain?.model ? config.supportBrain : (config?.mainBrain?.model ? config.mainBrain : null);
-                (async () => {
-                    try {
-                        let recorded = false;
-                        if (brainForSummary && brainForSummary.model && brainForSummary.apiKey) {
-                            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-                            let scoutClient;
-                            if (brainForSummary.providerType === 'local') {
-                                scoutClient = new LocalOllamaClient(brainForSummary.model || 'llama-3.1-8b-instant', brainForSummary.endpoint || 'http://127.0.0.1:11434', brainForSummary.apiKey);
-                            } else {
-                                const keyStr = brainForSummary.apiKey?.trim() || '';
-                                if (keyStr.startsWith('gsk_')) scoutClient = new LocalOllamaClient(brainForSummary.model, 'https://api.groq.com/openai', keyStr);
-                                else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) scoutClient = new LocalOllamaClient(brainForSummary.model, 'https://api.openai.com', keyStr);
-                                else scoutClient = new GeminiCloudClient([keyStr], brainForSummary.model || 'gemini-1.5-flash', 60);
-                            }
-                            const summaryPrompt = `Summarize this AI coding response in exactly 1 sentence (max 20 words). Focus on: what file was changed, what was added/fixed.\n\nResponse:\n${cleanResponseText.substring(0, 1000)}`;
-                            const summaryResult = await scoutClient.complete(summaryPrompt);
-                            if (summaryResult && summaryResult.text) {
-                                SessionMemory.recordDecision(workspaceRoot, summaryResult.text.trim());
-                                recorded = true;
-                            }
-                        }
-                        if (!recorded) {
-                            // High-speed heuristic summary without API call
-                            const firstLine = message.text ? message.text.trim().split('\n')[0] : '';
-                            if (firstLine && firstLine.length > 5) {
-                                SessionMemory.recordDecision(workspaceRoot, `Task: ${firstLine.substring(0, 80)}`);
-                            }
-                        }
-                    } catch (e) {
-                        console.error("Session Summarizer failed", e);
                     }
-                })();
+                    if (chunk.tool_calls && chunk.tool_calls.length > 0) {
+                        detectedToolCalls.push(...chunk.tool_calls);
+                    }
+                },
+                this.currentAbortController?.signal,
+                tools,
+                onToolCall
+            );
+
+            this.currentAbortController = null;
+
+            // TurnGate Resolution
+            if (detectedToolCalls.length === 0) {
+                // Fallback: check if tool call is wrapped inside markdown/json text
+                const jsonMatch = currentTurnBuffer.match(/```json\s*([\s\S]*?)\s*```/) || currentTurnBuffer.match(/(\{[\s\S]*"name"\s*:\s*".*?"[\s\S]*\})/);
+                if (jsonMatch) {
+                    try {
+                        const parsed = JSON.parse(jsonMatch[1]);
+                        if (parsed.name) detectedToolCalls.push(parsed);
+                    } catch {}
+                }
             }
 
-            // Conversational execution complete
+            // If finish tool called or pure conversational response
+            const finishCall = detectedToolCalls.find(t => t.name === 'finish');
+            if (finishCall) {
+                const summary = finishCall.args?.summary || finishCall.arguments?.summary || 'Task completed successfully.';
+                // Sanitize any remaining code fences from summary
+                const cleanSummary = summary.replace(/```[\s\S]*?(```|$)/g, '[Code changes applied to workspace files]');
+                this.postMessageToWebview({
+                    command: 'streamChunk',
+                    text: cleanSummary,
+                    done: true,
+                    usage: result?.usage
+                });
+                this.conversationHistory.addMessage('model', cleanSummary, result?.usage, turnExecutedToolCards);
+                this.currentAbortController = null;
+                return;
+            }
 
+            // TurnGate Resolution: Always ensure stream terminates cleanly
+            if (detectedToolCalls.length === 0) {
+                // If model just spoke text (even if it contains backticks or <think> tags)
+                // strip reasoning tags and deliver message
+                const cleanedText = currentTurnBuffer
+                    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                    .trim();
+
+                this.postMessageToWebview({
+                    command: 'streamChunk',
+                    text: cleanedText || 'Done.',
+                    done: true,
+                    usage: result?.usage
+                });
+                this.conversationHistory.addMessage('model', cleanedText || 'Done.', result?.usage, turnExecutedToolCards);
+                this.currentAbortController = null;
+                return;
+            }
+
+            if (result?.text) {
+                let clean = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '').trim();
+                if (!clean && result.text) {
+                    clean = result.text.replace(/<[^>]+>/g, '').trim();
+                }
+                this.postMessageToWebview({
+                    command: 'streamChunk',
+                    text: clean || 'Done.',
+                    done: true,
+                    usage: result.usage
+                });
+                this.conversationHistory.addMessage('model', clean || 'Done.', result.usage, turnExecutedToolCards);
+            }
         } catch (error: any) {
-            this.currentStreamAbortController = null;
-            this.postMessageToWebview({
-                command: 'streamChunk',
-                text: `\n\nError: ${error?.message || error}`,
-                done: true
-            });
+            const wasAborted = this.currentAbortController?.signal?.aborted || error?.message?.includes('aborted');
+            this.currentAbortController = null;
+            if (!wasAborted) {
+                this.postMessageToWebview({
+                    command: 'streamChunk',
+                    text: `\n\nError: ${error?.message || error}`,
+                    done: true
+                });
+            }
         }
     }
 
-    /**
-     * Builds the final user prompt with context injection (@search, @file, @workspace, active file).
-     */
-    private async buildPrompt(text: string, includeActiveFile: boolean, includeWebSearch: boolean, includeWorkspace: boolean, workspaceRoot?: string): Promise<string> {
+    private async buildPrompt(text: string, workspaceRoot?: string): Promise<string> {
         let finalPrompt = text;
         let contextSources: ContextSource[] = [];
 
-        // Error Diagnosis Engine
         if (workspaceRoot) {
-            const errorTextToAnalyze = finalPrompt + '\n' + TerminalCapture.getLastOutput();
-            const errorContexts = ErrorDiagnoser.extractErrors(errorTextToAnalyze, workspaceRoot);
-            
+            const errorContexts = ErrorDiagnoser.extractErrors(finalPrompt + '\n' + TerminalCapture.getLastOutput(), workspaceRoot);
             if (errorContexts.length > 0) {
-                let diagStr = '### ERROR DIAGNOSTICS (Source Snippets) ###\n';
-                for (const ctx of errorContexts) {
-                    diagStr += `\n${ctx.codeSnippet}\n`;
-                }
+                let diagStr = '### ERROR DIAGNOSTICS ###\n' + errorContexts.map(c => c.codeSnippet).join('\n');
                 contextSources.push({ name: 'Error Diagnostics', content: diagStr, priority: 9 });
-                
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🐛 Error Diagnoser: Auto-extracted ${errorContexts.length} source file context(s).`
-                });
             }
         }
 
-        // Handle @terminal mention — inject last captured terminal output
-        if (text.toLowerCase().includes('@terminal')) {
-            const termOutput = TerminalCapture.getLastOutput();
-            if (termOutput) {
-                contextSources.push({ name: 'Last Terminal Output', content: termOutput, priority: 8 });
-                this.postMessageToWebview({ command: 'statusUpdate', text: `🖥️ Injected @terminal output.` });
-            } else {
-                this.postMessageToWebview({ command: 'statusUpdate', text: `🖥️ @terminal requested, but no active terminal output recorded yet.` });
-            }
-            finalPrompt = finalPrompt.replace(/@terminal/gi, '').trim();
-        }
-
-        // Handle @git mention — inject uncommitted git diffs
-        if (text.toLowerCase().includes('@git') && workspaceRoot) {
-            try {
-                const { execSync } = require('child_process');
-                const gitDiff = execSync('git diff HEAD', { cwd: workspaceRoot, encoding: 'utf8', timeout: 5000 });
-                if (gitDiff && gitDiff.trim()) {
-                    contextSources.push({ name: 'Uncommitted Git Diff', content: `\`\`\`diff\n${gitDiff.slice(0, 4000)}\n\`\`\``, priority: 8 });
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🌿 Injected @git diff context.` });
-                } else {
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🌿 @git: Workspace clean, no uncommitted diffs found.` });
-                }
-            } catch (e) {
-                this.postMessageToWebview({ command: 'statusUpdate', text: `🌿 @git: Unable to run git diff or git not initialized.` });
-            }
-            finalPrompt = finalPrompt.replace(/@git/gi, '').trim();
-        }
-
-        // Handle @search directive or UI toggle
-        if (includeWebSearch || text.toLowerCase().includes('@search')) {
-            const { searchWeb } = require('../tools/scraper');
-            
-            let query = '';
-            const searchMatch = text.match(/@search\s+(.+?)(?:\s*$|\s+@)/i);
-            if (searchMatch && searchMatch[1]) {
-                query = searchMatch[1].trim();
-                finalPrompt = text.replace(/@search\s+.+?(?:\s*$|\s+@)/i, '').trim() || text;
-            } else if (includeWebSearch) {
-                // Heuristic for UI toggle
-                query = text.length > 100 ? text.substring(0, 100) : text;
-            }
-
-            if (query) {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🔍 Web Search: ${query.substring(0, 30)}...`
-                });
-                
-                let enhancedQuery = query;
-                
-                const searchResults = await searchWeb(enhancedQuery);
-                contextSources.push({ name: 'Web Search Results', content: searchResults, priority: 8 });
-                
-                // Prepend sources to the chat response so user can click them
-                const urls: string[] = [];
-                const urlMatches = searchResults.matchAll(/\[Source \d+\] (http[^\n]+)/g);
-                for (const u of urlMatches) {
-                    try { urls.push(`[Source: ${new URL(u[1]).hostname}](${u[1]})`); } catch { /* ignore */ }
-                }
-                
-                if (urls.length > 0) {
-                    this.postMessageToWebview({
-                        command: 'streamChunk',
-                        text: `*🌐 Web Sources:* ${urls.join(' | ')}\n\n---\n\n`,
-                        done: false
-                    });
-                }
-                
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🌐 Web context injected.`
-                });
-            }
-        }
-
-        // Handle @file directive — include specific file contents (supports quoted paths)
-        const fileMatches = text.matchAll(/@file\s+(?:"([^"]+)"|([^\s@]+))/gi);
-        let hasFileMatch = false;
-        for (const match of fileMatches) {
-            hasFileMatch = true;
-            const filePath = match[1] || match[2];
-            try {
-                const resolvedPath = workspaceRoot 
-                    ? path.resolve(workspaceRoot, filePath)
-                    : filePath;
-                
-                if (!fs.existsSync(resolvedPath)) continue;
-
-                const content = fs.readFileSync(resolvedPath, 'utf8');
-                const ext = path.extname(resolvedPath).slice(1) || 'text';
-                let fileContentForContext = content;
-                const tokenCount = estimateTokens(content);
-
-                if (tokenCount > 1500) { // Skeletonize large files
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `🦴 Skeletonizing ${filePath}...` });
-                    try {
-                        fileContentForContext = await skeletonizeFile(vscode.Uri.file(resolvedPath));
-                    } catch (e) {
-                        console.error(`Skeletonization failed for ${filePath}`, e);
-                        fileContentForContext = truncateToTokens(content, 1500);
-                    }
-                }
-
-                contextSources.push({ name: `File: ${filePath}`, content: `\`\`\`${ext}\n${fileContentForContext}\n\`\`\``, priority: 10 });
-                this.postMessageToWebview({ command: 'statusUpdate', text: `📄 Loaded file: ${filePath}` });
-
-            } catch (e) { console.error(`Error processing @file ${filePath}:`, e); }
-            finalPrompt = finalPrompt.replace(match[0], '').trim();
-        }
-
-        // Handle @workspace directive — include project structure + key files
-        const wantsWorkspace = includeWorkspace || text.toLowerCase().includes('@workspace') || 
-                               text.toLowerCase().includes('bird eye view') || 
-                               text.toLowerCase().includes("bird's eye view") ||
-                               text.toLowerCase().includes('project structure');
-
-        if (wantsWorkspace) {
-            if (workspaceRoot) {
-                try {
-                    const userIgnoreFolders = vscode.workspace.getConfiguration('ultraLightAI').get<string[]>('ignoreFolders') || [];
-                    const combinedIgnores = Array.from(new Set([...userIgnoreFolders, 'node_modules', '.git', 'dist', 'out', 'build', '.next', '.vscode', '.venv', 'venv', 'coverage', '__pycache__', '.ultra-light-ai']));
-                    const excludePattern = `{${combinedIgnores.map(f => `**/${f}/**`).join(',')},**/*.lock}`;
-                    const files = await vscode.workspace.findFiles(
-                        '**/*',
-                        excludePattern
-                    );
-                    const fileList = files.map(f => path.relative(workspaceRoot, f.fsPath)).sort();
-                    
-                    contextSources.push({ name: 'Workspace Structure', content: fileList.join('\n'), priority: 4 });
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `📂 Loaded workspace structure (${fileList.length} files)`
-                    });
-                } catch { /* skip */ }
-            }
-            finalPrompt = finalPrompt.replace(/@workspace/gi, '').trim();
-        }
-
-        // RAG Trigger: ONLY inject when user explicitly requests (@rag / @smart) or via search_codebase tool.
-        // Prevents prompt bloat and irrelevant background code dumping on new/scratch tasks.
-        const isExplicitRag = text.toLowerCase().includes('@rag') || text.toLowerCase().includes('@smart');
-        const wantsRag = isExplicitRag && !!this.ragEngine;
-        
-        if (wantsRag && this.ragEngine) {
-            try {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🧠 Semantic Search: Analyzing codebase on-demand...`
-                });
-                
-                let ragResults;
-                const ragCacheKey = workspaceRoot ? generateCacheKey('rag_search_manual', [], text) : null;
-                const rawCache = ragCacheKey ? checkCache(workspaceRoot!, ragCacheKey) : null;
-                
-                if (rawCache) {
-                    try { ragResults = JSON.parse(rawCache); } catch(e) {}
-                }
-                
-                if (ragResults) {
-                    this.postMessageToWebview({ command: 'statusUpdate', text: `⚡ RAG Cache Hit: Instant offline search!` });
-                } else {
-                    ragResults = await this.ragEngine.search(text, 3);
-                    if (ragCacheKey && ragResults && ragResults.length > 0) {
-                        saveCache(workspaceRoot!, ragCacheKey, JSON.stringify(ragResults));
-                    }
-                }
-
-                if (ragResults && ragResults.length > 0) {
-                    contextSources.push({ name: 'Semantic Codebase Context (@rag)', content: ragResults.map((r: any) => `File: ${r.filepath}\n\`\`\`\n${r.content}\n\`\`\``).join('\n\n'), priority: 7 });
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `🧠 Semantic Search: Loaded ${ragResults.length} relevant files.`
-                    });
-                }
-            } catch (err: any) {
-                console.error("RAG search failed", err);
-            }
-            finalPrompt = finalPrompt.replace(/@rag|@smart/gi, '').trim();
-        }
-
-        // LSP Symbol Resolution for True Codebase Context
-        if (workspaceRoot && text.length > 5) {
-            try {
-                // Use ContextSelector to only resolve symbols that are explicitly mentioned
-                const mentions = ContextSelector.extractExplicitMentions(text);
-                const potentialSymbols = mentions.symbols;
-
-                if (potentialSymbols.length > 0) {
-                    for (const sym of potentialSymbols) {
-                        try {
-                                    // Wrap in a strict 2-second timeout to prevent Extension Host lockups on large repos
-                                    const symbols: vscode.SymbolInformation[] | undefined = await Promise.race([
-                                        Promise.resolve(vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', sym)),
-                                        new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 2000))
-                                    ]);
-                            if (symbols && symbols.length > 0) {
-                                const topSymbols = symbols.slice(0, 2);
-                                for (const s of topSymbols) {
-                                    if (s.location.uri.fsPath.startsWith(workspaceRoot)) {
-                                        const relPath = path.relative(workspaceRoot, s.location.uri.fsPath);
-                                        if (!contextSources.some(p => p.name.includes(relPath))) {
-                                            const content = fs.readFileSync(s.location.uri.fsPath, 'utf8');
-                                            const lines = content.split('\n');
-                                            const startLine = Math.max(0, s.location.range.start.line - 10);
-                                            const endLine = Math.min(lines.length, s.location.range.end.line + 30);
-                                            const snippet = lines.slice(startLine, endLine).join('\n');
-                                            
-                                            contextSources.push({ name: `AST Symbol Context for \`${sym}\` in ${relPath}`, content: `\`\`\`\n// ...\n${snippet}\n// ...\n\`\`\``, priority: 6 });
-                                        }
-                                    }
-                                }
-                            }
-                        } catch { /* ignore LSP failures */ }
-                    }
-                }
-            } catch { /* ignore regex errors */ }
-        }
-
-        // Active file context injection using ContextSelector
         const editor = vscode.window.activeTextEditor;
         if (editor) {
             const doc = editor.document;
-            const fileName = path.basename(doc.fileName);
-            const langId = doc.languageId;
-            const fileContent = doc.getText();
-            
-            // BUG-14 FIX: Skip non-code files to avoid wasting token budget
-            const skipLanguages = ['plaintext', 'log', 'binary', 'json', 'xml', 'csv', 'svg', 'markdown'];
-            const skipExtensions = ['.lock', '.min.js', '.min.css', '.map', '.env'];
-            const ext = path.extname(doc.fileName).toLowerCase();
-            const isCodeFile = !skipLanguages.includes(langId) && !skipExtensions.some(e => ext === e);
-            
-            if (isCodeFile && ContextSelector.shouldInjectActiveFile(text, fileName, fileContent)) {
-                const selection = editor.selection;
-                
-                if (!selection.isEmpty) {
-                    // Include just the selection
-                    const selectedText = doc.getText(selection);
-                    contextSources.push({ name: `Selected code from ${fileName}`, content: `\`\`\`${langId}\n${selectedText}\n\`\`\``, priority: 9 });
-                } else {
-                    // Include the full file (truncated if too large)
-                    let fileContentForContext = fileContent;
-                    const tokenCount = estimateTokens(fileContentForContext);
-                    if (tokenCount > 1500) {
-                        this.postMessageToWebview({ command: 'statusUpdate', text: `🦴 Skeletonizing active file...` });
-                        try {
-                            fileContentForContext = await skeletonizeFile(doc.uri);
-                        } catch (e) {
-                            console.error(`Skeletonization failed for active file`, e);
-                            fileContentForContext = truncateToTokens(fileContentForContext, 1500);
-                        }
-                    }
-                    contextSources.push({ name: `Active file context: ${fileName}`, content: `\`\`\`${langId}\n${fileContentForContext}\n\`\`\``, priority: 5 });
-                }
-            }
-            finalPrompt = finalPrompt.replace(/@active|@current/gi, '').trim();
+            const content = doc.getText();
+            contextSources.push({
+                name: `Active file: ${path.basename(doc.fileName)}`,
+                content: `\`\`\`${doc.languageId}\n${estimateTokens(content) > 1500 ? truncateToTokens(content, 1500) : content}\n\`\`\``,
+                priority: 5
+            });
         }
-        const promptConfig = getAgentConfig(workspaceRoot);
-        const maxContextTokens = promptConfig?.contextLimits?.maxContextTokens || 7000;
-        
-        // Assemble final prompt with context
-        // Optimization for smaller models: Place Context BEFORE the User Request
-        // Smaller models (3B-7B) suffer from 'lost in the middle' and attend strongest to the end of the prompt.
+
         if (contextSources.length > 0) {
-            const userPromptTokens = estimateTokens(finalPrompt);
-            // Dynamic token accounting
-            const availableContextTokens = TokenAccountant.getRemainingBudget(
-                maxContextTokens,
-                this.conversationHistory.estimateTokens(),
-                userPromptTokens
-            );
-            
-            const allocated = allocateBudget(availableContextTokens, contextSources);
-            const totalUsed = allocated.reduce((sum, a) => sum + a.tokens, 0);
-            
-            // Real-time Token Warning Implementation
-            if (totalUsed >= availableContextTokens * 0.9) {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🚨 Warning: Context window is at ${Math.round((totalUsed / availableContextTokens) * 100)}% capacity.`
-                });
-            }
-            
-            let contextString = allocated.map(a => `--- ${a.name} ---\n${a.content}`).join('\n\n');
-            
-            const contextSummary = `CURRENT CONTEXT AVAILABLE TO YOU:
-- Sources loaded: ${allocated.length}
-- Included data: ${allocated.map(a => a.name).join(' | ')}
-
-RULES FOR USING CONTEXT:
-1. When using Search/Replace blocks, copy the EXACT code from the context provided below. Do NOT guess or paraphrase code.
-2. If you cannot see the required file content, ask the user to share it using @file "path/to/file" or use your read tools.
-3. For large changes, break them into multiple Search/Replace blocks.
-4. Always include the filepath header: **\`src/path/file.ext\`**\n\n`;
-
-            finalPrompt = `--- Context ---\n${contextSummary}${contextString}\n\n--- User Request ---\n${finalPrompt}`;
+            const allocated = allocateBudget(5000, contextSources);
+            const contextStr = allocated.map(a => `--- ${a.name} ---\n${a.content}`).join('\n\n');
+            finalPrompt = `--- Context ---\n${contextStr}\n\n--- User Request ---\n${finalPrompt}`;
         }
 
         return finalPrompt;
     }
 
-    /**
-     * Save settings to .agent-config.json
-     */
-    private async handleSaveSettings(message: any): Promise<void> {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showErrorMessage('No active workspace folder to save configuration.');
-            this.postMessageToWebview({
-                command: 'settingsSaved',
-                success: false,
-                error: 'No active workspace folder'
-            });
-            return;
-        }
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        
-        await SettingsHandler.handleSaveSettings(
-            message,
-            workspaceRoot,
-            (root) => this.getAiMetaDir(root),
-            (msg) => this.postMessageToWebview(msg)
-        );
-    }
-
-    /**
-     * Apply workspace edits — write multiple files to the workspace.
-     */
-    private async handleApplyWorkspaceEdits(message: any): Promise<void> {
-        try {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders || workspaceFolders.length === 0) {
-                throw new Error('No workspace folder open. Open a folder first to apply edits.');
-            }
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            
-            const edit = new vscode.WorkspaceEdit();
-            const createdFiles: string[] = [];
-
-            // Group files by filepath to handle multiple code blocks for the same file
-            const fileGroups: { [key: string]: string[] } = {};
-            for (const file of message.files) {
-                if (!fileGroups[file.filepath]) fileGroups[file.filepath] = [];
-                fileGroups[file.filepath].push(file.content);
-            }
-
-            for (const [filepath, contents] of Object.entries(fileGroups)) {
-                const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, true);
-                if (!safeCheck.safe) {
-                    throw new Error(safeCheck.error || `Security / Guard violation: '${filepath}' is outside workspace boundary.`);
-                }
-                const fullPath = safeCheck.resolvedPath;
-                const fileUri = vscode.Uri.file(fullPath);
-
-                let fileText = '';
-                if (fs.existsSync(fullPath)) {
-                    const document = await vscode.workspace.openTextDocument(fileUri);
-                    fileText = document.getText();
-                    this.conversationHistory.addFileBackupToLatestMessage(fullPath, fileText);
-                } else {
-                    this.conversationHistory.addFileBackupToLatestMessage(fullPath, null);
-                    edit.createFile(fileUri, { ignoreIfExists: true });
-                }
-                
-                for (const content of contents) {
-                    // Check if the AI used Search/Replace blocks
-                    if (content.includes('<<<<<<< SEARCH') && content.includes('>>>>>>> REPLACE')) {
-                        const blockRegex = /<<<<<<<\s*SEARCH\r?\n?([\s\S]*?)\r?\n?=======\r?\n?([\s\S]*?)\r?\n?>>>>>>>\s*REPLACE/g;
-                        let match;
-                        let blocksFound = false;
-                        
-                        while ((match = blockRegex.exec(content)) !== null) {
-                            blocksFound = true;
-                            const searchStr = match[1];
-                            const replaceStr = match[2];
-                            const patchResult = await this.applyPatchWithTiers(fileText, searchStr, replaceStr, filepath, false);
-                            
-                            if (patchResult.success) {
-                                fileText = patchResult.text;
-                            } else {
-                                throw new Error(patchResult.error || `Could not find the specified search block in ${filepath}. Ensure the code exactly matches the file context.`);
-                            }
-                        }
-                        // Removed old Scout Regex Fallback -> Replaced by Job 1 SEARCH Healer
-                        if (!blocksFound) {
-                            throw new Error(`Malformed Search/Replace block in ${filepath}. Check if the block format is exactly <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE`);
-                        }
-                    } else {
-                        // Full file replacement
-                        if (fs.existsSync(fullPath) && fileText.trim().length > 0) {
-                            // Safety Circuit Breaker: If AI forgets tags and outputs a small snippet, it might wipe the file.
-                            if (content.length < fileText.length * 0.5) {
-                                const userChoice = await vscode.window.showWarningMessage(
-                                    `⚠️ DANGER: AI is trying to overwrite the ENTIRE file "${path.basename(filepath)}", but the new code is much shorter (>50% smaller). The AI likely forgot SEARCH/REPLACE tags. Proceed?`,
-                                    { modal: true },
-                                    'Overwrite File Anyway', 'Cancel'
-                                );
-                                if (userChoice !== 'Overwrite File Anyway') {
-                                    throw new Error(`Aborted overwrite of ${filepath}. Ask the AI to use <<<<<<< SEARCH format for partial edits.`);
-                                }
-                            }
-                        }
-                        
-                        // FIX: Remove markdown wrapping for full file overwrites so actual files aren't corrupted
-                        let cleanContent = content.trim();
-                        const blockMatch = cleanContent.match(/^```[a-zA-Z]*\r?\n([\s\S]*?)\r?\n```$/);
-                        if (blockMatch && blockMatch[1]) {
-                            cleanContent = blockMatch[1].trim();
-                        }
-                        const val = DiffValidator.validateReplacementContent(cleanContent);
-                        if (!val.valid) {
-                            throw new Error(`Validation failed for ${filepath}: ${val.reason}`);
-                        }
-                        fileText = cleanContent;
-                    }
-                }
-
-                if (fs.existsSync(fullPath)) {
-                    const document = await vscode.workspace.openTextDocument(fileUri);
-                    const fullRange = new vscode.Range(
-                        document.positionAt(0),
-                        document.positionAt(document.getText().length)
-                    );
-                    edit.replace(fileUri, fullRange, fileText);
-                } else {
-                    edit.insert(fileUri, new vscode.Position(0, 0), fileText);
-                }
-                createdFiles.push(filepath);
-            }
-            
-            // Save snapshots for all modified files before applying the atomic edit
-            for (const filepath of Object.keys(fileGroups)) {
-                const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                const fullPath = safeCheck.safe ? safeCheck.resolvedPath : path.join(workspaceRoot, filepath);
-                if (fs.existsSync(fullPath)) {
-                    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
-                    FileVersioning.saveSnapshot(workspaceRoot, fullPath, document.getText());
-                }
-            }
-            
-            const success = await vscode.workspace.applyEdit(edit);
-            if (!success) {
-                throw new Error("VS Code failed to apply the workspace edits.");
-            }
-
-            // Patch Integrity Validator
-            const profile = ProjectScanner.getProfile(workspaceRoot);
-            if (profile && (profile.buildCommand || profile.testCommand)) {
-                const cmdToRun = profile.testCommand || profile.buildCommand;
-                if (cmdToRun) {
-                    this.postMessageToWebview({
-                        command: 'statusUpdate',
-                        text: `🔍 Validating patch integrity: Running \`${cmdToRun}\`...`
-                    });
-
-                    try {
-                        const res = await TerminalCapture.runAndCapture(cmdToRun, workspaceRoot);
-                        if (res.error || res.exitCode !== 0) {
-                            // Build failed! Auto-Rollback
-                            vscode.window.showErrorMessage(`Build failed after patch. Rolling back and notifying AI.`);
-                            
-                            for (const filepath of Object.keys(fileGroups)) {
-                                const fullPath = path.join(workspaceRoot, filepath);
-                                const content = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
-                                if (content) {
-                                    fs.writeFileSync(fullPath, content, 'utf8');
-                                }
-                            }
-
-                            this.postMessageToWebview({
-                                command: 'injectChatAndSend',
-                                text: `The code you applied broke the build/tests. I have automatically rolled it back. Here is the error:\n<terminal_output>\n${res.output}\n</terminal_output>\nPlease fix the issue.`
-                            });
-                            return; // Halt further processing
-                        } else {
-                            vscode.window.showInformationMessage(`✅ Build/Tests passed after patch!`);
-                        }
-                    } catch (e) {
-                        console.error('Integrity check failed', e);
-                    }
-                }
-            }
-            
-            // Auto-update Session Memory for every applied file (fixes long-chat amnesia)
-            for (const filepath of createdFiles) {
-                const fullPath = path.join(workspaceRoot, filepath);
-                if (fs.existsSync(fullPath)) {
-                    const content = fs.readFileSync(fullPath, 'utf8');
-                    SessionMemory.recordFileApplied(workspaceRoot, filepath, content);
-                }
-            }
-
-            // Auto-update Architecture.md (backend-driven, no AI needed)
-            const archPath = path.join(workspaceRoot, '.ultra-light-ai', 'ARCHITECTURE.md');
-            const archLines: string[] = [];
-            for (const filepath of createdFiles) {
-                const fullPath = path.join(workspaceRoot, filepath);
-                const lineCount = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf8').split('\n').length : 0;
-                const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-                archLines.push(`- \`${filepath}\` — ${lineCount} lines (applied: ${ts})`);
-            }
-            if (archLines.length > 0) {
-                const entry = `\n## Applied ${new Date().toLocaleDateString()}\n${archLines.join('\n')}\n`;
-                fs.appendFileSync(archPath, entry, 'utf8');
-            }
-
-            // Explicitly save all applied files to disk to prevent dirty buffers and ensure CLI tools/terminal see them
-            for (const filepath of Object.keys(fileGroups)) {
-                const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
-                const fullPath = safeCheck.safe ? safeCheck.resolvedPath : path.join(workspaceRoot, filepath);
-                const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
-                if (openDoc && openDoc.isDirty) {
-                    await openDoc.save();
-                }
-            }
-
-            vscode.window.showInformationMessage(`✨ Applied & saved ${message.files.length} file(s)!`);
-            
-            if (createdFiles.length > 0) {
-                const firstFile = path.join(workspaceRoot, createdFiles[0]);
-                const doc = await vscode.workspace.openTextDocument(firstFile);
-                await vscode.window.showTextDocument(doc);
-            }
-
-            this.postMessageToWebview({
-                command: 'statusUpdate',
-                text: `✅ Saved ${createdFiles.length} file(s): ${createdFiles.join(', ')}`
-            });
-
-            // Autonomous Closed-Loop Continuation:
-            // If session auto-approval is active, notify the AI that files are on disk and prompt next verification or milestone
-            if (message.autoProceed || this.isTerminalSessionAutoApproved) {
-                const filesList = createdFiles.map(f => `- \`${f}\``).join('\n');
-                this.postMessageToWebview({
-                    command: 'injectChatAndSend',
-                    text: `[SYSTEM: FILES SAVED TO DISK]\nSuccessfully applied and saved ${createdFiles.length} file(s) to workspace:\n${filesList}\n\nPlease run closed-loop verification (e.g. 'execute_terminal_command' with check, makemigrations, or tests) or proceed to the next component in your plan.`
-                });
-            }
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to apply workspace edits: ${error?.message || error}`);
-            this.postMessageToWebview({
-                command: 'applyFailed',
-                error: error?.message || 'Unknown error'
-            });
-        }
-    }
-
-    /**
-     * Open the .agent-config.json file in the editor.
-     */
-    private handleOpenConfig(): void {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (workspaceFolders && workspaceFolders.length > 0) {
-            // Open Global Config
-            const os = require('os');
-            const globalConfigPath = path.join(os.homedir(), '.ultra-light-ai', 'config.json');
-            if (fs.existsSync(globalConfigPath)) {
-                vscode.workspace.openTextDocument(globalConfigPath).then(doc => {
-                    vscode.window.showTextDocument(doc);
-                });
-            } else {
-                vscode.window.showErrorMessage('Global Agent configuration file does not exist yet. Please save settings from the UI first.');
-            }
-        }
-    }
-
-    /**
-     * Open or create the .ultra-light-ai/mcp_config.json file in the editor.
-     */
-    private async handleOpenMcpConfig(): Promise<void> {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showErrorMessage('Please open a workspace folder to configure MCP.');
-            return;
-        }
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        const metaDir = this.getAiMetaDir(workspaceRoot);
-        const mcpConfigPath = path.join(metaDir, 'mcp_config.json');
-
-        if (!fs.existsSync(mcpConfigPath)) {
-            const defaultMcp = {
-                mcpServers: {
-                    filesystem: {
-                        command: 'npx',
-                        args: ['-y', '@modelcontextprotocol/server-filesystem', workspaceRoot],
-                        env: {}
-                    },
-                    github: {
-                        command: 'npx',
-                        args: ['-y', '@modelcontextprotocol/server-github'],
-                        env: {
-                            GITHUB_PERSONAL_ACCESS_TOKEN: ''
-                        }
-                    }
-                }
-            };
-            fs.writeFileSync(mcpConfigPath, JSON.stringify(defaultMcp, null, 2), 'utf8');
-        }
-
-        try {
-            const doc = await vscode.workspace.openTextDocument(mcpConfigPath);
-            await vscode.window.showTextDocument(doc);
-            vscode.window.showInformationMessage('Opened MCP configuration file (mcp_config.json). Add your tools/servers here.');
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Failed to open MCP config: ${e?.message || e}`);
-        }
-    }
-
-    /**
-     * Open or create the .ultra-light-ai/plugins.js file in the editor.
-     */
-    private async handleOpenPluginsScript(): Promise<void> {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showErrorMessage('Please open a workspace folder to configure Plugins.');
-            return;
-        }
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        const metaDir = this.getAiMetaDir(workspaceRoot);
-        const pluginsPath = path.join(metaDir, 'plugins.js');
-
-        if (!fs.existsSync(pluginsPath)) {
-            const defaultPlugins = `/**
- * Workspace Custom Plugins for Ultra-Light AI
- * Export an array of custom tool objects.
- * Each tool will be automatically registered and exposed to the model.
- */
-
-module.exports = {
-    tools: [
-        {
-            name: 'custom_project_health',
-            description: 'Check custom project status or lint output',
-            parameters: {
-                type: 'object',
-                properties: {
-                    target: { type: 'string', description: 'Target module or component' }
-                }
-            },
-            execute: async ({ target }, workspaceRoot) => {
-                return \`[Custom Plugin: health check for \${target || 'all'} passed successfully]\`;
-            }
-        }
-    ]
-};
-`;
-            fs.writeFileSync(pluginsPath, defaultPlugins, 'utf8');
-        }
-
-        try {
-            const doc = await vscode.workspace.openTextDocument(pluginsPath);
-            await vscode.window.showTextDocument(doc);
-            vscode.window.showInformationMessage('Opened workspace plugins script (plugins.js).');
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Failed to open plugins script: ${e?.message || e}`);
-        }
-    }
-
-    /**
-     * Clear local cache
-     */
-    private handleClearCache(): void {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (workspaceFolders && workspaceFolders.length > 0) {
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            const aiMetaDir = this.getAiMetaDir(workspaceRoot);
-            const cachePath = path.join(aiMetaDir, 'cache.json');
-            const ragCachePath = path.join(aiMetaDir, 'rag-index.json');
-            
-            if (fs.existsSync(ragCachePath)) {
-                try { fs.unlinkSync(ragCachePath); } catch (e) { /* ignore */ }
-            }
-            
-            if (fs.existsSync(cachePath)) { // Check for new path
-                try {
-                    fs.unlinkSync(cachePath);
-                    vscode.window.showInformationMessage('🗑️ Cache cleared successfully!');
-                } catch (e: any) {
-                    vscode.window.showErrorMessage(`Failed to clear cache: ${e.message}`);
-                }
-            } else {
-                // Also check for old path and clear it
-                const oldCachePath = path.join(workspaceRoot, '.vscode', 'ultra-light-ai-cache.json');
-                if (fs.existsSync(oldCachePath)) {
-                    try {
-                        fs.unlinkSync(oldCachePath);
-                        vscode.window.showInformationMessage('🗑️ Cache cleared successfully!');
-                        return;
-                    } catch (e) { /* ignore */ }
-                }
-                vscode.window.showInformationMessage('Cache is already empty.');
-            }
-        }
-    }
-
-    /**
-     * Executes a command in the VS Code terminal with basic sandbox restrictions.
-     */
-    private async handleRunInTerminal(command: string) {
-        // Enhanced Sandboxing: Prevent destructive OS commands
-        const dangerousPatterns = [
-            /rm\s+-r/i, /del\s+\/f/i, /format\s+/i, /diskpart/i, 
-            /rmdir\s+\/s/i, /mkfs/i, /dd\s+if=/i, /shutdown/i, 
-            /C:\\Windows/i, /C:\\\\/i, /Remove-Item\s+-Recurse/i, /cmd\s+\/c\s+del/i,
-            /del\s+\*\.\*/i
-        ];
-        
-        const isDangerous = dangerousPatterns.some(pattern => pattern.test(command));
-
-        if (isDangerous) {
-            vscode.window.showErrorMessage('🛡️ Sandbox Blocked: This command contains potentially dangerous OS operations or accesses restricted paths.');
-            return;
-        }
-
-        const scaffoldPatterns = [
-            /npx\s+create-/i, /npm\s+init/i, /yarn\s+create/i, /pnpm\s+create/i,
-            /django-admin\s+startproject/i, /vue\s+create/i, /ng\s+new/i, /composer\s+create-project/i,
-            /rails\s+new/i, /cargo\s+new/i, /dotnet\s+new/i, /npx\s+vite/i
-        ];
-        
-        const isScaffold = scaffoldPatterns.some(pattern => pattern.test(command));
-
-        this.postMessageToWebview({
-            command: 'statusUpdate',
-            text: isScaffold ? `🏗️ Scaffold command placed in terminal.` : `⚡ Running command: ${command.length > 60 ? command.substring(0, 57) + '...' : command}`
-        });
-        
-        let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI');
-        if (!terminal) {
-            terminal = vscode.window.createTerminal('Ultra Light AI');
-        }
-        terminal.show();
-        // BUG FIX: Join multiline commands with '&&' so they don't break when stripped of newlines
-        const safeCommand = command.trim().split(/\r?\n/).filter(line => line.trim().length > 0).join(' && ');
-        terminal.sendText(safeCommand, true);
-        vscode.window.showInformationMessage('Command executed in terminal.');
-    }
-
-    /**
-     * Insert text at cursor position in the active editor.
-     */
-    private async handleInsertToEditor(text: string): Promise<void> {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showErrorMessage('No active editor. Open a file first.');
-            return;
-        }
-        await editor.edit(editBuilder => {
-            editBuilder.insert(editor.selection.active, text);
-        });
-        vscode.window.showInformationMessage('📝 Code inserted at cursor!');
-    }
-
-    /**
-     * Open a file in the editor
-     */
-    private async handleOpenFile(filepath: string): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) { return; }
-        
-        const fullPath = path.resolve(workspaceRoot, filepath);
-        if (fs.existsSync(fullPath)) {
-            const doc = await vscode.workspace.openTextDocument(fullPath);
-            await vscode.window.showTextDocument(doc);
-        } else {
-            vscode.window.showErrorMessage(`File not found: ${filepath}`);
-        }
-    }
-
-    /**
-     * Send status update to Webview
-     */
     public postMessageToWebview(message: any) {
         if (this._view) {
             this._view.webview.postMessage(message);
         }
     }
 
-    /**
-     * Clears the current chat memory, creates a new session, and notifies the webview to reset the UI.
-     */
     public clearChat(): void {
         this.conversationHistory.clear();
         this.taskPlanner.clear();
-        this.currentTaskState = undefined;
-        this.recentFilesTouched.clear();
-        this.lastToolResultText = undefined;
-        this.lastToolErrorText = undefined;
-        PromptBuilder.invalidatePrefixCache();
-        if ((this as any)._onResetCb) {
-            (this as any)._onResetCb();
-        }
         this.postMessageToWebview({ command: 'chatCleared' });
-        this.postMessageToWebview({ type: 'update_plan_stepper', goal: '', steps: [] });
     }
 }

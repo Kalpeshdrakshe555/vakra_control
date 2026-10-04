@@ -15,6 +15,11 @@ export interface ChatMessage {
     role: 'user' | 'model';
     text: string;
     timestamp: number;
+    toolCalls?: Array<{
+        tool: string;
+        title?: string;
+        data: any;
+    }>;
     usage?: {
         promptTokens: number;
         completionTokens: number;
@@ -152,7 +157,7 @@ export class ConversationHistory {
      * Preserves the full chat log up to MAX_SAVED_MESSAGES_PER_SESSION (e.g. 300)
      * so user never loses their history upon window restart.
      */
-    public addMessage(role: 'user' | 'model', text: string, usage?: ChatMessage['usage'], timestamp?: number): void {
+    public addMessage(role: 'user' | 'model', text: string, usage?: ChatMessage['usage'], timestampOrToolCalls?: number | any[], toolCallsArg?: any[]): void {
         if (!this.currentSessionId) {
             this.createNewSession();
         }
@@ -164,13 +169,19 @@ export class ConversationHistory {
             session.title = text.split('\n')[0].substring(0, 30) + '...';
         }
 
-        session.messages.push({
+        const timestamp = typeof timestampOrToolCalls === 'number' ? timestampOrToolCalls : Date.now();
+        const toolCalls = Array.isArray(timestampOrToolCalls) ? timestampOrToolCalls : toolCallsArg;
+
+        const newMessage: ChatMessage = {
             role,
             text,
-            timestamp: timestamp || Date.now(),
+            timestamp,
+            toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             fileBackups: []
-        });
+        };
+
+        session.messages.push(newMessage);
 
         // Generous bound to avoid unbounded disk growth while preserving full conversations
         while (session.messages.length > MAX_SAVED_MESSAGES_PER_SESSION) {

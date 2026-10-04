@@ -9,8 +9,14 @@ export interface CustomSkill {
 }
 
 export class SkillsManager {
-    private static skillsDir(workspaceRoot: string): string {
-        return path.join(workspaceRoot, '.ultra-light-ai', 'skills');
+    private static getSkillsDirs(workspaceRoot: string): string[] {
+        if (!workspaceRoot) return [];
+        return [
+            path.join(workspaceRoot, '.ultra-light-ai', 'skills'),
+            path.join(workspaceRoot, '.agent', 'skills'),
+            path.join(workspaceRoot, '.skills'),
+            path.join(workspaceRoot, 'skills')
+        ].filter(d => fs.existsSync(d));
     }
 
     public static readonly BUILTIN_SKILLS: CustomSkill[] = [
@@ -45,30 +51,61 @@ export class SkillsManager {
             skillsMap.set(skill.name.toLowerCase(), skill);
         }
 
-        const dir = this.skillsDir(workspaceRoot);
-        if (workspaceRoot && fs.existsSync(dir)) {
+        const dirs = this.getSkillsDirs(workspaceRoot);
+        for (const dir of dirs) {
             try {
-                const skillFolders = fs.readdirSync(dir);
-                for (const folder of skillFolders) {
-                    const skillFile = path.join(dir, folder, 'SKILL.md');
-                    if (fs.existsSync(skillFile)) {
-                        const content = fs.readFileSync(skillFile, 'utf8');
-                        const skill = this.parseSkillMarkdown(folder, content);
-                        if (skill) skillsMap.set(skill.name.toLowerCase(), skill); // User skill overrides built-in
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isDirectory()) {
+                        const skillFile = path.join(dir, entry.name, 'SKILL.md');
+                        if (fs.existsSync(skillFile)) {
+                            const content = fs.readFileSync(skillFile, 'utf8');
+                            const skill = this.parseSkillMarkdown(entry.name, content);
+                            if (skill) {
+                                skillsMap.set(skill.name.toLowerCase(), skill); // User custom skill overrides built-in
+                            }
+                        }
+                    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+                        // Direct markdown skill file like skills/django.md
+                        const skillName = path.basename(entry.name, path.extname(entry.name));
+                        const content = fs.readFileSync(path.join(dir, entry.name), 'utf8');
+                        const skill = this.parseSkillMarkdown(skillName, content);
+                        if (skill) skillsMap.set(skill.name.toLowerCase(), skill);
                     }
                 }
             } catch (e) {
-                console.error('Failed to load skills:', e);
+                console.error('Failed to load skills from ' + dir, e);
             }
         }
 
         return Array.from(skillsMap.values());
     }
 
+    public static saveCustomSkill(
+        workspaceRoot: string,
+        name: string,
+        description: string,
+        triggerRules: string[],
+        instructions: string
+    ): string {
+        const safeSlug = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+        const targetDir = path.join(workspaceRoot, '.ultra-light-ai', 'skills', safeSlug);
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
+
+        const filePath = path.join(targetDir, 'SKILL.md');
+        const formattedRules = triggerRules.map(r => `"${r.toLowerCase()}"`).join(', ');
+        const content = `---\nname: "${name}"\ndescription: "${description}"\ntrigger_rules: [${formattedRules}]\n---\n\n${instructions.trim()}\n`;
+
+        fs.writeFileSync(filePath, content, 'utf8');
+        return filePath;
+    }
+
     public static scaffoldSkill(workspaceRoot: string, skillName: string): string | null {
         const builtin = this.BUILTIN_SKILLS.find(s => s.name.toLowerCase() === skillName.toLowerCase());
         if (!builtin) return null;
-        const targetDir = path.join(this.skillsDir(workspaceRoot), builtin.name);
+        const targetDir = path.join(workspaceRoot, '.ultra-light-ai', 'skills', builtin.name);
         fs.mkdirSync(targetDir, { recursive: true });
         const filePath = path.join(targetDir, 'SKILL.md');
         const content = `---\nname: ${builtin.name}\ndescription: ${builtin.description}\ntrigger_rules: [${builtin.triggerRules.map(r => `"${r}"`).join(', ')}]\n---\n\n${builtin.instructions}\n`;
@@ -77,26 +114,42 @@ export class SkillsManager {
     }
 
     private static parseSkillMarkdown(folderName: string, content: string): CustomSkill | null {
-        // Parse YAML frontmatter if present
-        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
         let name = folderName;
         let description = '';
         let triggerRules: string[] = [];
         let instructions = content;
 
+        // Auto-extract trigger words from folder/file name (e.g. django-fullstack -> ['django', 'fullstack', 'django-fullstack'])
+        const nameTokens = folderName.toLowerCase().split(/[-_.\s]+/).filter(t => t.length > 2);
+        triggerRules.push(folderName.toLowerCase());
+        nameTokens.forEach(t => {
+            if (!triggerRules.includes(t)) triggerRules.push(t);
+        });
+
+        // Parse YAML frontmatter if present
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
         if (frontmatterMatch) {
             const yamlStr = frontmatterMatch[1];
             instructions = frontmatterMatch[2].trim();
 
             const nameMatch = yamlStr.match(/name:\s*(.+)/i);
-            if (nameMatch) name = nameMatch[1].trim();
+            if (nameMatch) {
+                name = nameMatch[1].trim().replace(/^['"]|['"]$/g, '');
+                if (!triggerRules.includes(name.toLowerCase())) triggerRules.push(name.toLowerCase());
+            }
 
             const descMatch = yamlStr.match(/description:\s*(.+)/i);
-            if (descMatch) description = descMatch[1].trim();
+            if (descMatch) description = descMatch[1].trim().replace(/^['"]|['"]$/g, '');
 
-            const rulesMatch = yamlStr.match(/trigger_rules:\s*\[(.*?)\]/i);
+            const rulesMatch = yamlStr.match(/(?:trigger_rules|triggers|tags):\s*(?:\[(.*?)\]|([\s\S]*?)(?=\n[a-zA-Z0-9_-]+:|$))/i);
             if (rulesMatch) {
-                triggerRules = rulesMatch[1].split(',').map(r => r.trim().replace(/^['"]|['"]$/g, ''));
+                if (rulesMatch[1] !== undefined) {
+                    const parsed = rulesMatch[1].split(',').map(r => r.trim().replace(/^['"]|['"]$/g, '').toLowerCase()).filter(Boolean);
+                    parsed.forEach(p => { if (!triggerRules.includes(p)) triggerRules.push(p); });
+                } else if (rulesMatch[2] !== undefined) {
+                    const lines = rulesMatch[2].split(/\r?\n/).map(l => l.replace(/^\s*-\s*/, '').trim().replace(/^['"]|['"]$/g, '').toLowerCase()).filter(Boolean);
+                    lines.forEach(l => { if (!triggerRules.includes(l)) triggerRules.push(l); });
+                }
             }
         }
 
@@ -111,18 +164,23 @@ export class SkillsManager {
         const matchedSkills: CustomSkill[] = [];
 
         for (const skill of skills) {
-            const isMatch = skill.triggerRules.some(rule => lowerPrompt.includes(rule.toLowerCase())) ||
-                            lowerPrompt.includes(`@skill:${skill.name.toLowerCase()}`) ||
-                            lowerPrompt.includes(`@skill ${skill.name.toLowerCase()}`);
-            if (isMatch) {
+            const skillNameLower = skill.name.toLowerCase();
+            const isMatch = 
+                skill.triggerRules.some(rule => rule && lowerPrompt.includes(rule.toLowerCase())) ||
+                lowerPrompt.includes(skillNameLower) ||
+                lowerPrompt.includes(`@skill:${skillNameLower}`) ||
+                lowerPrompt.includes(`@skill ${skillNameLower}`) ||
+                (skill.description && skill.description.toLowerCase().split(/\s+/).some(w => w.length > 4 && lowerPrompt.includes(w)));
+
+            if (isMatch && !matchedSkills.some(s => s.name === skill.name)) {
                 matchedSkills.push(skill);
             }
         }
 
         if (matchedSkills.length === 0) return '';
 
-        return `\n\n### ACTIVE CUSTOM SKILLS INSTRUCTIONS ###\n` +
+        return `\n\n### ACTIVE WORKSPACE SKILLS INSTRUCTIONS ###\n` +
             matchedSkills.map(s => `--- Skill: ${s.name} ---\n${s.instructions}`).join('\n\n') +
-            `\n### END CUSTOM SKILLS ###\n`;
+            `\n### END WORKSPACE SKILLS ###\n`;
     }
 }

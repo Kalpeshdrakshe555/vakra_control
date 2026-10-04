@@ -198,7 +198,8 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
             name: 'plan_set',
             args: {
                 goal: String(obj.goal || ''),
-                steps: obj.steps
+                steps: obj.steps,
+                architecture: obj.architecture || undefined
             }
         };
     }
@@ -920,13 +921,27 @@ export class LocalOllamaClient implements IEngine {
         });
         messages.push({ role: 'user', content: userMessage });
 
-        const isOllama = this.endpoint.includes('11434');
-        const url = isOllama ? `${this.endpoint}/api/chat` : `${this.endpoint}/v1/chat/completions`;
-
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (this.apiKey) {
-            headers['Authorization'] = `Bearer ${this.apiKey}`;
+        let cleanEndpoint = (this.endpoint || 'http://127.0.0.1:11434').trim().replace(/\/+$/, '');
+        
+        let url = '';
+        if (cleanEndpoint.includes('/chat/completions')) {
+            url = cleanEndpoint;
+        } else if (cleanEndpoint.endsWith('/api/chat')) {
+            url = cleanEndpoint;
+        } else if (cleanEndpoint.includes(':11434')) {
+            url = `${cleanEndpoint}/api/chat`;
+        } else if (cleanEndpoint.endsWith('/v1')) {
+            url = `${cleanEndpoint}/chat/completions`;
+        } else {
+            url = `${cleanEndpoint}/v1/chat/completions`;
         }
+
+        const isOllama = url.includes('/api/chat');
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            ...(this.apiKey && this.apiKey.trim() ? { 'Authorization': `Bearer ${this.apiKey.trim()}` } : {})
+        };
 
         // Convert Gemini-format tools to OpenAI-format tools for Groq/OpenAI
         let openAITools: any[] | undefined;
@@ -983,6 +998,7 @@ export class LocalOllamaClient implements IEngine {
                 const reader = body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
+                let isInsideThinking = false;
                 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -997,9 +1013,27 @@ export class LocalOllamaClient implements IEngine {
                         try {
                             if (isOllama) {
                                 const data = JSON.parse(line);
-                                if (data.message?.content) {
-                                    fullText += data.message.content;
-                                    onChunk({ text: data.message.content, done: false });
+                                const reasoning = data.message?.reasoning_content || '';
+                                const content = data.message?.content || '';
+                                if (reasoning) {
+                                    if (!isInsideThinking) {
+                                        isInsideThinking = true;
+                                        fullText += '<think>' + reasoning;
+                                        onChunk({ text: '<think>' + reasoning, done: false });
+                                    } else {
+                                        fullText += reasoning;
+                                        onChunk({ text: reasoning, done: false });
+                                    }
+                                }
+                                if (content) {
+                                    if (isInsideThinking) {
+                                        isInsideThinking = false;
+                                        fullText += '</think>' + content;
+                                        onChunk({ text: '</think>' + content, done: false });
+                                    } else {
+                                        fullText += content;
+                                        onChunk({ text: content, done: false });
+                                    }
                                 }
                             } else {
                                 if (line.startsWith('data: ')) {
@@ -1021,10 +1055,29 @@ export class LocalOllamaClient implements IEngine {
                                         }
                                     }
                                     
+                                    const reasoning = delta?.reasoning_content || delta?.reasoning || delta?.thought || '';
                                     const content = delta?.content || '';
+
+                                    if (reasoning) {
+                                        if (!isInsideThinking) {
+                                            isInsideThinking = true;
+                                            fullText += '<think>' + reasoning;
+                                            onChunk({ text: '<think>' + reasoning, done: false });
+                                        } else {
+                                            fullText += reasoning;
+                                            onChunk({ text: reasoning, done: false });
+                                        }
+                                    }
+
                                     if (content) {
-                                        fullText += content;
-                                        onChunk({ text: content, done: false });
+                                        if (isInsideThinking) {
+                                            isInsideThinking = false;
+                                            fullText += '</think>' + content;
+                                            onChunk({ text: '</think>' + content, done: false });
+                                        } else {
+                                            fullText += content;
+                                            onChunk({ text: content, done: false });
+                                        }
                                     }
                                 }
                             }
@@ -1033,14 +1086,25 @@ export class LocalOllamaClient implements IEngine {
                         }
                     }
                 }
+                if (isInsideThinking) {
+                    isInsideThinking = false;
+                    fullText += '</think>';
+                    onChunk({ text: '</think>', done: false });
+                }
                 // Parse remaining buffer
                 if (buffer.trim() !== '') {
                     try {
                         if (isOllama) {
                             const data = JSON.parse(buffer);
-                            if (data.message?.content) {
-                                fullText += data.message.content;
-                                onChunk({ text: data.message.content, done: false });
+                            const reasoning = data.message?.reasoning_content || '';
+                            const content = data.message?.content || '';
+                            if (reasoning) {
+                                fullText += '<think>' + reasoning + '</think>';
+                                onChunk({ text: '<think>' + reasoning + '</think>', done: false });
+                            }
+                            if (content) {
+                                fullText += content;
+                                onChunk({ text: content, done: false });
                             }
                         }
                     } catch (e) { console.error("Local stream buffer parse error", e); }

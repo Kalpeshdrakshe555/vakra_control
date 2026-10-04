@@ -15,9 +15,10 @@ import { fetchPyPiInfo, fetchNpmInfo, fetchWebContext } from './scraper';
 export interface DistillationResult {
     topic: string;
     filePath: string;
-    sourcesCount: number;
+    sources: { title: string; url: string }[];
     distilledBy: string;
     summaryMarkdown: string;
+    rawTextResult: string;
 }
 
 /**
@@ -287,34 +288,53 @@ ${compiledRaw}`;
 
         const relPath = path.relative(workspaceRoot, filePath);
 
-        // 6. Extract brief highlights and code preview for the Main Model context window (under 350 tokens)
-        const codeBlockMatch = distilledMarkdown.match(/```(?:[a-z]+)?\n([\s\S]*?)\n```/i);
-        const codePreview = codeBlockMatch ? codeBlockMatch[0].split('\n').slice(0, 16).join('\n') + (codeBlockMatch[0].split('\n').length > 16 ? '\n// ...' : '') : '';
+        // 6. Format comprehensive research with verified citations directly for the model
+        const citationsList = rawSources.map((s, idx) => {
+            return `- **[Source ${idx + 1}]**: ${s.source}`;
+        }).join('\n');
 
-        // Extract first 3 bullet points if available
-        const bullets = distilledMarkdown
-            .split('\n')
-            .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-            .slice(0, 3)
-            .join('\n');
+        const sourceObjects = rawSources.map(s => {
+            let title = s.source;
+            let url = s.source;
+            if (s.source.startsWith('http')) {
+                try {
+                    const u = new URL(s.source);
+                    title = u.hostname.replace('www.', '');
+                    url = s.source;
+                } catch {}
+            } else if (s.source.includes(':')) {
+                const parts = s.source.split(':');
+                title = parts[0].trim();
+            }
+            return { title, url };
+        });
 
-        let returnMsg = `### 🔍 Technical Research Distilled: ${query}\n`;
-        returnMsg += `- **Sources Analyzed:** ${rawSources.length} sources (Registry & Web)\n`;
-        returnMsg += `- **Distilled By:** ${brainUsed}\n`;
-        returnMsg += `- **Saved To Findings:** \`${relPath}\`\n\n`;
-
-        if (bullets) {
-            returnMsg += `**Key Highlights:**\n${bullets}\n\n`;
+        // Token-efficient return message for the LLM
+        let returnMsg = `### 📚 Technical Research Completed: "${query}"\n`;
+        returnMsg += `Archived complete guide to: \`${relPath}\`\n\n`;
+        returnMsg += `#### 🔗 Verified Sources:\n${citationsList}\n\n`;
+        returnMsg += `#### 💡 Key Distilled Findings (by ${brainUsed}):\n`;
+        returnMsg += `${distilledMarkdown.trim().slice(0, 1800)}\n\n`;
+        if (distilledMarkdown.length > 1800) {
+            returnMsg += `*(Note: Detailed implementations truncated to preserve tokens. Inspect \`${relPath}\` using read_multiple_files for complete code & API tables.)*\n`;
         }
 
-        if (codePreview) {
-            returnMsg += `**Verified Usage Pattern Preview:**\n${codePreview}\n\n`;
-        }
-
-        returnMsg += `*💡 Note: Full multi-page reference with all signatures is saved in \`${relPath}\`. Read this file with \`view_file\` if you need deep details.*`;
-
-        return returnMsg;
+        return {
+            topic: query,
+            filePath: relPath,
+            sources: sourceObjects,
+            distilledBy: brainUsed,
+            summaryMarkdown: distilledMarkdown,
+            rawTextResult: returnMsg
+        } as any;
     } catch (error: any) {
-        return `Deep research error: ${error?.message || error}`;
+        return {
+            topic: query,
+            filePath: '',
+            sources: [],
+            distilledBy: 'Error',
+            summaryMarkdown: '',
+            rawTextResult: `Deep research error: ${error?.message || error}`
+        } as any;
     }
 }

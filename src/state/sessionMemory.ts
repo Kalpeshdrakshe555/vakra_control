@@ -1,152 +1,279 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
-export interface SessionMemoryData {
-    createdAt: number;
-    updatedAt: number;
-    projectStack: string;
-    framework: string;
-    currentStep?: number;
-    totalSteps?: number;
-    lastTask: string;
-    keyDecisions: string[];
-    createdFiles: { filepath: string; purpose: string; lines: number }[];
+export interface FileSemanticState {
+    path: string;
+    status: 'created' | 'modified' | 'read' | 'deleted';
+    revision: number;
+    sourceHash: string;
+    lastTouchedAt: number;
+    symbols: string[];
+    imports: string[];
+    diagnostics: string[];
 }
 
-const MAX_FILES = 30;
-const MAX_DECISIONS = 15;
+export interface SemanticLedgerEntry {
+    id: string;
+    tool: string;
+    timestamp: number;
+    summary: string;
+    touchedFiles: string[];
+}
+
+export interface SessionMemorySnapshot {
+    version: 1;
+    sessionId: string;
+    files: Record<string, FileSemanticState>;
+    recentEvents: SemanticLedgerEntry[];
+    recentDiagnostics: string[];
+    decisions: string[];
+    sessionTouchedPaths: string[];
+    updatedAt: number;
+}
 
 export class SessionMemory {
-    private static getPath(workspaceRoot: string): string {
-        const dir = path.join(workspaceRoot, '.ultra-light-ai');
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        return path.join(dir, 'SESSION_MEMORY.json');
+    private static instance: SessionMemory | null = null;
+    private snapshot: SessionMemorySnapshot;
+    private storagePath: string = '';
+
+    private constructor(workspaceRoot: string) {
+        this.storagePath = path.join(workspaceRoot, '.ultra-light-ai', 'SESSION_MEMORY.json');
+        this.snapshot = this.loadSnapshot();
     }
 
-    public static get(workspaceRoot: string): SessionMemoryData | null {
-        const p = this.getPath(workspaceRoot);
-        if (!fs.existsSync(p)) return null;
+    public static getInstance(workspaceRoot: string): SessionMemory {
+        if (!this.instance || this.instance.storagePath !== path.join(workspaceRoot, '.ultra-light-ai', 'SESSION_MEMORY.json')) {
+            this.instance = new SessionMemory(workspaceRoot);
+        }
+        return this.instance;
+    }
+
+    private loadSnapshot(): SessionMemorySnapshot {
         try {
-            return JSON.parse(fs.readFileSync(p, 'utf8'));
-        } catch { return null; }
-    }
+            if (fs.existsSync(this.storagePath)) {
+                const raw = fs.readFileSync(this.storagePath, 'utf8');
+                return JSON.parse(raw);
+            }
+        } catch {}
 
-    public static init(workspaceRoot: string, stack: string, framework: string): SessionMemoryData {
-        const mem: SessionMemoryData = {
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            projectStack: stack,
-            framework,
-            lastTask: 'Project initialized',
-            keyDecisions: [],
-            createdFiles: []
+        return {
+            version: 1,
+            sessionId: 'session_' + Date.now(),
+            files: {},
+            recentEvents: [],
+            recentDiagnostics: [],
+            decisions: [],
+            sessionTouchedPaths: [],
+            updatedAt: Date.now()
         };
-        this.save(workspaceRoot, mem);
-        return mem;
     }
 
-    public static recordFileApplied(workspaceRoot: string, filepath: string, content: string) {
-        const mem = this.get(workspaceRoot) || this.init(workspaceRoot, 'Unknown', 'None');
-        const lineCount = content.split('\n').length;
-
-        // Derive purpose from filename heuristics
-        const base = path.basename(filepath);
-        let purpose = 'general';
-        if (base.includes('model'))   purpose = 'data model / schema';
-        else if (base.includes('view') || base.includes('route') || base.includes('controller')) purpose = 'API / route handler';
-        else if (base.includes('template') || base.includes('.html')) purpose = 'UI template';
-        else if (base.includes('test') || base.includes('spec')) purpose = 'test suite';
-        else if (base.includes('config') || base.includes('setting')) purpose = 'configuration';
-        else if (base.includes('url') || base.includes('router')) purpose = 'URL routing';
-        else if (base.includes('middleware') || base.includes('guard')) purpose = 'middleware / guard';
-        else if (base.includes('util') || base.includes('helper')) purpose = 'utilities / helpers';
-
-        // Update or add
-        const existing = mem.createdFiles.findIndex(f => f.filepath === filepath);
-        if (existing >= 0) {
-            mem.createdFiles[existing] = { filepath, purpose, lines: lineCount };
-        } else {
-            mem.createdFiles.push({ filepath, purpose, lines: lineCount });
+    public save(): void {
+        try {
+            const dir = path.dirname(this.storagePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            this.snapshot.updatedAt = Date.now();
+            fs.writeFileSync(this.storagePath, JSON.stringify(this.snapshot, null, 2), 'utf8');
+        } catch (e) {
+            console.error('Failed to persist session memory:', e);
         }
-
-        // Keep list bounded
-        if (mem.createdFiles.length > MAX_FILES) {
-            mem.createdFiles = mem.createdFiles.slice(-MAX_FILES);
-        }
-
-        mem.updatedAt = Date.now();
-        this.save(workspaceRoot, mem);
-    }
-
-    public static recordDecision(workspaceRoot: string, decision: string) {
-        const mem = this.get(workspaceRoot) || this.init(workspaceRoot, 'Unknown', 'None');
-        if (!mem.keyDecisions.includes(decision)) {
-            mem.keyDecisions.push(decision);
-            if (mem.keyDecisions.length > MAX_DECISIONS) {
-                mem.keyDecisions = mem.keyDecisions.slice(-MAX_DECISIONS);
-            }
-        }
-        mem.updatedAt = Date.now();
-        this.save(workspaceRoot, mem);
-    }
-
-    public static recordCommand(workspaceRoot: string, command: string, success: boolean) {
-        const mem = this.get(workspaceRoot) || this.init(workspaceRoot, 'Unknown', 'None');
-        const entry = `${success ? 'Executed' : 'Failed'}: \`${command.substring(0, 100)}\``;
-        if (!mem.keyDecisions.includes(entry)) {
-            mem.keyDecisions.push(entry);
-            if (mem.keyDecisions.length > MAX_DECISIONS) {
-                mem.keyDecisions = mem.keyDecisions.slice(-MAX_DECISIONS);
-            }
-        }
-        mem.updatedAt = Date.now();
-        this.save(workspaceRoot, mem);
-    }
-
-    public static updateStep(workspaceRoot: string, step: number, total: number, taskDesc: string) {
-        const mem = this.get(workspaceRoot) || this.init(workspaceRoot, 'Unknown', 'None');
-        mem.currentStep = step;
-        mem.totalSteps = total;
-        mem.lastTask = taskDesc;
-        mem.updatedAt = Date.now();
-        this.save(workspaceRoot, mem);
     }
 
     /**
-     * Returns a compact ≤1KB context string to inject into every prompt.
-     * Replaces 10 turns of history with precise project state.
+     * Deterministic symbol extractor for Python, TS, JS without heavy external AST binaries.
      */
-    public static buildContextHeader(workspaceRoot: string): string {
-        const mem = this.get(workspaceRoot);
-        if (!mem) return '';
+    public static extractSymbols(filePath: string, content: string): { symbols: string[]; imports: string[] } {
+        const symbols: string[] = [];
+        const imports: string[] = [];
+        const lines = content.split('\n');
 
-        const filesSummary = mem.createdFiles
-            .map(f => `  - ${f.filepath} (${f.purpose}, ${f.lines} lines)`)
-            .join('\n');
+        const isPy = filePath.endsWith('.py');
+        const isTsOrJs = /\.[jt]sx?$/.test(filePath);
 
-        const decisionsSummary = mem.keyDecisions.length > 0
-            ? mem.keyDecisions.map(d => `  - ${d}`).join('\n')
-            : '  None recorded yet.';
+        for (const line of lines) {
+            const trimmed = line.trim();
 
-        const stepInfo = mem.currentStep && mem.totalSteps
-            ? `Current Step: ${mem.currentStep}/${mem.totalSteps} — ${mem.lastTask}`
-            : `Last task: ${mem.lastTask}`;
+            if (isPy) {
+                // Python imports
+                if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
+                    imports.push(trimmed.slice(0, 60));
+                }
+                // Classes with inheritance
+                const classMatch = trimmed.match(/^class\s+([A-Za-z0-9_]+)(\((.*?)\))?:/);
+                if (classMatch) {
+                    symbols.push(`class ${classMatch[1]}${classMatch[2] || ''}`);
+                }
+                // Functions / Methods
+                const defMatch = trimmed.match(/^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*\((.*?)\)(?:\s*->\s*([^:]+))?:/);
+                if (defMatch) {
+                    const params = defMatch[2].length > 40 ? defMatch[2].slice(0, 37) + '...' : defMatch[2];
+                    const ret = defMatch[3] ? ` -> ${defMatch[3].trim()}` : '';
+                    symbols.push(`def ${defMatch[1]}(${params})${ret}`);
+                }
+            } else if (isTsOrJs) {
+                // TS/JS imports
+                if (trimmed.startsWith('import ') && trimmed.includes('from')) {
+                    imports.push(trimmed.slice(0, 60));
+                }
+                // Classes / Interfaces / Types
+                const typeMatch = trimmed.match(/^(?:export\s+)?(?:class|interface|type)\s+([A-Za-z0-9_]+)/);
+                if (typeMatch) {
+                    symbols.push(typeMatch[0].replace('export ', ''));
+                }
+                // Functions / Const exports
+                const fnMatch = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\((.*?)\)/);
+                if (fnMatch) {
+                    symbols.push(`function ${fnMatch[1]}()`);
+                }
+            }
+        }
 
-        return `\n### SESSION MEMORY (Do not forget this context) ###
-Stack: ${mem.projectStack} | Framework: ${mem.framework}
-${stepInfo}
-
-Files created so far (${mem.createdFiles.length}):
-${filesSummary || '  None yet.'}
-
-Key decisions already made:
-${decisionsSummary}
-### END SESSION MEMORY ###\n`;
+        return {
+            symbols: Array.from(new Set(symbols)).slice(0, 30),
+            imports: Array.from(new Set(imports)).slice(0, 15)
+        };
     }
 
-    private static save(workspaceRoot: string, mem: SessionMemoryData) {
-        try {
-            fs.writeFileSync(this.getPath(workspaceRoot), JSON.stringify(mem, null, 2), 'utf8');
-        } catch (e) { console.error('[SessionMemory] Failed to save', e); }
+    /**
+     * Compacts tool executions deterministically into durable semantic facts.
+     */
+    public recordToolResult(
+        toolName: string,
+        args: any,
+        rawResult: string,
+        isSuccess: boolean = true
+    ): string {
+        const timestamp = Date.now();
+        const callId = 'call_' + Math.random().toString(36).slice(2, 8);
+        let summary = '';
+        const touched: string[] = [];
+
+        if (toolName === 'write_file' || toolName === 'edit_file') {
+            const relPath = (args.filepath || args.path || '').replace(/\\/g, '/');
+            const content = args.content || args.new_text || '';
+            touched.push(relPath);
+
+            const hash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 12);
+            const { symbols, imports } = SessionMemory.extractSymbols(relPath, content);
+
+            const prev = this.snapshot.files[relPath];
+            this.snapshot.files[relPath] = {
+                path: relPath,
+                status: toolName === 'write_file' ? 'created' : 'modified',
+                revision: (prev?.revision || 0) + 1,
+                sourceHash: hash,
+                lastTouchedAt: timestamp,
+                symbols,
+                imports,
+                diagnostics: []
+            };
+
+            const symText = symbols.length > 0 ? ` -> Defined: ${symbols.slice(0, 8).join(', ')}` : '';
+            summary = `[${toolName.toUpperCase()} ${relPath} (rev ${this.snapshot.files[relPath].revision})${symText}]`;
+        } else if (toolName === 'read_multiple_files') {
+            const paths = (Array.isArray(args.paths) ? args.paths : [args.paths]).filter(Boolean);
+            paths.forEach((p: string) => {
+                const norm = p.replace(/\\/g, '/');
+                touched.push(norm);
+                if (!this.snapshot.files[norm]) {
+                    this.snapshot.files[norm] = {
+                        path: norm,
+                        status: 'read',
+                        revision: 1,
+                        sourceHash: '',
+                        lastTouchedAt: timestamp,
+                        symbols: [],
+                        imports: [],
+                        diagnostics: []
+                    };
+                }
+            });
+            summary = `[INSPECTED ${paths.join(', ')}]`;
+        } else if (toolName === 'execute_terminal_command') {
+            const cmd = args.command || '';
+            const errorMatches = rawResult.split('\n').filter(l => 
+                /fatal|error|exception|traceback|syntaxerror|cannot import|modulenotfound/i.test(l)
+            );
+
+            if (!isSuccess || errorMatches.length > 0) {
+                const topErrors = errorMatches.slice(0, 4).map(e => e.trim().slice(0, 150));
+                this.snapshot.recentDiagnostics.unshift(...topErrors);
+                this.snapshot.recentDiagnostics = Array.from(new Set(this.snapshot.recentDiagnostics)).slice(0, 10);
+                summary = `[CMD FAILED: "${cmd.slice(0, 40)}" -> ${topErrors.join(' | ') || 'Non-zero exit'}]`;
+            } else {
+                summary = `[CMD SUCCESS: "${cmd.slice(0, 40)}" -> verified clean]`;
+            }
+        } else {
+            summary = `[TOOL: ${toolName} completed]`;
+        }
+
+        // Maintain MRU Touched Paths
+        for (const p of touched) {
+            this.snapshot.sessionTouchedPaths = [
+                p,
+                ...this.snapshot.sessionTouchedPaths.filter(existing => existing !== p)
+            ];
+        }
+
+        this.snapshot.recentEvents.unshift({
+            id: callId,
+            tool: toolName,
+            timestamp,
+            summary,
+            touchedFiles: touched
+        });
+
+        this.snapshot.recentEvents = this.snapshot.recentEvents.slice(0, 25);
+        this.save();
+        return summary;
+    }
+
+    public getSessionTouchedPaths(): string[] {
+        return [...this.snapshot.sessionTouchedPaths];
+    }
+
+    /**
+     * Renders dense, rich working memory for the model prompt (up to 3,500 tokens).
+     */
+    public renderWorkingMemory(maxTokens: number = 3500): string {
+        const sections: string[] = ['### VAKRA WORKING MEMORY & LIVING STATE'];
+
+        // 1. Materialized Files & Real Symbols
+        const fileKeys = Object.keys(this.snapshot.files);
+        if (fileKeys.length > 0) {
+            sections.push('#### 📦 Materialized File Definitions:');
+            for (const f of fileKeys.slice(0, 15)) {
+                const info = this.snapshot.files[f];
+                let line = `- \`${info.path}\` (${info.status}, rev ${info.revision})`;
+                if (info.symbols.length > 0) {
+                    line += `\n  - Symbols: ${info.symbols.join(', ')}`;
+                }
+                if (info.imports.length > 0) {
+                    line += `\n  - Key Imports: ${info.imports.slice(0, 5).join('; ')}`;
+                }
+                sections.push(line);
+            }
+        }
+
+        // 2. Active Diagnostics / Errors to resolve
+        if (this.snapshot.recentDiagnostics.length > 0) {
+            sections.push('#### ⚠️ Active Compiler / Runtime Diagnostics:');
+            for (const diag of this.snapshot.recentDiagnostics.slice(0, 5)) {
+                sections.push(`- ${diag}`);
+            }
+        }
+
+        // 3. Recent Action Trail
+        if (this.snapshot.recentEvents.length > 0) {
+            sections.push('#### ⏱️ Recent Actions:');
+            for (const ev of this.snapshot.recentEvents.slice(0, 10)) {
+                sections.push(`- ${ev.summary}`);
+            }
+        }
+
+        const fullText = sections.join('\n\n');
+        // If content exceeds token estimate (~4 chars per token), return safe slice
+        return fullText.length > maxTokens * 4 ? fullText.slice(0, maxTokens * 4) + '\n...(Memory tailored to budget)' : fullText;
     }
 }

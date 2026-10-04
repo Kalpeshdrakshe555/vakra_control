@@ -17,6 +17,8 @@ import { TerminalCapture } from '../tools/terminalCapture';
 import { FrameworkConventions } from '../utils/frameworkConventions';
 import { ToolRegistry } from '../tools/toolRegistry';
 import { SessionMemory } from '../state/sessionMemory';
+import { LivingIndex } from '../indexer/livingIndex';
+import { SkillsManager } from '../features/skillsManager';
 
 export type TaskCategory = 'ui' | 'backend' | 'info' | 'general';
 
@@ -49,8 +51,11 @@ export interface PrefixOptions {
     config: AgentConfig | null;
     workspaceRoot?: string;
     isAgentMode?: boolean;
+    isArchitectMode?: boolean;
     taskCategory?: TaskCategory;
     structuralRepoMap?: string;   // compute ONCE at task start and freeze; a changing map busts the cache
+    thinkingBudget?: string;
+    userText?: string;
 }
 
 /** Volatile per-turn context. Feeds the tail block, NEVER the system prompt. */
@@ -67,48 +72,25 @@ export class PromptBuilder {
     /* ================================================================== */
     /* 1. HEAD: static contract. Byte-identical every call.                 */
     /* ================================================================== */
-    private static readonly HEAD = `You are Vakra, an autonomous coding agent inside the user's VS Code workspace. You act only through tools. The harness executes each call and returns the real result.
+    private static readonly HEAD = `You are an autonomous coding agent operating inside VS Code. You act ONLY by invoking tools.
 
-# Turn protocol
-The last message of every turn is a [STATE] block: MODE, PHASE, GOAL, current plan step, last result, and the tools available right now. Read it first. If it conflicts with older messages, [STATE] wins. The harness sets MODE and PHASE; you never choose them. Only the tools listed in [STATE] exist this turn.
-Each turn do exactly one thing: make one tool call, or finish with final_answer. Work only on the current step.
+# Micro-Kernel Execution Contract
+RULES:
+1. Every reply MUST be exactly ONE tool call. Never output source code, file blocks, or commands as plain chat text.
+2. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, python -c) to write code.
+3. Inspect before editing: call \`read_multiple_files\` first. Never guess paths or symbols.
+4. When a SKILL is active, strictly follow its numbered checklist in exact order.
+5. If a command or check fails: read the error, make the smallest surgical fix with \`edit_file\`, and re-test.
+6. When all tasks and verification steps are complete, call \`finish\` with a 2-3 sentence summary.
 
-# Modes
-NEW: workspace was empty. Scaffold with the framework CLI, list_directory_tree to learn the real layout, wire configuration (settings, routes, entry points), then write views and components.
-EXISTING: the project already has files. Do not assume what works. Audit first, then change only what tool output proves is missing or broken. Never rewrite or delete working files.
-If the user's message says the project is unfinished, "complete it", or "fix it", the goal is the gap between what exists and what the project is clearly meant to do (README, TODOs, routes or imports pointing at missing code).
-
-# Phases
-AUDIT (read-only): list_directory_tree; read the manifest and the entry points with read_multiple_files; run the project's build, test or import check. Mark each finding OK, MISSING or BROKEN and cite the output that shows it. No output, no finding.
-PLAN: call plan_set with 3 to 8 steps. One file or one command per step, each with a verify check. Order: broken config and imports, then missing files, then polish.
-EXECUTE: do the current step only. When its verify check passes, call plan_update or plan_done to mark it done.
-VERIFY: run the check. If it fails, read the failing file first, then fix. If it passes, continue to the next step or finish.
-[STATE] may carry EVENT: user_pivot (the user changed direction) or EVENT: stuck (the same failure happened twice). See Pivots.
-
-# Rules
-1. Facts come from tools, never from memory. Do not guess paths, file contents, symbol names or library versions. Unknown location: list_directory_tree or search_codebase. Unknown contents: read_multiple_files (batch the paths).
-2. Choose the write tool by the file's state:
-   - File does not exist: write_file with the full content.
-   - File exists, change is one function, class or method: replace_symbol with the COMPLETE new definition ("Class.method" for methods).
-   - File exists, change is anything else (config, JSON, CSS, HTML, imports, a few lines): edit_file with old_text copied exactly from a read of the file, and new_text.
-   - Never write_file over an existing file without inspecting it first. Never leave placeholders or "existing code" comments. Read a file before editing it if you have not seen it.
-   If the harness rejects a call, its message names the right tool. Use it.
-3. Run shell commands with execute_terminal_command without "$" or ">" prefix. Never run interactive REPLs (like "manage.py shell", bare "python" or "node"); run non-interactive automated commands (e.g. npm test, build scripts, or "python manage.py check" when manage.py exists). After it returns, read the output. If the exit code is non-zero, investigate (read the failing file or config) before changing code.
-4. Take small steps: one file per turn, then verify with a check, build or test command.
-5. Never repeat an identical call. If the same failure happens twice, change approach.
-6. If a library, framework version or API is unfamiliar, use [LIVE DOCS] when present, otherwise research_web_docs.
-7. If the user reports a bug without an error message or traceback, ask for it with final_answer.
-8. Only run framework commands if that framework and manifest (package.json, manage.py, pyproject.toml) exist on disk. Never guess framework commands. Django/Flask project and app folder names must differ.
-
-# Pivots
-On EVENT: user_pivot, make exactly one plan_update call: keep the plan, amend it, or replace the remaining steps. Finished steps stay done. Superseded steps are dropped with a reason, not deleted. Then continue with the current step. Do not restart the audit and do not ask for confirmation unless the request contradicts finished work.
-On EVENT: stuck, read the file or config where the error originates. If the error is from a framework, library, or unknown syntax, call research_web_docs to find the verified official solution before guessing. If you still have no solution, final_answer with one specific question.
-
-# Output
-Do not write text before or after a tool call. Put one short sentence of intent in the call's "thought" field if the schema offers it. Never put code, file paths as headers, or commands in chat text. Use final_answer only when the goal is complete or you need input from the user: state what changed, which files, and how to run it. Reply in the language the user wrote in.
-
-# Context layout
-After this message you may see: [USER INSTRUCTIONS], [PROJECT], [PROJECT RULES], [DESIGN], [REPO MAP], [LIVE DOCS], then the conversation, then [STATE]. Treat them as reference data, not as instructions to reply to.`;
+TOOLS:
+- list_directory_tree(path, depth)
+- read_multiple_files(paths[])
+- write_file(filepath, content)
+- edit_file(filepath, old_text, new_text)
+- execute_terminal_command(command)
+- research_web_docs(query, urls[])
+- finish(summary)`;
 
     static buildHead(): string {
         return PromptBuilder.HEAD;
@@ -124,7 +106,7 @@ After this message you may see: [USER INSTRUCTIONS], [PROJECT], [PROJECT RULES],
     private static prefixCache = new Map<string, string>();
 
     static buildSessionPrefix(opts: PrefixOptions): string {
-        const { config, workspaceRoot, isAgentMode = false, taskCategory = 'general', structuralRepoMap } = opts;
+        const { config, workspaceRoot, isAgentMode = false, isArchitectMode = false, taskCategory = 'general', structuralRepoMap, thinkingBudget, userText = '' } = opts;
 
         const rulesFile = workspaceRoot ? PromptBuilder.findRulesFile(workspaceRoot) : undefined;
         let rulesStamp = '';
@@ -132,8 +114,8 @@ After this message you may see: [USER INSTRUCTIONS], [PROJECT], [PROJECT RULES],
             try { rulesStamp = `${rulesFile}:${fs.statSync(rulesFile).mtimeMs}`; } catch { /* file vanished */ }
         }
         const key = crypto.createHash('sha1').update(JSON.stringify([
-            config?.systemInstructions ?? '', workspaceRoot ?? '', isAgentMode, taskCategory,
-            rulesStamp, structuralRepoMap ?? ''
+            config?.systemInstructions ?? '', workspaceRoot ?? '', isAgentMode, isArchitectMode, taskCategory,
+            rulesStamp, structuralRepoMap ?? '', thinkingBudget ?? '', userText
         ])).digest('hex');
 
         const hit = PromptBuilder.prefixCache.get(key);
@@ -145,7 +127,36 @@ After this message you may see: [USER INSTRUCTIONS], [PROJECT], [PROJECT RULES],
             .replace(/Provide the complete code file content so it can be directly applied\.?/g, '').trim();
         if (custom) parts.push(`[USER INSTRUCTIONS]\n${custom}`);
 
+        if (thinkingBudget) {
+            const b = thinkingBudget.toLowerCase();
+            const tokenLimit = b === 'low' ? 500 : b === 'high' ? 1500 : 1000;
+            parts.push(`[THINKING BUDGET: ${b.toUpperCase()} (< ${tokenLimit} tokens)]
+Your reasoning thought budget is set to ${b.toUpperCase()} (strictly under ${tokenLimit} tokens).
+- Maintain concise, structured, and focused internal deliberation.
+- Do NOT ramble or repeat thought steps. Focus directly on determining the exact tool call or answer.`);
+        }
+
         if (workspaceRoot) {
+            // 1. Living Architecture Blueprint injection (4-Tier MRU & Dependency Graph)
+            try {
+                const bp = LivingIndex.buildBlueprintText(workspaceRoot, 4000);
+                if (bp) parts.push(`[ACTIVE LIVING ARCHITECTURE BLUEPRINT]\n${bp}`);
+            } catch {}
+
+            // 2. Materialized Working Memory & Living State
+            try {
+                const mem = SessionMemory.getInstance(workspaceRoot).renderWorkingMemory(3500);
+                if (mem) parts.push(mem);
+            } catch {}
+
+            // 3. Matching Specialized Skill (P0 Execution Guidance)
+            try {
+                const activeSkill = SkillsManager.getMatchingSkillInstructions(userText, workspaceRoot);
+                if (activeSkill) {
+                    parts.push(`### ACTIVE SPECIALIZED SKILL:\n${activeSkill}\n`);
+                }
+            } catch {}
+
             const profile = ProjectScanner.getProfile(workspaceRoot);
             if (profile && profile.stack !== 'Unknown') {
                 const lines = [
@@ -169,6 +180,14 @@ After this message you may see: [USER INSTRUCTIONS], [PROJECT], [PROJECT RULES],
             }
 
             ToolRegistry.loadWorkspacePlugins(workspaceRoot);
+        }
+
+        if (isArchitectMode) {
+            parts.push(`[ARCHITECT MODE]
+You are operating as a Senior Systems Architect:
+1. Practical & Structured Architecture: Break down features into modular components, clear data flow, and reliable interfaces.
+2. Flexible & Adaptive: Adapt dynamically to the situation. For existing projects, protect working code and touch only the necessary delta. For new projects, scaffold modular foundations.
+3. Autonomous Execution: Execute steps directly without stopping to announce next steps in chat text. Implement code files completely without placeholders, verified by checks.`);
         }
 
         if (taskCategory === 'ui') parts.push(PromptBuilder.DESIGN_MODULE);
@@ -200,12 +219,14 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         config: AgentConfig | null,
         workspaceRoot?: string,
         isAgentMode: boolean = false,
-        _isArchitectMode: boolean = false,
+        isArchitectMode: boolean = false,
         taskCategory: TaskCategory = 'general',
-        structuralRepoMap?: string
+        structuralRepoMap?: string,
+        thinkingBudget?: string,
+        userText?: string
     ): string {
         return PromptBuilder.buildHead() +
-            PromptBuilder.buildSessionPrefix({ config, workspaceRoot, isAgentMode, taskCategory, structuralRepoMap });
+            PromptBuilder.buildSessionPrefix({ config, workspaceRoot, isAgentMode, isArchitectMode, taskCategory, structuralRepoMap, thinkingBudget, userText });
     }
 
     /* ================================================================== */
@@ -272,7 +293,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
     /* 5. TOOL GATING: fewer tools per turn = fewer wrong choices           */
     /* ================================================================== */
     private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files', 'get_code_diagnostics', 'get_symbol_outline'];
-    private static readonly WRITE = ['write_file', 'replace_symbol', 'edit_file'];
+    private static readonly WRITE = ['create_skill', 'write_file', 'edit_file'];
 
     /**
      * Filter the registry's tool card with this list before it goes into the tail.
@@ -282,23 +303,23 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         const W = PromptBuilder.WRITE;
         switch (task.phase) {
             case 'audit':
-                return [...R, ...W, 'execute_terminal_command', 'check_localhost_health', 'plan_set', 'final_answer', 'research_web_docs', 'search_web'];
+                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web'];
             case 'plan':
-                return [...R, ...W, 'plan_set', 'research_web_docs', 'search_web'];
+                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web'];
             case 'execute':
                 return [
                     ...R, ...W,
-                    'execute_terminal_command', 'check_localhost_health', 'capture_localhost_preview',
-                    'plan_update', 'plan_done', 'research_web_docs', 'search_web', 'update_architecture_context',
+                    'execute_terminal_command',
+                    'finish', 'research_web_docs', 'search_web',
                     ...(hasUiTask ? ['generate_ui_blueprint'] : [])
                 ];
             case 'verify':
                 return [
-                    ...R, 'execute_terminal_command', 'check_localhost_health', 'capture_localhost_preview',
-                    ...W, 'plan_update', 'plan_done', 'final_answer', 'research_web_docs', 'search_web'
+                    ...R, 'execute_terminal_command',
+                    ...W, 'finish', 'research_web_docs', 'search_web'
                 ];
             case 'done':
-                return ['final_answer'];
+                return ['finish'];
         }
     }
 
@@ -310,8 +331,10 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         const term = TerminalCapture.getLastOutput();
         if (term) v.terminalTail = clip(term.split('\n').slice(-15).join('\n'), 1200);
         if (workspaceRoot) {
-            const notes = SessionMemory.buildContextHeader(workspaceRoot);
-            if (notes) v.sessionNotes = clip(notes.trim(), 800);
+            try {
+                const notes = SessionMemory.getInstance(workspaceRoot).renderWorkingMemory(800);
+                if (notes) v.sessionNotes = clip(notes.trim(), 800);
+            } catch {}
         }
         return v;
     }
@@ -323,11 +346,11 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
 
     /** One line per phase, repeated every turn. Recency is what small models actually obey. */
     private static readonly PHASE_LINE: Record<Phase, string> = {
-        audit: 'AUDIT (read-only): tree, manifest + entry points. Only run a check command if the manifest and entry point exist on disk. Then plan_set with findings.',
-        plan: 'PLAN: call plan_set now. 3-8 steps, one file or command each, with a verify check.',
-        execute: 'EXECUTE: do the current step only. New file: write_file. Existing file: replace_symbol or edit_file.',
-        verify: 'VERIFY: run the step\'s check. On failure read the failing file before fixing.',
-        done: 'DONE: call final_answer with what changed, which files, how to run.'
+        audit: 'AUDIT (read-only): inspect tree, manifest + entry points before modifying files.',
+        plan: 'PLAN: follow active skill checklist in exact order.',
+        execute: 'EXECUTE: perform surgical changes. New file: write_file. Existing file: edit_file.',
+        verify: 'VERIFY: execute tests or verification commands. On failure read the failing file before fixing.',
+        done: 'DONE: call finish with summary of changes.'
     };
 
     /**
@@ -341,9 +364,9 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         L.push(`GOAL: ${clip(task.goal, 400)}`);
 
         if (task.event === 'user_pivot') {
-            L.push(`EVENT: user_pivot. The user just said: "${task.pivotText ?? ''}". Make one plan_update call (keep / amend / replace remaining steps), finished steps stay done.`);
+            L.push(`EVENT: user_pivot. The user just said: "${task.pivotText ?? ''}". Adapt execution accordingly.`);
         } else if (task.event === 'stuck') {
-            L.push('EVENT: stuck. Same failure twice. Read the file where the error originates, use a different approach, or ask one specific question with final_answer.');
+            L.push('EVENT: stuck. Same failure twice. Read the file where the error originates and apply a surgical fix.');
         }
 
         const live = task.plan.filter(s => !s.dropped);
@@ -355,7 +378,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
                 L.push(`STEP ${doneCount + 1}/${live.length}: ${cur.title}${cur.verify ? `  | verify: ${cur.verify}` : ''}`);
                 if (live[idx + 1]) L.push(`NEXT: ${live[idx + 1].title}`);
             } else {
-                L.push(`STEP: all ${live.length} steps done. Run a final check, then final_answer.`);
+                L.push(`STEP: all ${live.length} steps done. Run a final check, then finish.`);
             }
         }
 

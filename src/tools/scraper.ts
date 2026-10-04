@@ -86,14 +86,82 @@ export async function fetchNpmInfo(pkgName: string): Promise<PackageDocResult | 
 }
 
 /**
- * Fetches HTML context from a web resource, strips HTML tags, and truncates content.
+ * Fetches documentation or raw code context from any web resource.
+ * Natively supports GitHub (raw files & READMEs), Hugging Face (Model Cards & raw files),
+ * raw code files (gist, pastebin), and standard HTML web pages.
  */
-export async function fetchWebContext(url: string): Promise<string> {
+export async function fetchWebContext(rawUrl: string): Promise<string> {
     try {
+        let url = rawUrl.trim();
+
+        // 1. GitHub optimization: convert blob URL to raw.githubusercontent.com
+        // e.g. https://github.com/owner/repo/blob/main/path/to/file.py -> https://raw.githubusercontent.com/owner/repo/main/path/to/file.py
+        const githubBlobMatch = url.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
+        if (githubBlobMatch) {
+            url = `https://raw.githubusercontent.com/${githubBlobMatch[1]}/${githubBlobMatch[2]}/${githubBlobMatch[3]}/${githubBlobMatch[4]}`;
+        }
+
+        // 2. Hugging Face optimization: convert blob URL to raw URL
+        // e.g. https://huggingface.co/owner/model/blob/main/file.py -> https://huggingface.co/owner/model/raw/main/file.py
+        const hfBlobMatch = url.match(/^https?:\/\/huggingface\.co\/([^/]+\/[^/]+)\/blob\/(.+)$/i);
+        if (hfBlobMatch) {
+            url = `https://huggingface.co/${hfBlobMatch[1]}/raw/${hfBlobMatch[2]}`;
+        }
+
+        // 3. GitHub repository root URL: try fetching README.md directly
+        // e.g. https://github.com/owner/repo -> fetch raw README.md
+        const githubRepoMatch = url.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/?$/i);
+        if (githubRepoMatch && !['features', 'topics', 'trending', 'collections', 'pricing', 'explore', 'settings', 'notifications'].includes(githubRepoMatch[1].toLowerCase())) {
+            const rawReadmeUrl = `https://raw.githubusercontent.com/${githubRepoMatch[1]}/${githubRepoMatch[2]}/main/README.md`;
+            try {
+                const readmeRes = await fetch(rawReadmeUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+                if (readmeRes.ok) {
+                    const text = await readmeRes.text();
+                    if (text && text.length > 50) {
+                        return text.substring(0, 4000);
+                    }
+                }
+            } catch {}
+            // Fallback to master branch if main not found
+            try {
+                const masterReadmeUrl = `https://raw.githubusercontent.com/${githubRepoMatch[1]}/${githubRepoMatch[2]}/master/README.md`;
+                const masterRes = await fetch(masterReadmeUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+                if (masterRes.ok) {
+                    const text = await masterRes.text();
+                    if (text && text.length > 50) {
+                        return text.substring(0, 4000);
+                    }
+                }
+            } catch {}
+        }
+
+        // 4. Hugging Face model/dataset root URL: try fetching Model Card README.md directly
+        // e.g. https://huggingface.co/meta-llama/Llama-3-8B -> https://huggingface.co/meta-llama/Llama-3-8B/raw/main/README.md
+        const hfRepoMatch = url.match(/^https?:\/\/huggingface\.co\/([^/]+(?:\/[^/]+)?)\/?$/i);
+        if (hfRepoMatch && !['models', 'datasets', 'spaces', 'docs', 'pricing', 'blog'].includes(hfRepoMatch[1].toLowerCase())) {
+            const rawHfUrl = `https://huggingface.co/${hfRepoMatch[1]}/raw/main/README.md`;
+            try {
+                const hfRes = await fetch(rawHfUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+                if (hfRes.ok) {
+                    const text = await hfRes.text();
+                    if (text && text.length > 50) {
+                        return text.substring(0, 4000);
+                    }
+                }
+            } catch {}
+        }
+
+        // Standard fetch
         const response = await fetch(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml,text/plain,text/markdown;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9'
             }
         });
@@ -101,11 +169,17 @@ export async function fetchWebContext(url: string): Promise<string> {
             throw new Error(`Failed to fetch web resource. HTTP status: ${response.status}`);
         }
 
-        const html = await response.text();
+        const contentType = response.headers.get('content-type') || '';
+        const bodyText = await response.text();
 
-        // Extract core content first if possible
-        let mainContent = html;
-        const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+        // If raw text or markdown or JSON, return directly without stripping code
+        if (contentType.includes('text/plain') || contentType.includes('text/markdown') || url.endsWith('.md') || url.endsWith('.txt')) {
+            return bodyText.substring(0, 4000);
+        }
+
+        // Extract core content first if HTML
+        let mainContent = bodyText;
+        const mainMatch = bodyText.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || bodyText.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
         if (mainMatch && mainMatch[1]) {
             mainContent = mainMatch[1];
         }
@@ -122,10 +196,10 @@ export async function fetchWebContext(url: string): Promise<string> {
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Truncate to maximum of 2500 characters
-        return cleanText.substring(0, 2500);
+        // Truncate to maximum of 4000 characters
+        return cleanText.substring(0, 4000);
     } catch (error) {
-        console.error(`fetchWebContext failed for ${url}:`, error);
+        console.error(`fetchWebContext failed for ${rawUrl}:`, error);
         return '';
     }
 }
@@ -149,7 +223,9 @@ export async function searchWeb(query: string): Promise<string> {
             const isPy = /python|django|fastapi|pydantic|flask|celery|sqlmodel|pip/i.test(query);
             const winner = isPy ? (pypi || npm) : (npm || pypi);
             if (winner) {
+                const docUrl = winner.documentationUrl || winner.homepage || (isPy ? `https://pypi.org/project/${winner.name}/` : `https://www.npmjs.com/package/${winner.name}`);
                 let out = `--- DIRECT REGISTRY DOCUMENTATION: ${winner.name}@${winner.version} ---\n`;
+                out += `[Source 1]: ${docUrl}\n\n`;
                 out += `Summary: ${winner.description}\n`;
                 out += `Install: \`${winner.installCommand}\`\n`;
                 if (winner.documentationUrl) out += `Docs / Homepage: ${winner.documentationUrl}\n`;
