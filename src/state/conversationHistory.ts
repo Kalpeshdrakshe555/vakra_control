@@ -214,7 +214,7 @@ export class ConversationHistory {
      */
     public getHistoryForLLM(
         historyLimit: number = 10,
-        maxTokens: number = 8000
+        maxTokens: number = 6000
     ): Array<{ role: 'user' | 'model'; text: string }> {
         const session = this.activeSession;
         if (!session || session.messages.length === 0) return [];

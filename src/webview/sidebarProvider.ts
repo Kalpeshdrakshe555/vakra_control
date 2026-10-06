@@ -20,13 +20,16 @@ import { MessageDispatcher, DispatchContext } from './handlers/messageDispatcher
 import { autonomousPreFlightScout } from '../tools/scraper';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
+    public static readonly viewType = 'ultraLightAi.sidebar';
     private _view?: vscode.WebviewView;
+    private currentAbortController: AbortController | null = null;
+    private currentTurnToolCalls: Array<{ tool: string; title: string; data: any }> = [];
     private conversationHistory: ConversationHistory;
     private taskPlanner: InMemoryTaskPlanner;
-    private currentAbortController: AbortController | null = null;
     private isTerminalSessionAutoApproved: boolean = false;
     private isEditSessionAutoApproved: boolean = false;
-    private pendingTerminalResolvers: Map<string, (result: string) => void> = new Map();
+    private pendingTerminalResolvers: Map<string, (approvedOrResult: any, autoApproveSession?: boolean, command?: string) => void> = new Map();
+    private pendingEditResolvers: Map<string, (approved: boolean, autoApproveSession?: boolean) => void> = new Map();
     private currentTaskState?: TaskState;
 
     constructor(
@@ -130,6 +133,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             setEditSessionAutoApproved: (val) => { this.isEditSessionAutoApproved = val; },
             setTerminalSessionAutoApproved: (val) => { this.isTerminalSessionAutoApproved = val; },
             pendingTerminalResolvers: this.pendingTerminalResolvers,
+            pendingEditResolvers: this.pendingEditResolvers,
             getAiMetaDir: (root) => this.getAiMetaDir(root),
             abortCurrentStream: () => {
                 if (this.currentAbortController) {
@@ -140,6 +144,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.onDidReceiveMessage(async (message) => {
+            switch (message.command) {
+
+                case 'resolveFileChange': {
+                    const { callId, approved, autoApproveSession } = message;
+                    if (autoApproveSession) {
+                        this.isEditSessionAutoApproved = true;
+                    }
+                    const resolver = this.pendingEditResolvers.get(callId);
+                    if (resolver) {
+                        resolver(approved, !!autoApproveSession);
+                        this.pendingEditResolvers.delete(callId);
+                    }
+                    return;
+                }
+
+                case 'stopGeneration': {
+                    if (this.currentAbortController) {
+                        this.currentAbortController.abort();
+                        this.currentAbortController = null;
+                    }
+                    // UI locally resets cleanly; do not emit redundant error chunks
+                    return;
+                }
+
+                case 'sendChatStream': {
+                    const { text, images, timestamp, thinkingBudget, advancedMode, architectMode } = message;
+
+                    // Fresh abort controller & tool buffer for this turn
+                    this.currentAbortController = new AbortController();
+                    this.currentTurnToolCalls = [];
+                    await this.handleChatMessageStream(message);
+                    return;
+                }
+            }
+
             await MessageDispatcher.dispatch(message, dispatchCtx);
         });
     }
@@ -188,17 +227,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async handleRunInTerminal(command: string) {
+    public async handleRunInTerminal(command: string, workspaceRoot?: string) {
         const dangerousPatterns = [/rm\s+-r/i, /del\s+\/f/i, /format\s+/i, /diskpart/i, /rmdir\s+\/s/i, /mkfs/i, /shutdown/i];
         if (dangerousPatterns.some(pattern => pattern.test(command))) {
             vscode.window.showErrorMessage('🛡️ Sandbox Blocked: Potentially dangerous command.');
             return;
         }
 
-        let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI') || vscode.window.createTerminal('Ultra Light AI');
-        terminal.show();
-        const safeCommand = command.trim().split(/\r?\n/).filter(line => line.trim().length > 0).join(' && ');
-        terminal.sendText(safeCommand, true);
+        const safeCwd = (workspaceRoot && workspaceRoot.trim().length > 0)
+            ? workspaceRoot
+            : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || this._workspaceRoot);
+
+        let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI');
+        if (!terminal) {
+            terminal = vscode.window.createTerminal({
+                name: 'Ultra Light AI',
+                cwd: safeCwd
+            });
+        }
+        terminal.show(false); // Pop up the visible terminal tab
+        const clean = command.trim();
+        terminal.sendText(clean, true);
     }
 
     private async handleChatMessageStream(message: any): Promise<void> {
@@ -248,16 +297,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
             let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget, message.text);
 
+            if (workspaceRoot) {
+                try {
+                    const activeSkill = SkillsManager.getMatchingSkillInstructions(message.text, workspaceRoot);
+                    if (activeSkill) {
+                        // Extract skill name from first line or header
+                        const skillNameMatch = activeSkill.match(/#\s*(?:Skill:?\s*)?([a-zA-Z0-9_\-]+)/i) || message.text.match(/\b(django|react|fastapi|vue|node|nextjs|tailwind)\b/i);
+                        const displaySkill = skillNameMatch ? skillNameMatch[1] : 'Specialized Skill';
+                        this.postMessageToWebview({
+                            command: 'activeSkillNotice',
+                            skillName: displaySkill
+                        });
+                    }
+                } catch {}
+            }
+
             this.taskPlanner.syncWithDisk(workspaceRoot);
             this.currentTaskState = PromptBuilder.startTask(workspaceRoot, message.text);
             this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
 
             let finalPrompt = await this.buildPrompt(message.text, workspaceRoot);
 
-            try {
-                const liveDocs = await autonomousPreFlightScout(message.text);
-                if (liveDocs) finalPrompt = `${liveDocs}\n\n${finalPrompt}`;
-            } catch {}
+            // Pre-flight scout bypassed to eliminate initial UI freezing & redundant scraping
 
             this.conversationHistory.addMessage('user', message.text, undefined, message.timestamp);
 
@@ -266,15 +327,47 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
             const historyWithoutLast = history.slice(0, -1);
 
-            this.currentAbortController = new AbortController();
+            if (!this.currentAbortController) {
+                this.currentAbortController = new AbortController();
+            }
 
             const tools = [
                 {
                     functionDeclarations: [
                         {
                             name: "read_multiple_files",
-                            description: "Reads workspace files. Max 3 at once.",
-                            parameters: { type: "object", properties: { filepaths: { type: "array", items: { type: "string" } } }, required: ["filepaths"] }
+                            description: "Reads workspace files with optional line range slicing. Max 3 files at once.",
+                            parameters: { 
+                                type: "object", 
+                                properties: { 
+                                    filepaths: { type: "array", items: { type: "string" }, description: "Array of file paths to inspect" },
+                                    start_line: { type: "number", description: "Optional starting line number (1-based)" },
+                                    end_line: { type: "number", description: "Optional ending line number (1-based)" }
+                                }, 
+                                required: ["filepaths"] 
+                            }
+                        },
+                        {
+                            name: "search_codebase",
+                            description: "Performs semantic/textual search across the workspace codebase to find symbols, classes, functions, or keywords.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    query: { type: "string", description: "Symbol name, keyword, or query string to search for" }
+                                },
+                                required: ["query"]
+                            }
+                        },
+                        {
+                            name: "search_web",
+                            description: "Searches the live web for quick answers, sports scores, documentation snippets, and real-time facts.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    query: { type: "string", description: "Search query" }
+                                },
+                                required: ["query"]
+                            }
                         },
                         {
                             name: "create_skill",
@@ -332,11 +425,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             const turnExecutedToolCards: Array<{ tool: string; title: string; data: any }> = [];
 
+            let isInsideThink = false;
+            let currentTurnBuffer = '';
+            const detectedToolCalls: any[] = [];
+
             const onToolCall = async (functionCall: any) => {
+                detectedToolCalls.push(functionCall);
                 return await ToolDispatcher.dispatch(functionCall, {
                     workspaceRoot: workspaceRoot || '',
                     postMessage: (msg) => {
                         if (msg.command === 'toolCallEvent') {
+                            this.currentTurnToolCalls.push({
+                                tool: msg.tool,
+                                title: msg.title || '',
+                                data: msg.data || {}
+                            });
                             turnExecutedToolCards.push({ tool: msg.tool, title: msg.title, data: msg.data });
                         }
                         this.postMessageToWebview(msg);
@@ -345,39 +448,56 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     isEditSessionAutoApproved: this.isEditSessionAutoApproved,
                     isTerminalSessionAutoApproved: this.isTerminalSessionAutoApproved,
                     pendingTerminalResolvers: this.pendingTerminalResolvers,
+                    pendingEditResolvers: this.pendingEditResolvers,
                     taskPlanner: this.taskPlanner,
                     currentTaskState: this.currentTaskState,
                     ragEngine: this.ragEngine
                 });
             };
 
-            let currentTurnBuffer = '';
-            const detectedToolCalls: any[] = [];
-
-            const result = await mainClient.completeWithHistory(
-                systemInstruction,
-                historyWithoutLast,
-                finalPrompt,
-                true,
-                (chunk: any) => {
+            const result = await mainClient.completeWithHistory({
+                prompt: finalPrompt,
+                images: message.images || [],
+                signal: this.currentAbortController?.signal,
+                history: historyWithoutLast,
+                systemInstruction: systemInstruction,
+                stream: true,
+                onChunk: (chunk: any) => {
                     if (this.currentAbortController?.signal?.aborted) return;
 
                     if (chunk.text) {
                         currentTurnBuffer += chunk.text;
-                        // Forward thinking/reasoning text to UI
-                        this.postMessageToWebview({
-                            command: 'thinkingChunk',
-                            text: chunk.text
-                        });
+                        const text = chunk.text;
+                        if (text.includes('<think>')) isInsideThink = true;
+
+                        if (isInsideThink) {
+                            this.postMessageToWebview({
+                                command: 'thinkingChunk',
+                                text: text.replace(/<\/?think>/g, '')
+                            });
+                            if (text.includes('</think>')) isInsideThink = false;
+                        } else {
+                            if (chunk.isThinking) {
+                                this.postMessageToWebview({
+                                    command: 'thinkingChunk',
+                                    text: text
+                                });
+                            } else {
+                                this.postMessageToWebview({
+                                    command: 'streamChunk',
+                                    text: text,
+                                    done: false
+                                });
+                            }
+                        }
                     }
                     if (chunk.tool_calls && chunk.tool_calls.length > 0) {
                         detectedToolCalls.push(...chunk.tool_calls);
                     }
                 },
-                this.currentAbortController?.signal,
                 tools,
                 onToolCall
-            );
+            });
 
             this.currentAbortController = null;
 
@@ -405,53 +525,63 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     done: true,
                     usage: result?.usage
                 });
-                this.conversationHistory.addMessage('model', cleanSummary, result?.usage, turnExecutedToolCards);
+                this.conversationHistory.addMessage(
+                    'model',
+                    cleanSummary,
+                    result?.usage,
+                    [...this.currentTurnToolCalls]
+                );
+                this.currentTurnToolCalls = [];
                 this.currentAbortController = null;
                 return;
             }
 
             // TurnGate Resolution: Always ensure stream terminates cleanly
-            if (detectedToolCalls.length === 0) {
-                // If model just spoke text (even if it contains backticks or <think> tags)
-                // strip reasoning tags and deliver message
-                const cleanedText = currentTurnBuffer
-                    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-                    .trim();
-
-                this.postMessageToWebview({
-                    command: 'streamChunk',
-                    text: cleanedText || 'Done.',
-                    done: true,
-                    usage: result?.usage
-                });
-                this.conversationHistory.addMessage('model', cleanedText || 'Done.', result?.usage, turnExecutedToolCards);
-                this.currentAbortController = null;
-                return;
+            const totalToolCallsInTurn = this.currentTurnToolCalls.length + detectedToolCalls.length;
+            const rawContent = (result?.text || currentTurnBuffer || '');
+            let clean = rawContent
+                .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                .replace(/<think>[\s\S]*$/i, '')
+                .replace(/<\/think>/gi, '')
+                .trim();
+            if (!clean && rawContent) {
+                clean = rawContent.replace(/<[^>]+>/g, '').trim();
             }
 
-            if (result?.text) {
-                let clean = result.text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '').trim();
-                if (!clean && result.text) {
-                    clean = result.text.replace(/<[^>]+>/g, '').trim();
-                }
+            this.postMessageToWebview({
+                command: 'streamChunk',
+                text: clean || (totalToolCallsInTurn > 0 ? '' : 'Done.'),
+                done: true,
+                usage: result?.usage
+            });
+
+            if (result?.usage) {
                 this.postMessageToWebview({
-                    command: 'streamChunk',
-                    text: clean || 'Done.',
-                    done: true,
+                    command: 'tokenUsage',
                     usage: result.usage
                 });
-                this.conversationHistory.addMessage('model', clean || 'Done.', result.usage, turnExecutedToolCards);
             }
+
+            this.conversationHistory.addMessage(
+                'model',
+                clean || 'Done.',
+                result?.usage,
+                [...this.currentTurnToolCalls]
+            );
+            this.currentTurnToolCalls = [];
         } catch (error: any) {
-            const wasAborted = this.currentAbortController?.signal?.aborted || error?.message?.includes('aborted');
-            this.currentAbortController = null;
-            if (!wasAborted) {
-                this.postMessageToWebview({
-                    command: 'streamChunk',
-                    text: `\n\nError: ${error?.message || error}`,
-                    done: true
-                });
+            if (error?.name === 'AbortError' || this.currentAbortController?.signal?.aborted || error?.message?.includes('aborted')) {
+                // User aborted cleanly - suppress error banner
+                return;
             }
+            this.postMessageToWebview({
+                command: 'streamChunk',
+                text: `\n\n**Error:** ${error.message || 'Execution error'}`,
+                done: true
+            });
+        } finally {
+            this.currentAbortController = null;
+            this.currentTurnToolCalls = [];
         }
     }
 

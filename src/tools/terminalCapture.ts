@@ -55,13 +55,11 @@ export class TerminalCapture {
                         }
                     }
 
-                    // Strip ANSI color escape codes for clean AI perception
                     const cleanOutput = fullOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '').trim();
                     const lines = cleanOutput.split('\n').filter(l => l.trim().length > 0);
                     let conciseOutput = '';
 
                     if (lines.length > 35) {
-                        // Preserve the first 5 lines (context/start) and last 30 lines (traceback, exact error)
                         const head = lines.slice(0, 5).join('\n');
                         const tail = lines.slice(-30).join('\n');
                         conciseOutput = `${head}\n... [${lines.length - 35} lines omitted] ...\n${tail}`;

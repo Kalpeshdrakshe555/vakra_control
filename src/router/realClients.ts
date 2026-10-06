@@ -192,33 +192,7 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         };
     }
 
-    // 13. plan_set signature
-    if ((obj.steps && Array.isArray(obj.steps)) || (obj.goal && obj.steps)) {
-        return {
-            name: 'plan_set',
-            args: {
-                goal: String(obj.goal || ''),
-                steps: obj.steps,
-                architecture: obj.architecture || undefined
-            }
-        };
-    }
-
-    // 14. plan_update signature
-    if (obj.stepId !== undefined || (obj.action && (obj.action === 'done' || obj.action === 'drop' || obj.action === 'dropped' || obj.action === 'update'))) {
-        return {
-            name: 'plan_update',
-            args: obj
-        };
-    }
-
-    // 15. plan_done signature
-    if (obj.plan_done !== undefined || (obj.note && !obj.filepath && !obj.command)) {
-        return {
-            name: 'plan_done',
-            args: { note: String(obj.note || obj.plan_done) }
-        };
-    }
+    // Legacy planner signatures disabled - agent acts directly via write_file / edit_file / execute_terminal_command
 
     return null;
 }
@@ -657,26 +631,76 @@ export class GeminiCloudClient implements IEngine {
      * Constructs the full multi-turn Gemini API payload with system instruction and history.
      */
     public async completeWithHistory(
-        systemInstruction: string,
-        history: Array<{ role: 'user' | 'model'; text: string }>,
-        userMessage: string,
+        systemInstructionOrOptions: string | any,
+        history?: Array<{ role: 'user' | 'model'; text: string }>,
+        userMessage?: string,
         stream: boolean = false,
         onChunk?: (chunk: StreamChunk) => void,
         signal?: AbortSignal,
         tools?: any[],
-        onToolCall?: (functionCall: any) => Promise<any>
+        onToolCall?: (functionCall: any) => Promise<any>,
+        images?: any[]
     ): Promise<CompletionResult> {
+        let systemInstruction = '';
+        if (typeof systemInstructionOrOptions === 'object' && systemInstructionOrOptions !== null) {
+            const opts = systemInstructionOrOptions;
+            systemInstruction = opts.systemInstruction || '';
+            history = opts.history || [];
+            userMessage = opts.prompt || opts.userMessage || '';
+            stream = opts.stream ?? true;
+            onChunk = opts.onChunk;
+            signal = opts.signal;
+            tools = opts.tools;
+            onToolCall = opts.onToolCall;
+            images = opts.images || [];
+        } else {
+            systemInstruction = systemInstructionOrOptions || '';
+            history = history || [];
+            userMessage = userMessage || '';
+        }
+
         if (!this.keys || this.keys.length === 0) {
             throw new Error('Gemini API Key is missing. Please click the ⚙️ Gear icon in the chat panel to open Agent Configuration and add your API key.');
         }
         this.resetKeyRotation();
+
+        const userParts: any[] = [{ text: userMessage }];
+        if (images && images.length > 0) {
+            for (const img of images) {
+                if (typeof img === 'string') {
+                    const match = img.match(/^data:([^;]+);base64,(.+)$/);
+                    if (match) {
+                        userParts.push({
+                            inlineData: {
+                                mimeType: match[1],
+                                data: match[2]
+                            }
+                        });
+                    } else {
+                        userParts.push({
+                            inlineData: {
+                                mimeType: 'image/png',
+                                data: img
+                            }
+                        });
+                    }
+                } else if (img?.data) {
+                    userParts.push({
+                        inlineData: {
+                            mimeType: img.mimeType || 'image/png',
+                            data: img.data
+                        }
+                    });
+                }
+            }
+        }
 
         const contents: any[] = [
             ...history.map(h => ({
                 role: h.role,
                 parts: [{ text: h.text }]
             })),
-            { role: 'user', parts: [{ text: userMessage }] }
+            { role: 'user', parts: userParts }
         ];
 
         let finalUsage: CompletionResult['usage'] | undefined;
@@ -838,25 +862,43 @@ export class GeminiCloudClient implements IEngine {
             }
 
             if (functionCallToExecute && onToolCall) {
-                // Execute the tool locally
+                if (signal?.aborted) {
+                    if (onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: finalUsage });
+                    return { text: fullText || 'Stopped by user.', usage: finalUsage };
+                }
+
                 if (onChunk) onChunk({ text: `\n> *⚙️ AI is using tool: \`${functionCallToExecute.name}\`*\n`, done: false });
                 
-                let toolResult;
+                let toolResult: any;
                 const callSignature = `${functionCallToExecute.name}:${JSON.stringify(functionCallToExecute.args || {})}`;
                 const callCount = (toolExecutionHistory.get(callSignature) || 0) + 1;
                 toolExecutionHistory.set(callSignature, callCount);
 
                 if (callCount > 2) {
-                    toolResult = `[LOOP PREVENTED]: Tool '${functionCallToExecute.name}' with the same arguments was already executed ${callCount - 1} times in this turn. Aborting repeat execution to prevent loop. Please explain the issue to the user or proceed without re-running this command.`;
+                    toolResult = `[LOOP PREVENTED]: Tool '${functionCallToExecute.name}' with the same arguments was already executed ${callCount - 1} times in this turn. Aborting repeat execution to prevent loop.`;
                 } else {
                     try {
                         toolResult = await onToolCall(functionCallToExecute);
                     } catch (err: any) {
+                        if (signal?.aborted || err?.message?.includes('aborted') || err?.message?.includes('AbortError')) {
+                            if (onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: finalUsage });
+                            return { text: fullText || 'Stopped by user.', usage: finalUsage };
+                        }
                         toolResult = `Error executing tool: ${err?.message}`;
                     }
                 }
 
-                // Add to contents for next API call
+                if (signal?.aborted) {
+                    if (onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: finalUsage });
+                    return { text: fullText || 'Stopped by user.', usage: finalUsage };
+                }
+
+                // Safety: Clamp any massive tool result to max 8,000 characters to prevent 170k context explosion
+                let safeResultText = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+                if (safeResultText.length > 8000) {
+                    safeResultText = safeResultText.substring(0, 8000) + '\n\n... [Output truncated to 8000 chars for context safety]';
+                }
+
                 contents.push({
                     role: 'model',
                     parts: [{ functionCall: functionCallToExecute }]
@@ -866,11 +908,11 @@ export class GeminiCloudClient implements IEngine {
                     parts: [{
                         functionResponse: {
                             name: functionCallToExecute.name,
-                            response: { result: toolResult }
+                            response: { result: safeResultText }
                         }
                     }]
                 });
-                continue; // Loop back and make the next API call
+                continue;
             }
 
             // Done generating!
@@ -904,22 +946,58 @@ export class LocalOllamaClient implements IEngine {
     }
 
     public async completeWithHistory(
-        systemInstruction: string,
-        history: Array<{ role: 'user' | 'model'; text: string }>,
-        userMessage: string,
+        systemInstructionOrOptions: string | any,
+        history?: Array<{ role: 'user' | 'model'; text: string }>,
+        userMessage?: string,
         stream: boolean = false,
         onChunk?: (chunk: StreamChunk) => void,
         signal?: AbortSignal,
         tools?: any[],
-        onToolCall?: (functionCall: any) => Promise<any>
+        onToolCall?: (functionCall: any) => Promise<any>,
+        images?: any[]
     ): Promise<CompletionResult> {
+        let systemInstruction = '';
+        if (typeof systemInstructionOrOptions === 'object' && systemInstructionOrOptions !== null) {
+            const opts = systemInstructionOrOptions;
+            systemInstruction = opts.systemInstruction || '';
+            history = opts.history || [];
+            userMessage = opts.prompt || opts.userMessage || '';
+            stream = opts.stream ?? true;
+            onChunk = opts.onChunk;
+            signal = opts.signal;
+            tools = opts.tools;
+            onToolCall = opts.onToolCall;
+            images = opts.images || [];
+        } else {
+            systemInstruction = systemInstructionOrOptions || '';
+            history = history || [];
+            userMessage = userMessage || '';
+        }
+
         let messages: any[] = [];
         if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
         
         history.forEach(h => {
             messages.push({ role: h.role === 'model' ? 'assistant' : 'user', content: h.text });
         });
-        messages.push({ role: 'user', content: userMessage });
+
+        if (images && images.length > 0) {
+            const userContent: any[] = [{ type: 'text', text: userMessage }];
+            const ollamaImages: string[] = [];
+            for (const img of images) {
+                const rawB64 = typeof img === 'string' ? img.replace(/^data:image\/[^;]+;base64,/, '') : (img.data || '');
+                ollamaImages.push(rawB64);
+                const url = typeof img === 'string' ? (img.startsWith('data:') ? img : `data:image/png;base64,${img}`) : (img.url || `data:${img.mimeType || 'image/png'};base64,${img.data}`);
+                userContent.push({ type: 'image_url', image_url: { url } });
+            }
+            messages.push({
+                role: 'user',
+                content: userContent,
+                ...(ollamaImages.length > 0 ? { images: ollamaImages } : {})
+            });
+        } else {
+            messages.push({ role: 'user', content: userMessage });
+        }
 
         let cleanEndpoint = (this.endpoint || 'http://127.0.0.1:11434').trim().replace(/\/+$/, '');
         
@@ -959,10 +1037,12 @@ export class LocalOllamaClient implements IEngine {
         const MAX_TOOL_ITERATIONS = this.maxToolIterations;
         const localToolExecutionCounts = new Map<string, number>();
         let lastFullText = '';
+        let currentUsage: CompletionResult['usage'] | undefined;
+
         for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
             if (signal?.aborted) {
-                if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
-                return { text: lastFullText || 'Stopped by user.' };
+                if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: currentUsage });
+                return { text: lastFullText || 'Stopped by user.', usage: currentUsage };
             }
             const requestBody: any = {
                 model: this.model,
@@ -977,12 +1057,38 @@ export class LocalOllamaClient implements IEngine {
                 requestBody.tool_choice = 'auto';
             }
 
-            const response = await fetch(url, {
+            let response = await fetch(url, {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify(requestBody),
                 signal
             });
+
+            // If proxy fails with 400/422/500 on tools or role 'tool', retry without native tools by converting to plain conversational prompts
+            if (!response.ok && (requestBody.tools || messages.some((m: any) => m.role === 'tool' || m.tool_calls))) {
+                console.warn(`[LocalOllamaClient] API request failed with status ${response.status}. Attempting conversational fallback...`);
+                const fallbackMessages = messages.map(m => {
+                    if (m.role === 'tool') {
+                        return { role: 'user', content: `[Tool Execution Result]:\n${m.content}\n\nPlease inspect this result and proceed to the next step.` };
+                    }
+                    if (m.role === 'assistant' && (m.tool_calls || m.content === null || m.content === '')) {
+                        return { role: 'assistant', content: m.content || `[Executing requested tool operation...]` };
+                    }
+                    return m;
+                });
+                const fallbackBody = {
+                    ...requestBody,
+                    messages: fallbackMessages,
+                    tools: undefined,
+                    tool_choice: undefined
+                };
+                response = await fetch(url, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(fallbackBody),
+                    signal
+                });
+            }
 
             if (!response.ok) {
                 throw new Error(`Local model failed: ${response.status} ${await response.text()}`);
@@ -1040,6 +1146,13 @@ export class LocalOllamaClient implements IEngine {
                                     const dataStr = line.slice(6);
                                     if (dataStr.trim() === '[DONE]') continue;
                                     const data = JSON.parse(dataStr);
+                                    if (data.usage) {
+                                        currentUsage = {
+                                            promptTokens: data.usage.prompt_tokens || 0,
+                                            completionTokens: data.usage.completion_tokens || 0,
+                                            totalTokens: data.usage.total_tokens || ((data.usage.prompt_tokens || 0) + (data.usage.completion_tokens || 0))
+                                        };
+                                    }
                                     const delta = data.choices?.[0]?.delta;
                                     
                                     // Handle streamed tool calls
@@ -1134,31 +1247,88 @@ export class LocalOllamaClient implements IEngine {
 
                 // If tool calls were streamed, handle them
                 if (toolCallsAccumulator.length > 0 && onToolCall) {
-                    messages.push({ role: 'assistant', content: null, tool_calls: toolCallsAccumulator.map((tc, i) => ({ id: tc.id || `call_${i}`, type: 'function', function: { name: tc.name, arguments: tc.arguments } })) });
-                    for (const tc of toolCallsAccumulator) {
-                        try {
-                            const args = JSON.parse(tc.arguments);
-                            const callSig = `${tc.name}:${tc.arguments}`;
-                            const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
-                            localToolExecutionCounts.set(callSig, count);
+                    if (signal?.aborted) {
+                        if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                        return { text: lastFullText || 'Stopped by user.' };
+                    }
 
-                            if (count > 2) {
-                                const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
-                                messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: loopMsg });
-                                continue;
+                    const isTextDetected = toolCallsAccumulator.some(tc => (tc.id || '').startsWith('call_text_') || (tc.id || '').startsWith('call_repaired_'));
+                    if (isTextDetected) {
+                        // Conversational history for text-based models (llama-server, Ollama, etc.)
+                        messages.push({ role: 'assistant', content: fullText || `[Invoking tool operation...]` });
+                        for (const tc of toolCallsAccumulator) {
+                            if (signal?.aborted) {
+                                if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                return { text: lastFullText || 'Stopped by user.' };
                             }
+                            try {
+                                const args = JSON.parse(tc.arguments);
+                                const callSig = `${tc.name}:${tc.arguments}`;
+                                const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
+                                localToolExecutionCounts.set(callSig, count);
 
-                            const result = await onToolCall({ name: tc.name, args });
-                            messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: typeof result === 'string' ? result : JSON.stringify(result) });
-                        } catch (e: any) {
-                            messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: `Error: ${e.message}` });
+                                if (count > 2) {
+                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                    messages.push({ role: 'user', content: loopMsg });
+                                    continue;
+                                }
+
+                                const result = await onToolCall({ name: tc.name, args });
+                                const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                                messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${resultStr}\n\nPlease inspect the output and proceed to the next step.` });
+                            } catch (e: any) {
+                                if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
+                                    if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                    return { text: lastFullText || 'Stopped by user.' };
+                                }
+                                messages.push({ role: 'user', content: `[Tool Execution Error (${tc.name})]: ${e.message}\nPlease correct and proceed.` });
+                            }
+                        }
+                    } else {
+                        // Native OpenAI format
+                        messages.push({ role: 'assistant', content: '', tool_calls: toolCallsAccumulator.map((tc, i) => ({ id: tc.id || `call_${i}`, type: 'function', function: { name: tc.name, arguments: tc.arguments } })) });
+                        for (const tc of toolCallsAccumulator) {
+                            if (signal?.aborted) {
+                                if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                return { text: lastFullText || 'Stopped by user.' };
+                            }
+                            try {
+                                const args = JSON.parse(tc.arguments);
+                                const callSig = `${tc.name}:${tc.arguments}`;
+                                const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
+                                localToolExecutionCounts.set(callSig, count);
+
+                                if (count > 2) {
+                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                    messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: loopMsg });
+                                    continue;
+                                }
+
+                                const result = await onToolCall({ name: tc.name, args });
+                                messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: typeof result === 'string' ? result : JSON.stringify(result) });
+                            } catch (e: any) {
+                                if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
+                                    if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                    return { text: lastFullText || 'Stopped by user.' };
+                                }
+                                messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: `Error: ${e.message}` });
+                            }
                         }
                     }
                     continue; // Loop back for next API call
                 }
                 
-                onChunk({ text: '', done: true });
-                return { text: fullText };
+                if (!currentUsage) {
+                    const estPrompt = Math.max(1, Math.round(JSON.stringify(messages).length / 4));
+                    const estComp = Math.max(1, Math.round(fullText.length / 4));
+                    currentUsage = {
+                        promptTokens: estPrompt,
+                        completionTokens: estComp,
+                        totalTokens: estPrompt + estComp
+                    };
+                }
+                onChunk({ text: '', done: true, usage: currentUsage });
+                return { text: fullText, usage: currentUsage };
 
             } else {
                 // --- NON-STREAMING PATH ---
@@ -1200,11 +1370,56 @@ export class LocalOllamaClient implements IEngine {
                             }
                         }
                         if (toolCalls && toolCalls.length > 0 && onToolCall) {
-                                // Add the assistant's tool call message to history
-                                messages.push(choice.message);
-                                
-                                // Execute each tool call
+                            if (signal?.aborted) {
+                                if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                return { text: lastFullText || 'Stopped by user.' };
+                            }
+
+                            const isTextDetected = toolCalls.some(tc => (tc.id || '').startsWith('call_text_') || (tc.id || '').startsWith('call_repaired_'));
+                            if (isTextDetected) {
+                                messages.push({ role: 'assistant', content: raw || `[Invoking tool operation...]` });
                                 for (const tc of toolCalls) {
+                                    if (signal?.aborted) {
+                                        if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                        return { text: lastFullText || 'Stopped by user.' };
+                                    }
+                                    try {
+                                        const args = JSON.parse(tc.function.arguments);
+                                        const callSig = `${tc.function.name}:${tc.function.arguments}`;
+                                        const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
+                                        localToolExecutionCounts.set(callSig, count);
+
+                                        if (count > 2) {
+                                            const loopMsg = `[LOOP PREVENTED]: Tool '${tc.function.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                            messages.push({ role: 'user', content: loopMsg });
+                                            continue;
+                                        }
+
+                                        if (onChunk) onChunk({ text: `\n> *⚙️ Tool: \`${tc.function.name}\`*\n`, done: false });
+                                        const result = await onToolCall({ name: tc.function.name, args });
+                                        const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                                        messages.push({
+                                            role: 'user',
+                                            content: `[Tool Result (${tc.function.name})]:\n${resultStr}\n\nPlease inspect the output and proceed to the next step.`
+                                        });
+                                    } catch (e: any) {
+                                        if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
+                                            if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                            return { text: lastFullText || 'Stopped by user.' };
+                                        }
+                                        messages.push({
+                                            role: 'user',
+                                            content: `[Tool Execution Error (${tc.function.name})]: ${e.message}\nPlease correct and proceed.`
+                                        });
+                                    }
+                                }
+                            } else {
+                                messages.push(choice.message);
+                                for (const tc of toolCalls) {
+                                    if (signal?.aborted) {
+                                        if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                        return { text: lastFullText || 'Stopped by user.' };
+                                    }
                                     try {
                                         const args = JSON.parse(tc.function.arguments);
                                         const callSig = `${tc.function.name}:${tc.function.arguments}`;
@@ -1225,6 +1440,10 @@ export class LocalOllamaClient implements IEngine {
                                             content: typeof result === 'string' ? result : JSON.stringify(result)
                                         });
                                     } catch (e: any) {
+                                        if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
+                                            if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
+                                            return { text: lastFullText || 'Stopped by user.' };
+                                        }
                                         messages.push({
                                             role: 'tool',
                                             tool_call_id: tc.id,
@@ -1232,21 +1451,38 @@ export class LocalOllamaClient implements IEngine {
                                         });
                                     }
                                 }
-                                continue; // Loop back for next API call with tool results
                             }
+                            continue; // Loop back for next API call with tool results
+                        }
                         
+                        if (data.usage) {
+                            currentUsage = {
+                                promptTokens: data.usage.prompt_tokens || 0,
+                                completionTokens: data.usage.completion_tokens || 0,
+                                totalTokens: data.usage.total_tokens || ((data.usage.prompt_tokens || 0) + (data.usage.completion_tokens || 0))
+                            };
+                        }
                         fullText = choice?.message?.content || '';
                     }
                 } catch (e) {
                     fullText = rawText;
                 }
-                
+
+                if (!currentUsage) {
+                    const estPrompt = Math.max(1, Math.round(JSON.stringify(messages).length / 4));
+                    const estComp = Math.max(1, Math.round(fullText.length / 4));
+                    currentUsage = {
+                        promptTokens: estPrompt,
+                        completionTokens: estComp,
+                        totalTokens: estPrompt + estComp
+                    };
+                }
                 lastFullText = fullText;
                 if (stream && onChunk) {
                     onChunk({ text: fullText, done: false });
-                    onChunk({ text: '', done: true });
+                    onChunk({ text: '', done: true, usage: currentUsage });
                 }
-                return { text: fullText };
+                return { text: fullText, usage: currentUsage };
             }
         }
 

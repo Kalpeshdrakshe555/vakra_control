@@ -21,6 +21,7 @@ export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Ultra Light AI');
     outputChannel.appendLine('Activating "ultra-light-ai" extension...');
 
+    
     setSecretStorage(context.secrets);
 
     const workspaceFolders = vscode.workspace.workspaceFolders;

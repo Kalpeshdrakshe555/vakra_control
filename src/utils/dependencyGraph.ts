@@ -129,4 +129,43 @@ export class DependencyGraph {
 
         return skeletonCount > 0 ? skeletonsContext : '';
     }
+
+    /**
+     * Finds files in the workspace that import the given targetPath.
+     */
+    public static getDependents(targetPath: string, workspaceRoot: string): string[] {
+        const dependents: string[] = [];
+        if (!workspaceRoot || !fs.existsSync(targetPath)) return dependents;
+
+        const normalizedTarget = path.normalize(targetPath).toLowerCase();
+        const baseNameNoExt = path.basename(targetPath, path.extname(targetPath));
+
+        const scanDir = (dir: string) => {
+            const ignoreList = new Set(['node_modules', '.git', 'out', 'dist', '.ultra-light-ai', '__pycache__', 'venv', '.venv']);
+            try {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (ignoreList.has(entry.name)) continue;
+                    const full = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        scanDir(full);
+                    } else if (entry.isFile() && /\.(py|ts|tsx|js|jsx)$/i.test(entry.name)) {
+                        if (path.normalize(full).toLowerCase() === normalizedTarget) continue;
+                        try {
+                            const content = fs.readFileSync(full, 'utf8');
+                            if (content.includes(baseNameNoExt)) {
+                                const directImports = DependencyGraph.getDirectImports(full, content, workspaceRoot);
+                                if (directImports.some(imp => path.normalize(imp).toLowerCase() === normalizedTarget)) {
+                                    dependents.push(full);
+                                }
+                            }
+                        } catch {}
+                    }
+                }
+            } catch {}
+        };
+
+        scanDir(workspaceRoot);
+        return Array.from(new Set(dependents));
+    }
 }

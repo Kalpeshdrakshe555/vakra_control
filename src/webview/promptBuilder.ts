@@ -77,18 +77,24 @@ export class PromptBuilder {
 # Micro-Kernel Execution Contract
 RULES:
 1. Every reply MUST be exactly ONE tool call. Never output source code, file blocks, or commands as plain chat text.
-2. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, python -c) to write code.
-3. Inspect before editing: call \`read_multiple_files\` first. Never guess paths or symbols.
-4. When a SKILL is active, strictly follow its numbered checklist in exact order.
-5. If a command or check fails: read the error, make the smallest surgical fix with \`edit_file\`, and re-test.
-6. When all tasks and verification steps are complete, call \`finish\` with a 2-3 sentence summary.
+2. STRICT SINGLE ACTION PER STEP: Execute EXACTLY ONE skill checklist step or command per turn. NEVER chain multiple terminal commands (e.g. no '&&' or ';'). Run one command, inspect the result, and only then proceed.
+3. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, powershell redirection) to write code.
+4. Inspect before editing: call \`read_multiple_files\` first. Never guess paths or symbols.
+5. If a command or check fails: analyze the error, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
+6. ANTI-PREMATURE FINISH: You are STRICTLY FORBIDDEN from calling \`finish\` if:
+   - A terminal command just failed or produced an error.
+   - Verification checks (e.g. \`python manage.py check\`, compiler build, or test run) have not yet been executed and passed.
+   - Any planned files or routes are still missing or incomplete.
+7. Only call \`finish\` when all files are physically created, URLs connected, and verification passes with 0 errors.
 
 TOOLS:
 - list_directory_tree(path, depth)
-- read_multiple_files(paths[])
+- search_codebase(query)
+- read_multiple_files(paths[], start_line?, end_line?)
 - write_file(filepath, content)
 - edit_file(filepath, old_text, new_text)
 - execute_terminal_command(command)
+- search_web(query)
 - research_web_docs(query, urls[])
 - finish(summary)`;
 
@@ -180,6 +186,32 @@ You are operating as a Senior Systems Architect:
 
         // Dynamic living context: ALWAYS evaluated fresh per turn
         const dynamicParts: string[] = [];
+
+        // Real-time system calendar & temporal anchor (prevents date amnesia and confusion with 'kal' / 'aaj')
+        const now = new Date();
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+        const formatDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const formatIso = (d: Date) => d.toISOString().slice(0, 10);
+
+        const calendarBlock = `[REAL-TIME CALENDAR ANCHOR & TEMPORAL TRUTH]
+- TODAY: ${formatDate(now)} (ISO: ${formatIso(now)})
+- YESTERDAY: ${formatDate(yesterday)} (ISO: ${formatIso(yesterday)})
+- TOMORROW: ${formatDate(tomorrow)} (ISO: ${formatIso(tomorrow)})
+- Current Local Time: ${now.toLocaleTimeString()}
+
+TEMPORAL RESOLUTION RULES:
+1. Always anchor your answers to this exact current real-world date (${formatDate(now)}). You ALWAYS know today's exact date and year.
+2. When the user asks in Hindi/Hinglish using relative time words:
+   - "aaj": means TODAY (${formatDate(now)}).
+   - "kal": In Hindi, "kal" has dual meaning (yesterday or tomorrow).
+     * If asking for match score / result / winner ("kal ka score bata", "kal kon jeeta"): this refers to YESTERDAY (${formatDate(yesterday)}) or recently concluded matches.
+     * If asking for schedule / upcoming matches ("kal kiska match hai", "timing", "fixtures"): this refers to TOMORROW (${formatDate(tomorrow)}).
+     * Always specify the EXACT calendar dates in your answer! If both could be relevant, mention both yesterday's scores and tomorrow's fixtures with explicit dates.
+3. When using web search results, never tell the user to visit third-party websites. Directly synthesize and present the live match scores, teams, runs, wickets, and dates from the extracted data!`;
+
+        dynamicParts.push(calendarBlock);
 
         if (workspaceRoot) {
             // 1. Living Architecture Blueprint injection (4-Tier MRU & Dependency Graph)
@@ -366,6 +398,8 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
      */
     static buildStateBlock(task: TaskState, toolCard: string, vol: VolatileContext = {}): string {
         const L: string[] = ['[STATE]'];
+        const now = new Date();
+        L.push(`CALENDAR TODAY: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (ISO: ${now.toISOString().slice(0, 10)})`);
         L.push(`MODE: ${PromptBuilder.MODE_LINE[task.mode]}`);
         L.push(`PHASE: ${PromptBuilder.PHASE_LINE[task.phase]}`);
         L.push(`GOAL: ${clip(task.goal, 400)}`);

@@ -20,7 +20,8 @@ export interface DispatchContext {
     isTerminalSessionAutoApproved: boolean;
     setEditSessionAutoApproved: (val: boolean) => void;
     setTerminalSessionAutoApproved: (val: boolean) => void;
-    pendingTerminalResolvers: Map<string, (result: string) => void>;
+    pendingTerminalResolvers: Map<string, (approvedOrResult: any, autoApproveSession?: boolean, command?: string) => void>;
+    pendingEditResolvers?: Map<string, (approved: boolean, autoApproveSession?: boolean) => void>;
     getAiMetaDir: (root: string) => string;
     abortCurrentStream?: () => void;
 }
@@ -73,13 +74,8 @@ export class MessageDispatcher {
                 if (ctx.abortCurrentStream) {
                     ctx.abortCurrentStream();
                 }
-                // Do not send extra markdown text to prevent duplicate boxes
-                postMessage({
-                    command: 'streamChunk',
-                    text: '',
-                    done: true
-                });
-                break;
+                // UI locally resets cleanly; do not emit redundant error chunks
+                return;
             }
 
             case 'rollbackChat': {
@@ -191,7 +187,7 @@ export class MessageDispatcher {
                     } else {
                         postMessage({ command: 'statusUpdate', text: `⚡ Running: ${finalCmd}...` });
                         TerminalCapture.runAndCapture(finalCmd, workspaceRoot).then(res => {
-                            if (workspaceRoot) SessionMemory.recordCommand(workspaceRoot, finalCmd, !res.error);
+                            if (workspaceRoot) SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', { command: finalCmd }, res.output || (res.error ? 'Error' : '') || '', res.exitCode === 0);
                             postMessage({
                                 command: 'terminalCommandCompleted',
                                 callId,
@@ -200,7 +196,7 @@ export class MessageDispatcher {
                                 output: res.output,
                                 commandText: finalCmd
                             });
-                            resolver(`[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput:${res.output || '(No output)'}`);
+                            resolver(`[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}`);
                         });
                     }
                 }

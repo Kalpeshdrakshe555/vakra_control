@@ -49,6 +49,14 @@ export class SessionMemory {
         return this.instance;
     }
 
+    public static recordCommand(workspaceRoot: string, command: string, success: boolean): void {
+        this.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', { command }, '', success);
+    }
+
+    public static recordFileApplied(workspaceRoot: string, filepath: string, content: string): void {
+        this.getInstance(workspaceRoot).recordToolResult('write_file', { filepath, content }, 'Applied file patch', true);
+    }
+
     private loadSnapshot(): SessionMemorySnapshot {
         try {
             if (fs.existsSync(this.storagePath)) {

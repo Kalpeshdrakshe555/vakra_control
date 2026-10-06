@@ -120,7 +120,7 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
                 if (readmeRes.ok) {
                     const text = await readmeRes.text();
                     if (text && text.length > 50) {
-                        return text.substring(0, 4000);
+                        return text.substring(0, 10000);
                     }
                 }
             } catch {}
@@ -133,7 +133,7 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
                 if (masterRes.ok) {
                     const text = await masterRes.text();
                     if (text && text.length > 50) {
-                        return text.substring(0, 4000);
+                        return text.substring(0, 10000);
                     }
                 }
             } catch {}
@@ -151,53 +151,84 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
                 if (hfRes.ok) {
                     const text = await hfRes.text();
                     if (text && text.length > 50) {
-                        return text.substring(0, 4000);
+                        return text.substring(0, 10000);
                     }
                 }
             } catch {}
         }
 
         // Standard fetch
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml,text/plain,text/markdown;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9'
+        let bodyText = '';
+        let contentType = '';
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml,text/plain,text/markdown;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                }
+            });
+            if (response.ok) {
+                contentType = response.headers.get('content-type') || '';
+                bodyText = await response.text();
             }
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to fetch web resource. HTTP status: ${response.status}`);
-        }
-
-        const contentType = response.headers.get('content-type') || '';
-        const bodyText = await response.text();
+        } catch {}
 
         // If raw text or markdown or JSON, return directly without stripping code
-        if (contentType.includes('text/plain') || contentType.includes('text/markdown') || url.endsWith('.md') || url.endsWith('.txt')) {
-            return bodyText.substring(0, 4000);
+        if (bodyText && (contentType.includes('text/plain') || contentType.includes('text/markdown') || url.endsWith('.md') || url.endsWith('.txt'))) {
+            return bodyText.substring(0, 10000);
         }
 
-        // Extract core content first if HTML
-        let mainContent = bodyText;
-        const mainMatch = bodyText.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || bodyText.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-        if (mainMatch && mainMatch[1]) {
-            mainContent = mainMatch[1];
+        let cleanText = '';
+        if (bodyText) {
+            // Extract core content first if HTML
+            let mainContent = bodyText;
+            const mainMatch = bodyText.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || bodyText.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+            if (mainMatch && mainMatch[1]) {
+                mainContent = mainMatch[1];
+            }
+
+            // Strip out navigation, headers, scripts, styles, footers, noscript, iframes before extracting text
+            cleanText = mainContent
+                .replace(/<(script|style|nav|header|footer|noscript|iframe)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
+                .replace(/<(head|title|aside|form|button|figure|svg)[^>]*>([\s\S]*?)<\/\1>/gi, ' ');
+
+            // Preserve code block formatting
+            cleanText = cleanText.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_match, p1) => {
+                return '\n```\n' + p1.replace(/<[^>]+>/g, '').trim() + '\n```\n';
+            });
+
+            // Strip remaining tags & normalize whitespace
+            cleanText = cleanText
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
         }
 
-        // Basic code block formatting preservation
-        let cleanText = mainContent.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_match, p1) => {
-            return '\n```\n' + p1.replace(/<[^>]+>/g, '').trim() + '\n```\n';
-        });
+        // Lightweight reader fallback: If raw fetch returns less than 200 characters of text
+        // (typical for JS-rendered React/Vue SPAs like sports sites), fetch via Jina Reader
+        if (!cleanText || cleanText.length < 200) {
+            try {
+                const jinaUrl = `https://r.jina.ai/${encodeURI(url)}`;
+                const jinaRes = await fetch(jinaUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                        'Accept': 'text/plain,text/markdown;q=0.9,*/*;q=0.8'
+                    }
+                });
+                if (jinaRes.ok) {
+                    const jinaText = await jinaRes.text();
+                    if (jinaText && jinaText.trim().length > 100) {
+                        return jinaText.trim().substring(0, 10000);
+                    }
+                }
+            } catch (jinaErr) {
+                console.error(`Jina reader fallback failed for ${url}:`, jinaErr);
+            }
+        }
 
-        // Strip noisy tags
-        cleanText = cleanText
-            .replace(/<(style|script|head|title|nav|footer|aside|header|form|button|figure|iframe|noscript|svg)[^>]*>([\s\S]*?)<\/\1>/gi, ' ')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        // Truncate to maximum of 4000 characters
-        return cleanText.substring(0, 4000);
+        // Truncate to maximum of 10000 characters (~2500 tokens)
+        return cleanText ? cleanText.substring(0, 10000) : '';
     } catch (error) {
         console.error(`fetchWebContext failed for ${rawUrl}:`, error);
         return '';

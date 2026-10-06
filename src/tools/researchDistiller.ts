@@ -338,3 +338,195 @@ ${compiledRaw}`;
         } as any;
     }
 }
+
+export interface WebSearchSource {
+    title: string;
+    url: string;
+    domain: string;
+}
+
+export interface WebSearchDetailedResult {
+    text: string;
+    sources: WebSearchSource[];
+}
+
+export async function searchWebQuickDetailed(query: string): Promise<WebSearchDetailedResult> {
+    const rawResults: { title: string; snippet: string; url: string; domain: string }[] = [];
+
+    const extractDomain = (urlStr: string): string => {
+        try {
+            const parsed = new URL(urlStr);
+            return parsed.hostname.replace(/^www\./i, '');
+        } catch {
+            return 'web';
+        }
+    };
+
+    // Strategy 1: DuckDuckGo Lite POST (resilient against bot challenges)
+    try {
+        const liteRes = await fetch('https://lite.duckduckgo.com/lite/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            },
+            body: 'q=' + encodeURIComponent(query)
+        });
+
+        if (liteRes.ok) {
+            const html = await liteRes.text();
+            const linkRegex = /<a[^>]*class=['"]result-link['"][^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a[^>]*href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/gi;
+            const linkMatches = [...html.matchAll(linkRegex)];
+            const snippetMatches = [...html.matchAll(/<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/gi)];
+
+            for (let i = 0; i < Math.min(8, linkMatches.length); i++) {
+                const m = linkMatches[i];
+                let rawHref = m[1] || m[3] || '';
+                if (rawHref.includes('uddg=')) {
+                    try {
+                        const params = new URLSearchParams(rawHref.split('?')[1] || rawHref);
+                        rawHref = decodeURIComponent(params.get('uddg') || rawHref);
+                    } catch {}
+                }
+                const title = (m[2] || m[4] || '').replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').trim();
+                const snippet = snippetMatches[i] ? snippetMatches[i][1].replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').trim() : '';
+
+                if (rawHref.startsWith('http') && !rawHref.includes('duckduckgo.com')) {
+                    rawResults.push({
+                        title: title || 'Search Result',
+                        snippet,
+                        url: rawHref,
+                        domain: extractDomain(rawHref)
+                    });
+                }
+            }
+        }
+    } catch (liteErr) {
+        console.error("DDG Lite search failed:", liteErr);
+    }
+
+    // Strategy 2: Fallback to DuckDuckGo HTML GET if Lite returned nothing
+    if (rawResults.length === 0) {
+        try {
+            const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+            const res = await fetch(searchUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                }
+            });
+
+            if (res.ok) {
+                const html = await res.text();
+                const blockRegex = /<div[^>]*class="[^"]*result__body[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+                let match;
+                while ((match = blockRegex.exec(html)) !== null && rawResults.length < 5) {
+                    const block = match[1];
+                    const titleMatch = block.match(/<a[^>]*class="[^"]*result__url[^"]*"[^>]*>([\s\S]*?)<\/a>/i) || block.match(/<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+                    const snippetMatch = block.match(/<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+                    const linkMatch = block.match(/href="([^"]*uddg=[^"]+)"/i);
+
+                    let cleanSnippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+                    if (cleanSnippet) {
+                        let cleanUrl = '';
+                        if (linkMatch) {
+                            try {
+                                const params = new URLSearchParams(linkMatch[1].split('?')[1] || linkMatch[1]);
+                                cleanUrl = decodeURIComponent(params.get('uddg') || '');
+                            } catch {}
+                        }
+                        if (cleanUrl.startsWith('http')) {
+                            rawResults.push({
+                                title: titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'Search Result',
+                                snippet: cleanSnippet,
+                                url: cleanUrl,
+                                domain: extractDomain(cleanUrl)
+                            });
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    if (rawResults.length === 0) {
+        return {
+            text: `No direct search results found for "${query}".`,
+            sources: []
+        };
+    }
+
+    // Prioritize high-authority domains for sports/cricket queries if available
+    const isCricketQuery = /\b(cricket|score|match|ipl|test|t20|odi|wicket)\b/i.test(query);
+    if (isCricketQuery) {
+        const preferredDomains = ['cricbuzz.com', 'espncricinfo.com', 'flashscore.com', 'crex.live', 'cricket.com'];
+        rawResults.sort((a, b) => {
+            const aPref = preferredDomains.some(d => a.domain.includes(d)) ? 1 : 0;
+            const bPref = preferredDomains.some(d => b.domain.includes(d)) ? 1 : 0;
+            return bPref - aPref;
+        });
+    }
+
+    // Strictly select the top 3 authoritative websites with unique domains
+    const topThreeResults: typeof rawResults = [];
+    const seenDomains = new Set<string>();
+
+    for (const r of rawResults) {
+        if (!seenDomains.has(r.domain)) {
+            seenDomains.add(r.domain);
+            topThreeResults.push(r);
+            if (topThreeResults.length >= 3) break;
+        }
+    }
+
+    // If fewer than 3 unique domains found, backfill up to 3 from remaining results
+    if (topThreeResults.length < 3) {
+        for (const r of rawResults) {
+            if (!topThreeResults.some(item => item.url === r.url)) {
+                topThreeResults.push(r);
+                if (topThreeResults.length >= 3) break;
+            }
+        }
+    }
+
+    // Concurrently deep-fetch comprehensive page data (at least 2,000 tokens / up to 10,000 chars) from each website
+    const fetchPromises = topThreeResults.map(async (target, idx) => {
+        try {
+            const pageText = await fetchWebContext(target.url);
+            if (pageText && pageText.trim().length > 100) {
+                const pageContent = pageText.trim().slice(0, 10000);
+                return `\n\n=== [WEBSITE ${idx + 1} LIVE EXTRACTED DATA (~2,500 TOKENS) FROM: ${target.url} (${target.domain})] ===\n${pageContent}`;
+            }
+        } catch (e) {
+            console.error(`Deep fetch failed for ${target.url}:`, e);
+        }
+        return `\n\n=== [WEBSITE ${idx + 1} SNIPPET FROM: ${target.url} (${target.domain})] ===\n${target.snippet}`;
+    });
+
+    const deepPages = await Promise.all(fetchPromises);
+    const livePageContent = deepPages.join('\n');
+
+    const snippetsText = topThreeResults.map((r, i) => `[Source ${i + 1} - ${r.title}]: ${r.snippet} (Link: ${r.url})`).join('\n');
+    const combinedText = `Top 3 Verified Sources:\n${snippetsText}${livePageContent}`;
+
+    const sources: WebSearchSource[] = topThreeResults.map(r => ({
+        title: r.title,
+        url: r.url,
+        domain: r.domain
+    }));
+
+    return {
+        text: combinedText,
+        sources
+    };
+}
+
+export async function searchWebQuick(query: string): Promise<string> {
+    try {
+        const res = await searchWebQuickDetailed(query);
+        return res.text;
+    } catch (err: any) {
+        return `Quick web search error: ${err?.message || err}`;
+    }
+}
+
