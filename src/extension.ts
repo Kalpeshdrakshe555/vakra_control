@@ -93,8 +93,6 @@ export function activate(context: vscode.ExtensionContext) {
         ToolRegistry.loadWorkspacePlugins(workspaceRoot);
     }
 
-    // (Background AST Indexer removed: replaced by in-stream micro-tasks via Scout)
-
     // ──────────────────────────────────────────────────────────────────────
     // STATUS BAR ITEM
     // ──────────────────────────────────────────────────────────────────────

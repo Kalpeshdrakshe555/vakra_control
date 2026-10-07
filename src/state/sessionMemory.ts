@@ -180,22 +180,36 @@ export class SessionMemory {
             const symText = symbols.length > 0 ? ` -> Defined: ${symbols.slice(0, 8).join(', ')}` : '';
             summary = `[${toolName.toUpperCase()} ${relPath} (rev ${this.snapshot.files[relPath].revision})${symText}]`;
         } else if (toolName === 'read_multiple_files') {
-            const paths = (Array.isArray(args.paths) ? args.paths : [args.paths]).filter(Boolean);
+            const rawPaths = args.filepaths || args.paths || [];
+            const paths = (Array.isArray(rawPaths) ? rawPaths : [rawPaths]).filter(Boolean);
+            const projectRoot = path.dirname(path.dirname(this.storagePath));
             paths.forEach((p: string) => {
                 const norm = p.replace(/\\/g, '/');
                 touched.push(norm);
-                if (!this.snapshot.files[norm]) {
-                    this.snapshot.files[norm] = {
-                        path: norm,
-                        status: 'read',
-                        revision: 1,
-                        sourceHash: '',
-                        lastTouchedAt: timestamp,
-                        symbols: [],
-                        imports: [],
-                        diagnostics: []
-                    };
-                }
+                const fullPath = path.isAbsolute(p) ? p : path.join(projectRoot, p);
+                let symbols: string[] = [];
+                let imports: string[] = [];
+                let fileHash = '';
+                try {
+                    if (fs.existsSync(fullPath)) {
+                        const content = fs.readFileSync(fullPath, 'utf8');
+                        fileHash = crypto.createHash('md5').update(content).digest('hex').slice(0, 8);
+                        const extracted = SessionMemory.extractSymbols(fullPath, content);
+                        symbols = extracted.symbols;
+                        imports = extracted.imports;
+                    }
+                } catch {}
+
+                this.snapshot.files[norm] = {
+                    path: norm,
+                    status: 'read',
+                    revision: this.snapshot.files[norm]?.revision || 1,
+                    sourceHash: fileHash,
+                    lastTouchedAt: timestamp,
+                    symbols: symbols.length > 0 ? symbols : (this.snapshot.files[norm]?.symbols || []),
+                    imports: imports.length > 0 ? imports : (this.snapshot.files[norm]?.imports || []),
+                    diagnostics: []
+                };
             });
             summary = `[INSPECTED ${paths.join(', ')}]`;
         } else if (toolName === 'execute_terminal_command') {

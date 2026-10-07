@@ -1486,12 +1486,10 @@
                     <div class="seg" id="mode-seg" role="tablist" aria-label="Session mode" style="width:100%;display:flex">
                         <button type="button" data-mode="chat" class="on" style="flex:1;text-align:center">Chat</button>
                         <button type="button" data-mode="architect" style="flex:1;text-align:center">Architect</button>
-                        <button type="button" data-mode="advanced" style="flex:1;text-align:center">Dual-Brain</button>
                     </div>
                     <select id="mode-select" class="hidden">
                         <option value="chat">💬 Chat</option>
                         <option value="architect">🏢 Architect</option>
-                        <option value="advanced">🚀 Dual-Brain</option>
                     </select>
                 </div>
             </div>
@@ -1523,11 +1521,11 @@
         </div>
 
         <form id="settings-form" class="space-y-4 text-xs flex-1">
-            <!-- Brain 1: Main Executor -->
+            <!-- AI Model Configuration -->
             <div class="p-3 bg-black/20 border border-cyber-neonCyan/20 rounded-xl space-y-3">
                 <h3
                     class="text-cyber-neonCyan text-[10px] uppercase font-bold tracking-widest border-b border-cyber-neonCyan/20 pb-1 mb-2">
-                    🧠 Brain 1: Main Executor</h3>
+                    🤖 AI Model Configuration</h3>
                 <div class="space-y-1.5">
                     <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">AI
                         Provider</label>
@@ -1555,41 +1553,6 @@
                         URL)</label>
                     <input type="text" id="main-endpoint" placeholder="https://api.apinex.bond/v1"
                         class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
-                </div>
-            </div>
-
-            <!-- Brain 2: Supporting Scout -->
-            <div class="p-3 bg-black/20 border border-cyber-neonPink/20 rounded-xl space-y-3 mt-4">
-                <h3
-                    class="text-cyber-neonPink text-[10px] uppercase font-bold tracking-widest border-b border-cyber-neonPink/20 pb-1 mb-2">
-                    🕵️ Brain 2: Supporting Scout</h3>
-                <div class="space-y-1.5">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">AI
-                        Provider</label>
-                    <select id="support-provider"
-                        class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 cursor-pointer shadow-sm">
-                        <option value="cloud" class="bg-cyber-panel text-white">Google Gemini Cloud</option>
-                        <option value="apinex" class="bg-cyber-panel text-white">APInex (api.apinex.bond)</option>
-                        <option value="openai" class="bg-cyber-panel text-white">OpenAI / Groq / OpenRouter</option>
-                        <option value="local" class="bg-cyber-panel text-white">Local Offline (Ollama / LM Studio)
-                        </option>
-                    </select>
-                </div>
-                <div class="space-y-1.5">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Model Name</label>
-                    <input type="text" id="support-model" placeholder="e.g. llama-3.1-8b-instant"
-                        class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
-                </div>
-                <div class="space-y-1.5">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">API Key</label>
-                    <input type="password" id="support-apiKey" placeholder="sk-..."
-                        class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
-                </div>
-                <div class="space-y-1.5" id="support-endpoint-group">
-                    <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Endpoint
-                        URL</label>
-                    <input type="text" id="support-endpoint" placeholder="https://api..."
-                        class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonPink/50 focus:border-cyber-neonPink focus:bg-white/10 text-white rounded-lg px-2 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600">
                 </div>
             </div>
 
@@ -1666,7 +1629,7 @@
                 </div>
                 <div class="space-y-1.5">
                     <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase"
-                        title="Maximum sequential tool calls the model can execute before pausing">Max Steps</label>
+                        title="Maximum sequential tool calls the model can execute per turn before pausing (5 - 100)">Max Steps / Turn</label>
                     <input type="number" id="setting-maxToolSteps" min="5" max="100" placeholder="e.g. 30"
                         class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
                 </div>
@@ -2102,42 +2065,6 @@
                 }
             }
 
-            if (config.supportBrain) {
-                const sp = document.getElementById('support-provider');
-                if (sp) sp.value = config.supportBrain.providerType || 'cloud';
-                const sm = document.getElementById('support-model');
-                if (sm) sm.value = config.supportBrain.model || '';
-                const sa = document.getElementById('support-apiKey');
-                if (sa) sa.value = config.supportBrain.apiKey || '';
-                const se = document.getElementById('support-endpoint');
-                if (se) se.value = config.supportBrain.endpoint || '';
-
-                const spt = config.supportBrain.providerType || 'cloud';
-                const seg = document.getElementById('support-endpoint-group');
-                if (seg) {
-                    if (spt === 'local' || spt === 'apinex' || spt === 'openai' || config.supportBrain.endpoint) {
-                        seg.classList.remove('hidden');
-                    } else {
-                        seg.classList.add('hidden');
-                    }
-                }
-            }
-
-            const advancedOption = document.querySelector('#mode-select option[value="advanced"]');
-            if (advancedOption) {
-                const hasMain = config.mainBrain && config.mainBrain.apiKey && config.mainBrain.model;
-                const hasSupport = config.supportBrain && config.supportBrain.apiKey && config.supportBrain.model;
-                if (hasMain && hasSupport) {
-                    advancedOption.style.display = '';
-                } else {
-                    advancedOption.style.display = 'none';
-                    const modeSelect = document.getElementById('mode-select');
-                    if (modeSelect && modeSelect.value === 'advanced') {
-                        modeSelect.value = 'chat';
-                    }
-                }
-            }
-
             syncModeUI();
 
             const temp = typeof config.temperature === 'number' ? config.temperature : (typeof config.mainBrain?.temperature === 'number' ? config.mainBrain.temperature : 0.4);
@@ -2216,7 +2143,6 @@
             updateTokenMeter(totalSessionTokens, promptEstimatedTokens, 0);
 
             const mode = document.getElementById('mode-select')?.value || 'chat';
-            const isAdvancedMode = (mode === 'advanced');
             const isArchitectMode = (mode === 'architect') || !!options.architectMode;
 
             vscode.postMessage({
@@ -2226,7 +2152,6 @@
                 timestamp: timestamp,
                 includeWebSearch: true,
                 thinkingBudget: currentThinkingBudget,
-                advancedMode: isAdvancedMode,
                 architectMode: isArchitectMode,
                 forcePlan: !!options.forcePlan,
                 directExecute: !!options.directExecute
@@ -2919,6 +2844,37 @@
                         <span class="text-slate-200">Exploring Tree: <strong class="text-blue-300 font-mono text-xs">${escapeHtml(data.dir || '.')}</strong></span>
                     </div>
                 `;
+            } else if (toolName === 'read_skill') {
+                innerHtml = `
+                    <div class="tool-call-card border-amber-500/40 bg-amber-950/20 p-2 rounded-lg max-w-[95%] w-full">
+                        <div class="flex items-center justify-between pb-1">
+                            <span class="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                                <span>🧠</span>
+                                <span>Active Skill Protocol: <strong class="text-white font-mono">${escapeHtml(data.skillName || '')}</strong></span>
+                            </span>
+                            <span class="text-[9px] font-mono text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/40">
+                                ⚡ Enforced
+                            </span>
+                        </div>
+                        <div class="text-[11px] text-slate-300">${escapeHtml(data.description || '')}</div>
+                        ${data.filePath ? `<div class="text-[9px] text-slate-500 font-mono mt-1">${escapeHtml(data.filePath)}</div>` : ''}
+                    </div>
+                `;
+            } else if (toolName === 'create_skill') {
+                innerHtml = `
+                    <div class="tool-call-card border-emerald-500/40 bg-emerald-950/20 p-2 rounded-lg max-w-[95%] w-full">
+                        <div class="flex items-center justify-between pb-1">
+                            <span class="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                                <span>✨</span>
+                                <span>Skill Registered: <strong class="text-white font-mono">${escapeHtml(data.skillName || '')}</strong></span>
+                            </span>
+                            <span class="text-[9px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/40">
+                                Saved
+                            </span>
+                        </div>
+                        ${data.filePath ? `<div class="text-[9px] text-slate-400 font-mono mt-1">Saved to: ${escapeHtml(data.filePath)}</div>` : ''}
+                    </div>
+                `;
             } else {
                 innerHtml = `
                     <div class="tool-call-pill">
@@ -3115,12 +3071,26 @@
             }
             else if (message.command === 'activeSkillNotice') {
                 const bannerDiv = document.createElement('div');
-                bannerDiv.className = 'flex justify-center w-full my-1 animate-fade-in';
+                bannerDiv.className = 'flex justify-center w-full my-2 animate-fade-in';
+                const isCustom = !!message.isCustom;
+                const sourceText = message.source || (isCustom ? 'Custom Skill' : 'Built-in System Skill');
+                const badgeColor = isCustom ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/40' : 'bg-amber-950/70 text-amber-300 border-amber-500/40';
+                const badgeIcon = isCustom ? '📁' : '⚙️';
+
                 bannerDiv.innerHTML = `
-                    <div class="flex items-center gap-2 px-3 py-1 bg-indigo-950/40 border border-indigo-500/40 rounded-full text-[11px] text-indigo-300 shadow-sm">
-                        <span>🎯</span>
-                        <span>Active Skill: <strong class="text-white font-mono">${escapeHtml(message.skillName)}</strong></span>
-                        <span class="text-[9px] bg-indigo-500/20 px-1.5 py-0.2 rounded text-indigo-200">Enforcing Checklist</span>
+                    <div class="flex flex-col items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-slate-900/90 via-indigo-950/50 to-slate-900/90 border border-indigo-500/30 rounded-xl text-xs text-indigo-200 shadow-md backdrop-blur-sm max-w-[95%]">
+                        <div class="flex items-center gap-2 flex-wrap justify-center">
+                            <span>🎯</span>
+                            <span class="text-slate-300 font-medium">Active Skill:</span>
+                            <span class="font-mono text-cyan-300 font-bold px-2 py-0.5 rounded bg-cyan-950/50 border border-cyan-500/30">${escapeHtml(message.skillName || 'Specialized Skill')}</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded-full font-medium border ${badgeColor}">
+                                ${badgeIcon} ${escapeHtml(sourceText)}
+                            </span>
+                            <span class="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30 cursor-help" title="The AI must strictly adhere to this skill's step-by-step checklist, folder structure, and verification rules before marking tasks complete.">
+                                📋 Enforcing Checklist
+                            </span>
+                        </div>
+                        ${message.description ? `<div class="text-[11px] text-slate-400 text-center line-clamp-2 max-w-lg">${escapeHtml(message.description)}</div>` : ''}
                     </div>
                 `;
                 chatContainer.appendChild(bannerDiv);
@@ -3210,22 +3180,63 @@
             }
             else if (message.command === 'showSessions') {
                 historyList.innerHTML = '';
+                
+                const newChatBtn = document.createElement('button');
+                newChatBtn.type = 'button';
+                newChatBtn.className = 'w-full mb-3 flex items-center justify-center gap-2 py-2 px-3 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 hover:from-cyan-500/30 hover:to-purple-500/30 border border-cyan-500/40 text-cyan-200 text-xs font-bold rounded-lg cursor-pointer transition-all shadow-sm';
+                newChatBtn.innerHTML = `<span>➕</span> <span>Start New Chat</span>`;
+                newChatBtn.addEventListener('click', () => {
+                    vscode.postMessage({ command: 'newSession' });
+                    toggleHistoryView(false);
+                });
+                historyList.appendChild(newChatBtn);
+
                 if (!message.sessions || message.sessions.length === 0) {
-                    historyList.innerHTML = '<div class="text-center text-slate-500 text-xs py-4">No chat history found.</div>';
+                    const emptyDiv = document.createElement('div');
+                    emptyDiv.className = 'text-center text-slate-500 text-xs py-4';
+                    emptyDiv.innerText = 'No saved chat history found.';
+                    historyList.appendChild(emptyDiv);
                     return;
                 }
+
                 message.sessions.forEach(session => {
                     const sessionDiv = document.createElement('div');
-                    sessionDiv.className = 'group flex justify-between items-center p-3 bg-cyber-panel/40 hover:bg-cyber-panel/80 border border-cyber-border/40 rounded transition-all cursor-pointer mb-2';
+                    const isCurrent = session.id === message.currentSessionId;
+                    sessionDiv.className = `group flex justify-between items-center p-2.5 bg-cyber-panel/40 hover:bg-cyber-panel/80 border ${isCurrent ? 'border-cyan-500/60 bg-cyan-950/20' : 'border-cyber-border/40'} rounded-lg transition-all mb-2`;
+                    
+                    const dateStr = session.updatedAt ? new Date(session.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                    
                     sessionDiv.innerHTML = `
-                        <div class="flex-1 overflow-hidden pr-2">
-                            <div class="text-sm text-slate-200 font-bold truncate">${escapeHtml(session.title || 'Conversation')}</div>
+                        <div class="flex-1 overflow-hidden pr-2 cursor-pointer">
+                            <div class="flex items-center gap-1.5">
+                                ${isCurrent ? '<span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>' : ''}
+                                <div class="text-xs ${isCurrent ? 'text-cyan-200 font-bold' : 'text-slate-200 font-medium'} truncate">${escapeHtml(session.title || 'Conversation')}</div>
+                            </div>
+                            <div class="flex items-center gap-2 text-[10px] text-slate-500 font-mono mt-0.5">
+                                <span>${dateStr}</span>
+                                <span>•</span>
+                                <span>${session.messageCount || 0} msgs</span>
+                            </div>
+                            ${session.summary ? `<div class="text-[10px] text-slate-400 truncate mt-1 italic">${escapeHtml(session.summary)}</div>` : ''}
                         </div>
+                        <button type="button" class="del-session-btn opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded transition-all cursor-pointer" title="Delete conversation">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
                     `;
-                    sessionDiv.addEventListener('click', () => {
+
+                    sessionDiv.querySelector('.flex-1').addEventListener('click', () => {
                         vscode.postMessage({ command: 'switchSession', id: session.id });
                         toggleHistoryView(false);
                     });
+
+                    const delBtn = sessionDiv.querySelector('.del-session-btn');
+                    if (delBtn) {
+                        delBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            vscode.postMessage({ command: 'deleteSession', id: session.id });
+                        });
+                    }
+
                     historyList.appendChild(sessionDiv);
                 });
             }
@@ -3478,26 +3489,6 @@
                     });
                 }
 
-                const supportProvider = document.getElementById('support-provider');
-                const supportEndpointGroup = document.getElementById('support-endpoint-group');
-                const supportEndpointInput = document.getElementById('support-endpoint');
-                if (supportProvider) {
-                    supportProvider.addEventListener('change', (e) => {
-                        if (!supportEndpointGroup || !supportEndpointInput) return;
-                        if (e.target.value === 'local') {
-                            supportEndpointGroup.classList.remove('hidden');
-                            if (!supportEndpointInput.value) supportEndpointInput.value = 'http://127.0.0.1:11434';
-                        } else if (e.target.value === 'apinex') {
-                            supportEndpointGroup.classList.remove('hidden');
-                            if (!supportEndpointInput.value || supportEndpointInput.value.includes('11434')) supportEndpointInput.value = 'https://api.apinex.bond/v1';
-                        } else if (e.target.value === 'openai') {
-                            supportEndpointGroup.classList.remove('hidden');
-                        } else {
-                            supportEndpointGroup.classList.add('hidden');
-                        }
-                    });
-                }
-
                 const tempSlider = document.getElementById('setting-temperature');
                 const tempPreset = document.getElementById('setting-behavior-preset');
                 if (tempSlider && tempPreset) {
@@ -3528,12 +3519,6 @@
                                 model: document.getElementById('main-model')?.value?.trim() || '',
                                 apiKey: document.getElementById('main-apiKey')?.value?.trim() || '',
                                 endpoint: document.getElementById('main-endpoint')?.value?.trim() || ''
-                            },
-                            supportBrain: {
-                                providerType: document.getElementById('support-provider')?.value || 'cloud',
-                                model: document.getElementById('support-model')?.value?.trim() || '',
-                                apiKey: document.getElementById('support-apiKey')?.value?.trim() || '',
-                                endpoint: document.getElementById('support-endpoint')?.value?.trim() || ''
                             },
                             temperature: parseFloat(tempSlider ? tempSlider.value : 0.4) || 0.4,
                             timeoutSeconds: parseInt(document.getElementById('setting-timeout')?.value, 10) || 60,

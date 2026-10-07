@@ -320,37 +320,3 @@ export async function researchWebDocs(query: string, urls: string[] = [], worksp
     const { executeDeepResearch } = require('./researchDistiller');
     return await executeDeepResearch(query, urls, workspaceRoot);
 }
-
-/**
- * Autonomous Pre-Flight Scout Pattern:
- * Analyzes prompt for library/framework setup needs and fetches live registry docs
- * BEFORE invoking the model. Returns an injected context block (max 800 tokens).
- */
-export async function autonomousPreFlightScout(prompt: string): Promise<string> {
-    try {
-        const lower = prompt.toLowerCase();
-        // Common libraries that often suffer from syntax hallucination in small models
-        const candidateLibs = [
-            'tailwind', 'django-tailwind', 'fastapi', 'pydantic', 'zustand', 'zod',
-            'trpc', 'prisma', 'drizzle-orm', 'next-auth', 'lucide-react', 'flowbite',
-            'radix-ui', 'shadcn', 'framer-motion', 'sqlmodel', 'celery'
-        ];
-
-        const detected = candidateLibs.filter(lib => lower.includes(lib));
-        if (detected.length === 0) return '';
-
-        const targetLib = detected[0];
-        const [npm, pypi] = await Promise.all([fetchNpmInfo(targetLib), fetchPyPiInfo(targetLib)]);
-        const pythonLibs = ['fastapi', 'pydantic', 'django-tailwind', 'sqlmodel', 'celery'];
-        const isPy = pythonLibs.includes(targetLib);
-        const best = isPy ? (pypi || npm) : (npm || pypi);
-        if (!best) return '';
-
-        return `[PRE-FLIGHT SCOUT: Live Docs for ${best.name}@${best.version}]\n` +
-               `Install: ${best.installCommand}\n` +
-               `Description: ${best.description}\n` +
-               (best.readmeSnippet ? `Setup Guide:\n${best.readmeSnippet.substring(0, 800)}\n` : '');
-    } catch {
-        return '';
-    }
-}

@@ -38,7 +38,6 @@ export class MessageDispatcher {
                     command: 'loadSettings',
                     config: {
                         mainBrain: config?.mainBrain,
-                        supportBrain: config?.supportBrain,
                         providers: config?.providers,
                         activeProvider: config?.activeProvider,
                         timeoutSeconds: config?.providers?.cloud?.timeoutSeconds || 60,
@@ -241,14 +240,31 @@ export class MessageDispatcher {
             case 'getSessions': {
                 postMessage({
                     command: 'showSessions',
-                    sessions: conversationHistory.getAllSessionsSummary()
+                    sessions: conversationHistory.getAllSessionsSummary(),
+                    currentSessionId: conversationHistory.getActiveSessionId()
                 });
+                break;
+            }
+
+            case 'newSession': {
+                conversationHistory.createNewSession();
+                postMessage({
+                    command: 'showSessions',
+                    sessions: conversationHistory.getAllSessionsSummary(),
+                    currentSessionId: conversationHistory.getActiveSessionId()
+                });
+                postMessage({ command: 'restoreHistory', messages: [] });
                 break;
             }
 
             case 'switchSession': {
                 if (message.id) {
                     conversationHistory.switchSession(message.id);
+                    postMessage({
+                        command: 'showSessions',
+                        sessions: conversationHistory.getAllSessionsSummary(),
+                        currentSessionId: conversationHistory.getActiveSessionId()
+                    });
                     postMessage({ command: 'restoreHistory', messages: conversationHistory.getAllMessages() });
                 }
                 break;
@@ -257,8 +273,53 @@ export class MessageDispatcher {
             case 'deleteSession': {
                 if (message.id) {
                     conversationHistory.deleteSession(message.id);
-                    postMessage({ command: 'showSessions', sessions: conversationHistory.getAllSessionsSummary() });
+                    postMessage({
+                        command: 'showSessions',
+                        sessions: conversationHistory.getAllSessionsSummary(),
+                        currentSessionId: conversationHistory.getActiveSessionId()
+                    });
                     postMessage({ command: 'restoreHistory', messages: conversationHistory.getAllMessages() });
+                }
+                break;
+            }
+
+            case 'openMcpConfig': {
+                if (workspaceRoot) {
+                    const aiDir = path.join(workspaceRoot, '.ultra-light-ai');
+                    if (!fs.existsSync(aiDir)) fs.mkdirSync(aiDir, { recursive: true });
+                    const mcpFile = path.join(aiDir, 'mcp.json');
+                    if (!fs.existsSync(mcpFile)) {
+                        const template = {
+                            mcpServers: {
+                                filesystem: {
+                                    command: "npx",
+                                    args: ["-y", "@modelcontextprotocol/server-filesystem", workspaceRoot]
+                                }
+                            }
+                        };
+                        fs.writeFileSync(mcpFile, JSON.stringify(template, null, 2), 'utf8');
+                    }
+                    const doc = await vscode.workspace.openTextDocument(mcpFile);
+                    await vscode.window.showTextDocument(doc);
+                } else {
+                    vscode.window.showWarningMessage('Please open a workspace folder to configure MCP.');
+                }
+                break;
+            }
+
+            case 'openPluginsScript': {
+                if (workspaceRoot) {
+                    const aiDir = path.join(workspaceRoot, '.ultra-light-ai');
+                    if (!fs.existsSync(aiDir)) fs.mkdirSync(aiDir, { recursive: true });
+                    const pluginFile = path.join(aiDir, 'plugins.js');
+                    if (!fs.existsSync(pluginFile)) {
+                        const template = `// Ultra Light AI - Custom Workspace Plugins\n// Export an array of custom tool objects to extend the agent's capabilities.\nmodule.exports = [\n  {\n    name: 'workspace_health',\n    description: 'Checks custom health rules for this workspace',\n    parameters: '{\"verbose\": boolean}',\n    async execute(argsStr, workspaceRoot) {\n      return 'All workspace systems healthy.';\n    }\n  }\n];\n`;
+                        fs.writeFileSync(pluginFile, template, 'utf8');
+                    }
+                    const doc = await vscode.workspace.openTextDocument(pluginFile);
+                    await vscode.window.showTextDocument(doc);
+                } else {
+                    vscode.window.showWarningMessage('Please open a workspace folder to configure plugins.');
                 }
                 break;
             }

@@ -229,7 +229,7 @@ export const CONFIG = {
 } as const;
 
 export interface BrainConfig {
-    providerType: 'cloud' | 'local';
+    providerType: 'cloud' | 'local' | 'apinex' | 'openai';
     model: string;
     apiKey: string;
     endpoint: string;
@@ -244,10 +244,8 @@ export interface AgentConfig {
     };
     activeProvider?: 'cloud' | 'local';
 
-    // New Dual-Brain Architecture
+    // Model Configuration
     mainBrain?: BrainConfig;
-    supportBrain?: BrainConfig;
-    advancedModeEnabled?: boolean;
 
     temperature?: number; // 0.0 - 1.0 (default 0.4)
     maxAutonomousToolSteps?: number; // 5 - 100 (default 30)
@@ -278,13 +276,6 @@ export function ensureAgentConfig(workspaceRoot: string): void {
                 apiKey: "",
                 endpoint: "https://generativelanguage.googleapis.com/v1beta/models/"
             },
-            supportBrain: {
-                providerType: "cloud",
-                model: "llama-3.1-8b-instant",
-                apiKey: "",
-                endpoint: "https://api.groq.com/openai"
-            },
-            advancedModeEnabled: false, // Default to normal mode until user configures supportBrain
             contextLimits: { maxTokens: 8192, historyLength: 10 },
             systemInstructions: "You are an AI coding agent. Always wrap your code solutions in standard markdown code blocks."
         };

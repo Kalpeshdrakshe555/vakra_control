@@ -129,13 +129,19 @@ export class ConversationHistory {
         return false;
     }
 
-    public getAllSessionsSummary(): { id: string, title: string, updatedAt: number }[] {
+    public getActiveSessionId(): string | null {
+        return this.currentSessionId;
+    }
+
+    public getAllSessionsSummary(): { id: string; title: string; updatedAt: number; messageCount: number; summary?: string }[] {
         return this.sessions
             .sort((a, b) => b.updatedAt - a.updatedAt)
             .map(s => ({
                 id: s.id,
                 title: s.title,
-                updatedAt: s.updatedAt
+                updatedAt: s.updatedAt,
+                messageCount: s.messages.length,
+                summary: s.rollingSummary || (s.messages.find(m => m.role === 'user')?.text?.slice(0, 80)) || ''
             }));
     }
 
@@ -257,9 +263,15 @@ export class ConversationHistory {
 
         // Add recent messages
         for (const msg of recentMessages) {
+            let content = msg.text;
+            if (msg.role === 'model' && msg.toolCalls && msg.toolCalls.length > 0 && !content.includes('[PREVIOUS TURN EXECUTION RECORD]')) {
+                const toolsUsed = msg.toolCalls.map(tc => tc.tool).filter(Boolean);
+                const uniqueTools = Array.from(new Set(toolsUsed));
+                content = `[Tool actions executed: ${uniqueTools.join(', ')}]\n${content}`;
+            }
             formattedHistory.push({
                 role: msg.role,
-                text: msg.text
+                text: content
             });
         }
 

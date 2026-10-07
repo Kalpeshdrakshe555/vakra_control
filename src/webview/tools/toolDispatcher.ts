@@ -67,9 +67,9 @@ export class ToolDispatcher {
                 return "Error: 'paths' must be an array of file paths.";
             }
 
-            if (this.consecutiveReadCount >= 4) {
+            if (this.consecutiveReadCount >= 3) {
                 this.consecutiveReadCount = 0;
-                return "Notice: Multiple consecutive reads completed. Please analyze the code and proceed with your next plan/edit step.";
+                return "Notice: Multiple consecutive reads completed. The file context is already loaded. Please proceed with your plan/edit/test step instead of reading more files.";
             }
             this.consecutiveReadCount++;
 
@@ -77,6 +77,11 @@ export class ToolDispatcher {
             const endLine = typeof args.end_line === 'number' ? Math.max(1, args.end_line) : undefined;
 
             let targetFilepaths: string[] = filepaths.slice(0, 3);
+            const joinedKey = targetFilepaths.slice().sort().join('|');
+            if (this.lastReadFiles.has(joinedKey) && !this.filesModifiedSinceLastCommand) {
+                return `Notice: Files [${targetFilepaths.join(', ')}] were already inspected recently and have not been modified. You already have this code context. Please proceed directly to writing/editing code or running a verification check.`;
+            }
+            this.lastReadFiles.add(joinedKey);
 
             postMessage({
                 command: 'statusUpdate',
@@ -149,6 +154,8 @@ export class ToolDispatcher {
         }
 
         if (name === 'write_file') {
+            this.consecutiveReadCount = 0;
+            this.lastReadFiles.clear();
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
 
@@ -230,6 +237,8 @@ export class ToolDispatcher {
         }
 
         if (name === 'edit_file') {
+            this.consecutiveReadCount = 0;
+            this.lastReadFiles.clear();
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
 
@@ -297,6 +306,7 @@ export class ToolDispatcher {
         }
 
         if (name === 'execute_terminal_command') {
+            this.consecutiveReadCount = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { command } = args;
             if (!command) return "Error: command is required.";
@@ -379,6 +389,41 @@ export class ToolDispatcher {
             });
 
             return `Custom skill "${skillName}" created successfully! Saved to \`${relPath}\`. It will automatically trigger when prompts mention: ${triggers.join(', ')}.`;
+        }
+
+        if (name === 'read_skill') {
+            if (!workspaceRoot) return "Error: No workspace open.";
+            const targetName = (args.skill_name || args.name || '').trim().toLowerCase();
+            if (!targetName) {
+                return "Error: 'skill_name' parameter is required for read_skill.";
+            }
+
+            const allSkills = SkillsManager.loadSkills(workspaceRoot);
+            const found = allSkills.find(s => 
+                s.name.toLowerCase() === targetName || 
+                s.name.toLowerCase().includes(targetName) ||
+                targetName.includes(s.name.toLowerCase()) ||
+                s.triggerRules.some(t => t.toLowerCase() === targetName)
+            );
+
+            if (!found) {
+                const available = allSkills.map(s => s.name).join(', ') || 'None';
+                return `Skill '${targetName}' not found. Available skills in workspace: ${available}.`;
+            }
+
+            const relPath = found.filePath ? path.relative(workspaceRoot, found.filePath).replace(/\\/g, '/') : '';
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'read_skill',
+                title: `Skill Loaded: ${found.name}`,
+                data: {
+                    skillName: found.name,
+                    description: found.description,
+                    filePath: relPath
+                }
+            });
+
+            return `[LOADED WORKSPACE SKILL: ${found.name.toUpperCase()}]\n${found.instructions}`;
         }
 
         if (name === 'search_codebase') {

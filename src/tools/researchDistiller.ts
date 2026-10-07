@@ -6,10 +6,9 @@ import { fetchPyPiInfo, fetchNpmInfo, fetchWebContext } from './scraper';
 /**
  * Technical Research Distiller Sub-Agent
  * 1. Fetches from 5 to 10 web & package registry sources concurrently.
- * 2. Uses Scout Brain (LLM) to strip ads/nav/marketing and extract pure API signatures & working code.
- * 3. Falls back seamlessly to Main Brain if Scout Brain is absent, unconfigured, or hits token/rate limits.
- * 4. Saves complete research artifact into `.ultra-light-ai/findings/<topic>.md`.
- * 5. Returns a token-efficient summary index to the Main Brain to prevent context bloat.
+ * 2. Uses LLM to strip ads/nav/marketing and extract pure API signatures & working code.
+ * 3. Saves complete research artifact into `.ultra-light-ai/findings/<topic>.md`.
+ * 4. Returns a token-efficient summary index to prevent context bloat.
  */
 
 export interface DistillationResult {
@@ -22,76 +21,41 @@ export interface DistillationResult {
 }
 
 /**
- * Creates an LLM client for distillation with automatic fallback from Scout Brain -> Main Brain.
+ * Creates an LLM client for research distillation using the configured model.
  */
 function getDistillerClient(workspaceRoot: string): { client: any; brainName: string } | null {
     try {
         const config = getAgentConfig(workspaceRoot);
         const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
 
-        // Tier 1: Try Support Brain (Scout)
-        const support = config?.supportBrain;
-        if (support && support.model) {
-            if (support.providerType === 'local') {
-                return {
-                    client: new LocalOllamaClient(support.model, support.endpoint || 'http://127.0.0.1:11434', support.apiKey),
-                    brainName: `Scout Brain (${support.model})`
-                };
-            } else {
-                const keyStr = support.apiKey?.trim() || '';
-                if (keyStr.startsWith('gsk_')) {
-                    return {
-                        client: new LocalOllamaClient(support.model, 'https://api.groq.com/openai', keyStr),
-                        brainName: `Scout Brain (${support.model} - Groq)`
-                    };
-                } else if (keyStr.startsWith('sk-or-')) {
-                    return {
-                        client: new LocalOllamaClient(support.model, 'https://openrouter.ai/api', keyStr),
-                        brainName: `Scout Brain (${support.model} - OpenRouter)`
-                    };
-                } else if (keyStr.startsWith('sk-')) {
-                    return {
-                        client: new LocalOllamaClient(support.model, 'https://api.openai.com', keyStr),
-                        brainName: `Scout Brain (${support.model} - OpenAI)`
-                    };
-                } else {
-                    return {
-                        client: new GeminiCloudClient([keyStr], support.model || 'gemini-1.5-flash', 60),
-                        brainName: `Scout Brain (${support.model})`
-                    };
-                }
-            }
-        }
-
-        // Tier 2: Fallback to Main Brain
         const main = config?.mainBrain;
         if (main && main.model) {
             if (main.providerType === 'local') {
                 return {
                     client: new LocalOllamaClient(main.model, main.endpoint || 'http://127.0.0.1:11434', main.apiKey),
-                    brainName: `Main Brain (${main.model})`
+                    brainName: `AI (${main.model})`
                 };
             } else {
                 const keyStr = main.apiKey?.trim() || '';
                 if (keyStr.startsWith('gsk_')) {
                     return {
                         client: new LocalOllamaClient(main.model, 'https://api.groq.com/openai', keyStr),
-                        brainName: `Main Brain (${main.model} - Groq)`
+                        brainName: `AI (${main.model} - Groq)`
                     };
                 } else if (keyStr.startsWith('sk-or-')) {
                     return {
                         client: new LocalOllamaClient(main.model, 'https://openrouter.ai/api', keyStr),
-                        brainName: `Main Brain (${main.model} - OpenRouter)`
+                        brainName: `AI (${main.model} - OpenRouter)`
                     };
                 } else if (keyStr.startsWith('sk-')) {
                     return {
                         client: new LocalOllamaClient(main.model, 'https://api.openai.com', keyStr),
-                        brainName: `Main Brain (${main.model} - OpenAI)`
+                        brainName: `AI (${main.model} - OpenAI)`
                     };
                 } else {
                     return {
                         client: new GeminiCloudClient([keyStr], main.model || 'gemini-1.5-pro', 60),
-                        brainName: `Main Brain (${main.model})`
+                        brainName: `AI (${main.model})`
                     };
                 }
             }
@@ -210,7 +174,7 @@ export async function executeDeepResearch(
             return `No external documentation could be retrieved for query: "${query}". Please verify internet connectivity or specify direct URLs.`;
         }
 
-        // 4. Distill using LLM (Scout Brain -> Main Brain fallback)
+        // 4. Distill using LLM
         let distilledMarkdown = '';
         let brainUsed = 'Deterministic Cleaner (No LLM active)';
         const distiller = getDistillerClient(workspaceRoot);
@@ -237,25 +201,7 @@ ${compiledRaw}`;
                 const response = await distiller.client.complete(distillationPrompt);
                 distilledMarkdown = response.text || '';
             } catch (distillErr) {
-                console.warn(`Primary distiller (${distiller.brainName}) failed, attempting fallback:`, distillErr);
-                // Attempt fallback to Main Brain if Scout failed
-                try {
-                    const config = getAgentConfig(workspaceRoot);
-                    const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-                    const main = config?.mainBrain;
-                    if (main && main.model && !distiller.brainName.includes('Main Brain')) {
-                        const fallbackClient = main.providerType === 'local'
-                            ? new LocalOllamaClient(main.model, main.endpoint || 'http://127.0.0.1:11434', main.apiKey)
-                            : new GeminiCloudClient([main.apiKey?.trim() || ''], main.model || 'gemini-1.5-pro', 60);
-
-                        brainUsed = `Main Brain Fallback (${main.model})`;
-                        const compiledRaw = rawSources.map((s, idx) => `### Source [${idx + 1}]: ${s.source}\n${s.content.substring(0, 2000)}`).join('\n\n---\n\n');
-                        const response = await fallbackClient.complete(`Distill this technical docs into clean API signatures & examples:\n${compiledRaw}`);
-                        distilledMarkdown = response.text || '';
-                    }
-                } catch (fallbackErr) {
-                    console.error('Fallback distiller also failed:', fallbackErr);
-                }
+                console.warn(`Distiller (${distiller.brainName}) failed:`, distillErr);
             }
         }
 

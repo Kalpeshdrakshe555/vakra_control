@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface TerminalExecutionResult {
     output: string;
@@ -32,8 +34,45 @@ export class TerminalCapture {
                 ? workspaceRoot
                 : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd());
 
+            let effectiveCwd = safeCwd;
+
+            // Smart CWD & manage.py resolution
+            if (/\b(?:python|py|python3)\s+manage\.py\b/i.test(command)) {
+                if (!fs.existsSync(path.join(safeCwd, 'manage.py'))) {
+                    try {
+                        const entries = fs.readdirSync(safeCwd, { withFileTypes: true });
+                        for (const entry of entries) {
+                            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+                                const subManage = path.join(safeCwd, entry.name, 'manage.py');
+                                if (fs.existsSync(subManage)) {
+                                    effectiveCwd = path.join(safeCwd, entry.name);
+                                    this.outputChannel.appendLine(`[Terminal Auto-Routing] 'manage.py' detected in ./${entry.name}. Executing with CWD: ${effectiveCwd}`);
+                                    break;
+                                }
+                            }
+                        }
+                    } catch {}
+                }
+            } else if (/\b(?:npm|pnpm|yarn|npx)\b/i.test(command)) {
+                if (!fs.existsSync(path.join(safeCwd, 'package.json'))) {
+                    try {
+                        const entries = fs.readdirSync(safeCwd, { withFileTypes: true });
+                        for (const entry of entries) {
+                            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+                                const subPkg = path.join(safeCwd, entry.name, 'package.json');
+                                if (fs.existsSync(subPkg)) {
+                                    effectiveCwd = path.join(safeCwd, entry.name);
+                                    this.outputChannel.appendLine(`[Terminal Auto-Routing] 'package.json' detected in ./${entry.name}. Executing with CWD: ${effectiveCwd}`);
+                                    break;
+                                }
+                            }
+                        }
+                    } catch {}
+                }
+            }
+
             try {
-                cp.exec(command, { cwd: safeCwd, maxBuffer: 1024 * 1024, timeout: 30000, shell }, (error, stdout, stderr) => {
+                cp.exec(command, { cwd: effectiveCwd, maxBuffer: 1024 * 1024, timeout: 30000, shell }, (error, stdout, stderr) => {
                     let fullOutput = '';
                     let exitCode = 0;
                     let isError = false;

@@ -17,7 +17,6 @@ import { SessionMemory } from '../state/sessionMemory';
 import { SkillsManager } from '../features/skillsManager';
 import { ToolDispatcher } from './tools/toolDispatcher';
 import { MessageDispatcher, DispatchContext } from './handlers/messageDispatcher';
-import { autonomousPreFlightScout } from '../tools/scraper';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'ultraLightAi.sidebar';
@@ -169,7 +168,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'sendChatStream': {
-                    const { text, images, timestamp, thinkingBudget, advancedMode, architectMode } = message;
+                    const { text, images, timestamp, thinkingBudget, architectMode } = message;
 
                     // Fresh abort controller & tool buffer for this turn
                     this.currentAbortController = new AbortController();
@@ -299,14 +298,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             if (workspaceRoot) {
                 try {
-                    const activeSkill = SkillsManager.getMatchingSkillInstructions(message.text, workspaceRoot);
-                    if (activeSkill) {
-                        // Extract skill name from first line or header
-                        const skillNameMatch = activeSkill.match(/#\s*(?:Skill:?\s*)?([a-zA-Z0-9_\-]+)/i) || message.text.match(/\b(django|react|fastapi|vue|node|nextjs|tailwind)\b/i);
-                        const displaySkill = skillNameMatch ? skillNameMatch[1] : 'Specialized Skill';
+                    const matchedSkills = SkillsManager.getMatchingSkills(message.text, workspaceRoot);
+                    if (matchedSkills.length > 0) {
+                        const firstSkill = matchedSkills[0];
+                        const isCustom = !!firstSkill.filePath;
+                        let sourcePath = 'Built-in System Skill';
+                        if (firstSkill.filePath) {
+                            try {
+                                sourcePath = path.relative(workspaceRoot, firstSkill.filePath).replace(/\\/g, '/');
+                            } catch {
+                                sourcePath = firstSkill.filePath;
+                            }
+                        }
+
                         this.postMessageToWebview({
                             command: 'activeSkillNotice',
-                            skillName: displaySkill
+                            skillName: firstSkill.name,
+                            isCustom,
+                            source: sourcePath,
+                            description: firstSkill.description || ''
                         });
                     }
                 } catch {}
@@ -317,8 +327,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
 
             let finalPrompt = await this.buildPrompt(message.text, workspaceRoot);
-
-            // Pre-flight scout bypassed to eliminate initial UI freezing & redundant scraping
 
             this.conversationHistory.addMessage('user', message.text, undefined, message.timestamp);
 
@@ -381,6 +389,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                                     instructions: { type: "string", description: "Detailed step-by-step rules, patterns, tone guidelines, and execution protocols for this skill" }
                                 },
                                 required: ["name", "instructions"]
+                            }
+                        },
+                        {
+                            name: "read_skill",
+                            description: "Reads the full instructions and execution protocol of a specific workspace skill.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    skill_name: { type: "string", description: "Name of the skill to read (e.g. 'code-reviewer', 'django-fullstack')" }
+                                },
+                                required: ["skill_name"]
                             }
                         },
                         {
@@ -525,9 +544,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     done: true,
                     usage: result?.usage
                 });
+                const summaryWithRecap = this.formatTurnExecutionRecap(cleanSummary, this.currentTurnToolCalls);
                 this.conversationHistory.addMessage(
                     'model',
-                    cleanSummary,
+                    summaryWithRecap,
                     result?.usage,
                     [...this.currentTurnToolCalls]
                 );
@@ -562,9 +582,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 });
             }
 
+            const messageWithRecap = this.formatTurnExecutionRecap(clean || 'Done.', this.currentTurnToolCalls);
             this.conversationHistory.addMessage(
                 'model',
-                clean || 'Done.',
+                messageWithRecap,
                 result?.usage,
                 [...this.currentTurnToolCalls]
             );
@@ -590,6 +611,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         let contextSources: ContextSource[] = [];
 
         if (workspaceRoot) {
+            try {
+                const activeSkill = SkillsManager.getMatchingSkillInstructions(text, workspaceRoot);
+                if (activeSkill) {
+                    contextSources.push({
+                        name: 'Mandatory Active Skill Protocol',
+                        content: activeSkill,
+                        priority: 10
+                    });
+                }
+            } catch (err) {
+                console.error('[buildPrompt] Error fetching active skill:', err);
+            }
+
             const errorContexts = ErrorDiagnoser.extractErrors(finalPrompt + '\n' + TerminalCapture.getLastOutput(), workspaceRoot);
             if (errorContexts.length > 0) {
                 let diagStr = '### ERROR DIAGNOSTICS ###\n' + errorContexts.map(c => c.codeSnippet).join('\n');
@@ -627,5 +661,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this.conversationHistory.clear();
         this.taskPlanner.clear();
         this.postMessageToWebview({ command: 'chatCleared' });
+    }
+
+    private formatTurnExecutionRecap(baseText: string, toolCalls: Array<{ tool: string; title: string; data: any }>): string {
+        if (!toolCalls || toolCalls.length === 0) return baseText;
+        const readFiles = new Set<string>();
+        const writtenFiles = new Set<string>();
+        const editedFiles = new Set<string>();
+        const commandsRun: string[] = [];
+        const errorsEncountered: string[] = [];
+
+        for (const tc of toolCalls) {
+            const tool = tc.tool;
+            const d = tc.data || {};
+            if (tool === 'read_multiple_files') {
+                if (d.files) d.files.split(',').forEach((f: string) => readFiles.add(f.trim()));
+            } else if (tool === 'write_file') {
+                if (d.filepath) writtenFiles.add(d.filepath);
+            } else if (tool === 'edit_file') {
+                if (d.filepath) editedFiles.add(d.filepath);
+            } else if (tool === 'execute_terminal_command') {
+                if (d.command) commandsRun.push(d.command);
+                if (d.error || (d.output && /fatal|error|exception|traceback|syntaxerror/i.test(d.output))) {
+                    const errSnippet = (d.output || '').split('\n').filter((l: string) => /fatal|error|exception|traceback/i.test(l)).slice(0, 2).join('; ');
+                    if (errSnippet) errorsEncountered.push(`${d.command}: ${errSnippet.slice(0, 160)}`);
+                }
+            }
+        }
+
+        const recapLines: string[] = ['[PREVIOUS TURN EXECUTION RECORD]'];
+        if (readFiles.size > 0) recapLines.push(`- Files Inspected: ${Array.from(readFiles).join(', ')}`);
+        if (writtenFiles.size > 0) recapLines.push(`- Files Created: ${Array.from(writtenFiles).join(', ')}`);
+        if (editedFiles.size > 0) recapLines.push(`- Files Edited: ${Array.from(editedFiles).join(', ')}`);
+        if (commandsRun.length > 0) recapLines.push(`- Terminal Commands: ${commandsRun.slice(-4).join(' | ')}`);
+        if (errorsEncountered.length > 0) recapLines.push(`- Errors Encountered: ${errorsEncountered.slice(-3).join(' || ')}`);
+
+        if (recapLines.length === 1) return baseText;
+        const recap = recapLines.join('\n');
+        return baseText ? `${recap}\n\n${baseText}` : recap;
     }
 }

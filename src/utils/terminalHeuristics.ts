@@ -13,37 +13,7 @@ export async function extractSurgicalErrorContext(rawOutput: string, workspaceRo
     let filePath = '';
     let lineNumber = -1;
 
-    // 🧠 PRIMARY TIER: Try to use Scout Brain (LLM) to intelligently parse the error
-    try {
-        const config = require('../config').getAgentConfig(workspaceRoot);
-        const supportBrain = config?.supportBrain;
-        
-        if (supportBrain && supportBrain.model) {
-            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-            let scoutClient;
-            if (supportBrain.providerType === 'local') {
-                scoutClient = new LocalOllamaClient(supportBrain.model || 'llama-3.1-8b-instant', supportBrain.endpoint || 'http://127.0.0.1:11434', supportBrain.apiKey);
-            } else {
-                scoutClient = new GeminiCloudClient([supportBrain.apiKey?.trim() || ''], supportBrain.model || 'gemini-1.5-flash', 60);
-            }
-
-            const prompt = `Analyze this terminal error output. Extract the main error name, the file path where it occurred, and the exact line number.\nReturn ONLY a valid JSON object with keys: "errorName", "filePath", "lineNumber" (as integer). If you cannot find them, return {"errorName": "", "filePath": "", "lineNumber": -1}. Do not include markdown blocks.\n\nTerminal Output:\n${lines.slice(-30).join('\n')}`;
-            
-            const response = await scoutClient.complete(prompt);
-            const jsonStr = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(jsonStr);
-            
-            if (parsed.filePath && parsed.lineNumber !== -1) {
-                errorName = parsed.errorName || 'Unknown Error';
-                filePath = parsed.filePath;
-                lineNumber = parsed.lineNumber;
-            }
-        }
-    } catch (e) {
-        console.error("Scout heuristic failed, falling back to Regex:", e);
-    }
-
-    // 🛠️ SECONDARY TIER: Regex Fallback (Includes Node, Python, C++, Go, Rust)
+    // Fast Regex Heuristic Parser (Includes Node, Python, C++, Go, Rust)
     if (!filePath || lineNumber === -1) {
         // Scan from bottom-up (where errors usually terminate)
         for (let i = lines.length - 1; i >= 0; i--) {

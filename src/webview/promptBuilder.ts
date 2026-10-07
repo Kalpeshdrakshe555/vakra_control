@@ -79,18 +79,25 @@ RULES:
 1. Every reply MUST be exactly ONE tool call. Never output source code, file blocks, or commands as plain chat text.
 2. STRICT SINGLE ACTION PER STEP: Execute EXACTLY ONE skill checklist step or command per turn. NEVER chain multiple terminal commands (e.g. no '&&' or ';'). Run one command, inspect the result, and only then proceed.
 3. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, powershell redirection) to write code.
-4. Inspect before editing: call \`read_multiple_files\` first. Never guess paths or symbols.
+4. Inspect before editing: call \`read_multiple_files\` first. Never guess paths or symbols. If a file was already read or edited in recent turns and is recorded in [PREVIOUS TURN EXECUTION RECORD] or working memory, you already know its state—do NOT repeatedly re-read unchanged files.
 5. If a command or check fails: analyze the error, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
 6. ANTI-PREMATURE FINISH: You are STRICTLY FORBIDDEN from calling \`finish\` if:
    - A terminal command just failed or produced an error.
    - Verification checks (e.g. \`python manage.py check\`, compiler build, or test run) have not yet been executed and passed.
    - Any planned files or routes are still missing or incomplete.
 7. Only call \`finish\` when all files are physically created, URLs connected, and verification passes with 0 errors.
+8. MANDATORY SKILL PROTOCOL ADHERENCE: If a Specialized Skill is provided or matching your task, you MUST follow its checklist, architectural decisions, and verification steps in strict sequence. Do not skip or bypass skill requirements.
+9. TERMINAL WORKING DIRECTORY & FRAMEWORK SCAFFOLDING:
+   - All terminal commands execute with CWD = workspace root. Do NOT run standalone \`cd <dir>\` commands because each command runs in a fresh process.
+   - When scaffolding Django in a new workspace, ALWAYS run \`django-admin startproject <project_name> .\` (with trailing dot \`.\`) so that \`manage.py\` is created directly at the workspace root! NEVER create nested duplicate projects or duplicate apps.
+   - If \`manage.py\` is in a subfolder (e.g. \`backend/manage.py\`), ALWAYS execute commands referencing that relative path (e.g. \`python backend/manage.py makemigrations\`).
+   - For React/Vite/Frontend in new projects: initialize into the current directory with \`./\` (e.g. \`npm create vite@latest ./ -- --template react-ts\`).
 
 TOOLS:
 - list_directory_tree(path, depth)
 - search_codebase(query)
 - read_multiple_files(paths[], start_line?, end_line?)
+- read_skill(skill_name)
 - write_file(filepath, content)
 - edit_file(filepath, old_text, new_text)
 - execute_terminal_command(command)
@@ -226,11 +233,15 @@ TEMPORAL RESOLUTION RULES:
                 if (mem) dynamicParts.push(mem);
             } catch {}
 
-            // 3. Matching Specialized Skill (P0 Execution Guidance)
+            // 3. Available Skills Catalog & Matching Specialized Skill (P0 Execution Guidance)
             try {
+                const skillsCatalog = SkillsManager.getAvailableSkillsSummary(workspaceRoot);
+                if (skillsCatalog) {
+                    dynamicParts.push(skillsCatalog);
+                }
                 const activeSkill = SkillsManager.getMatchingSkillInstructions(userText, workspaceRoot);
                 if (activeSkill) {
-                    dynamicParts.push(`### ACTIVE SPECIALIZED SKILL:\n${activeSkill}\n`);
+                    dynamicParts.push(activeSkill);
                 }
             } catch {}
         }
@@ -331,7 +342,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
     /* ================================================================== */
     /* 5. TOOL GATING: fewer tools per turn = fewer wrong choices           */
     /* ================================================================== */
-    private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files', 'get_code_diagnostics', 'get_symbol_outline'];
+    private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files', 'get_code_diagnostics', 'get_symbol_outline', 'read_skill'];
     private static readonly WRITE = ['create_skill', 'write_file', 'edit_file'];
 
     /**

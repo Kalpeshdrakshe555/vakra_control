@@ -1,213 +1,184 @@
 <div align="center">
-  <h1>🚀 Ultra Light AI (The Ultimate Agentic Coding Assistant)</h1>
-  <p><strong>A blazingly fast, context-aware, fully autonomous offline-capable AI Assistant for VS Code.</strong></p>
-  <p><em>Experience "Cursor-level" power natively inside standard VS Code.</em></p>
+  <img src="icon.png" width="100" height="100" alt="Ultra Light AI Logo" />
+  <h1>🚀 Ultra Light AI</h1>
+  <p><strong>The High-Performance, Token-Efficient Autonomous AI Coding Assistant for VS Code.</strong></p>
+  <p><em>Engineered from the ground up to empower local small models (3B–7B parameters, 40k context) and cloud frontier models alike with Cursor-level autonomy.</em></p>
+
+  <p>
+    <a href="#-key-highlights">Highlights</a> •
+    <a href="#-architecture--innovations">Architecture</a> •
+    <a href="#-local-model-vision--setup">Local & Vision Setup</a> •
+    <a href="#-skills-system">Skills System</a> •
+    <a href="#-configuration--settings">Settings</a> •
+    <a href="#-documentation">Deep Dive Logic</a>
+  </p>
 </div>
 
-> **⚠️ STATUS: STABLE & FEATURE-COMPLETE**  
-> We've just completed a massive architectural upgrade! Ultra Light AI is now a **fully autonomous Agentic tool** featuring native LSP codebase context, inline ghost text, Composer diff previews, and Devin-style autonomous execution loops!
+---
+
+## 🌟 Key Highlights
+
+- **⚡ Tailored for Small Models & Tight Contexts (4B / 40k Window):**  
+  Unlike generic AI tools that collapse without 128k–200k tokens, Ultra Light AI is mathematically optimized to keep 3B–7B local models (e.g. Gemma 4B, Qwen 2.5 Coder, Llama 3.2) sharp, coherent, and loop-free within a strict 32k–40k context budget.
+- **🔄 Autonomous Self-Healing Tool Loop:**  
+  Executes file operations, terminal commands, directory explorations, and code modifications in a continuous execution cycle. Automatically captures compiler/runtime errors and self-corrects without manual prompt pasting.
+- **🧠 Zero-Bloat Session Memory & Anti-Reread Heuristics:**  
+  Maintains symbol-level footprints of visited files. Prevents the AI from repeatedly reading the same files, eliminating infinite loops and saving up to 75% of context window tokens.
+- **🎯 Dynamic Workspace Skills Engine:**  
+  Drop declarative skill protocols into `.ultra-light-ai/skills/<name>/SKILL.md`. Features built-in safety rules, strict checklist enforcement, and automated conflict resolution.
+- **💻 Intelligent CWD & Terminal Auto-Routing:**  
+  Automatically identifies the correct working directory for framework-specific commands (e.g. searching for `manage.py`, `package.json`, or nested project folders) before running terminal tasks.
+- **👁️ Multimodal Vision Support:**  
+  Feed UI screenshots, design mockups, or bug captures directly into the chat. Seamlessly works with local vision projectors (`--mmproj`) in `llama-server` or cloud multimodal vision endpoints.
+- **🔌 Extensible MCP & Plugins Engine:**  
+  One-click configuration for Model Context Protocol servers (`mcp.json`) and custom runtime JavaScript automation scripts (`plugins.js`).
+- **🛡️ 100% Offline & Private Capability:**  
+  Direct, native integration with local backends (`llama-server`, `Ollama`, `LM Studio`, `vLLM`) via OpenAI-compatible endpoints, keeping proprietary code strictly on your machine.
 
 ---
 
-## 🌟 Overview
+## 📐 Architecture & Core Innovations
 
-Ultra Light AI is a powerful coding assistant extension designed from the ground up to be ultra-lightweight and highly performant. Built entirely in Vanilla TypeScript (zero heavy frameworks) with a sub-100MB memory footprint, it acts as an autonomous 10x pair-programmer right inside your IDE. 
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        VS Code Webview UI                              │
+│         (Streaming Thoughts • Tool Cards • History • Settings)         │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Webview Message Dispatcher
+┌───────────────────────────────────▼────────────────────────────────────┐
+│                    SidebarProvider & Engine Router                     │
+├───────────────────────────────────┬────────────────────────────────────┤
+│  PromptBuilder & Classifier       │  ToolDispatcher (Autonomous Loop)  │
+│  - System Prompt & Framework Rules │  - readFile / writeFile / patch    │
+│  - Micro AST Repo-Map (LSP)       │  - runCommand & Smart CWD Routing  │
+│  - Session Memory Ingestion       │  - listDirectory / searchCodebase  │
+│  - Active Skill Instructions      │  - webSearch & Doc Distiller       │
+└─────────────────┬─────────────────┴──────────────────┬─────────────────┘
+                  │                                    │
+┌─────────────────▼─────────────────┐┌─────────────────▼─────────────────┐
+│     Session & Context Memory      ││     Skills & Extensibility        │
+│  - SessionMemory (Visited Cache)  ││  - Custom Workspace Skills        │
+│  - ConversationHistory (Persist)  ││  - Built-in Safety Skills         │
+│  - AST Skeletonizer (Code Slices) ││  - MCP Client & Plugin Hooks      │
+└───────────────────────────────────┘└───────────────────────────────────┘
+```
 
-We've bridged the gap between VS Code and premium AI IDEs like Cursor by introducing a revolutionary **Dual-Brain Architecture** and 7 industry-leading features directly into your environment!
+### 1. The Anti-Reread & Session Memory Engine
+In small models, reading entire source files repeatedly exhausts the token budget and triggers repetitive loops. Ultra Light AI intercepts every `readFile` call and stores:
+- File paths visited in the current session.
+- Extracted top-level symbols (functions, classes, interfaces).
+- Import signatures and line counts.  
+When the model considers re-reading a known file, the prompt injects a concise cached summary, allowing the model to write precise patches without wasting context.
 
----
+### 2. Turn-to-Turn State Continuity
+When an autonomous tool loop finishes a turn (or hits the user-defined step limit), the system captures the execution summary—which files were edited, which tests were run, and what errors occurred—and embeds it into the next turn as an immutable `[PREVIOUS TURN EXECUTION RECORD]`. The agent never "forgets" what it just completed.
 
-## 🔒✨ 100% PRIVATE OFFLINE CODING WITH OLLAMA ✨🔒
-
-Tired of sending your proprietary, top-secret codebase to the cloud? **Ultra Light AI natively supports Ollama** for completely offline, local AI assistance!
-
-- **Zero Data Leaks:** Your code never leaves your machine. Period.
-- **Lightning Fast Local Inference:** Connect to your local `http://127.0.0.1:11434` instance instantly.
-- **Model Agnostic:** Use Llama 3, CodeQwen, DeepSeek Coder, or any model supported by Ollama.
-- **Flight Mode Coding:** Keep building and refactoring even when you have no internet connection.
-
-Just click the ⚙️ Gear Icon, select **Local Provider**, enter your model name, and experience true private AI.
-
----
-
-## 🚀🔥 17 New "Cursor-Killer" Agentic Features
-
-We've heavily upgraded the core engine. You now have access to:
-
-### 1. 🧠 Dual-Brain Architecture (Advanced Mode)
-Toggle **"🚀 Advanced (Dual-Brain)"** mode to activate our revolutionary "Scout & Sniper" pattern. 
-- **Brain 2 (The Scout):** A fast, lightweight model (e.g., Llama 3.1 8B on Groq) intercepts your prompt, silently explores your workspace, reads `ARCHITECTURE.md`, uses BM25 semantic search, and gathers the exact files needed.
-- **Brain 1 (The Executor):** A heavy-duty reasoning model (e.g., Gemini Pro) receives the pre-fetched context from the Scout and writes 100% accurate, un-hallucinated code.
-
-### 2. 📝 Background AST Indexing (Zero Maintenance)
-Forget about manually managing context! When you save files in VS Code, the extension tracks your edits. After 30 seconds of inactivity, the **Support Scout** spins up in the background and automatically writes/updates an `ARCHITECTURE.md` file in your project root. Your system learns and remembers your project structure silently.
-
-### 3. ⌨️ Ctrl+K (Inline Edit)
-Highlight any code, press `Ctrl+K` (Windows/Linux) or `Cmd+K` (Mac), and type a quick instruction (e.g., *"Make this async"*). The AI will surgically replace the selected text in real-time, right in your editor. No need to open the sidebar!
-
-### 4. 🏢 Architect Mode (Scaffolding Agent)
-Tick **"🏢 Architect"** when asking for a large project (like "Build a Django App"). The AI will switch to "Scaffolding Mode," providing only CLI terminal commands to set up the project. Once you run them, it will guide you step-by-step, generating code files one by one to avoid overwhelming your token limit.
-
-### 5. 👁️ Composer / Multi-File Unified Diff Preview
-Before applying any AI code changes, click the **"👁️ Preview"** button. The extension will generate a temporary file and open VS Code's native Split-Screen Diff View, allowing you to review exactly what the AI changed before injecting it into your live files!
-
-### 6. 🧠 True Codebase Context (Native AST/LSP Integration)
-Basic text search is dead. Ultra Light AI now hooks directly into VS Code's Language Server Protocol (`executeWorkspaceSymbolProvider`). When you type a class or function name in your prompt, the AI natively locates its definition across your entire workspace and extracts the exact surrounding code—providing pixel-perfect codebase awareness without blowing up your token budget!
-
-### 7. 🚨 Terminal Error Auto-Catch
-Did your compilation or tests fail? No need to copy-paste the error! Run the command **`Ultra Light AI: Fix Terminal Error`** (via Command Palette or Terminal Context Menu). The extension will instantly capture the last 60 lines of your active terminal and send it to the AI for debugging.
-
-### 8. 📜 Project-Specific Rules (`.agentrules`)
-Create a `.agentrules` (or `.cursorrules`) file in the root of your workspace. Define your architectural guidelines (e.g., *"Always use TailwindCSS, never use classes"*). The AI will silently ingest these rules before every generation to ensure absolute consistency.
-
-### 9. 👻 Ghost Text Autocomplete (FIM)
-Experience Copilot-style inline ghost text as you type. Pause for a split second, and the AI will predict your next lines of code based on the surrounding context.
-
-### 10. 🎨 UI/UX Design Engine (Zero Assets Needed)
-Build stunning, modern UI directly from prompts. The AI automatically acts as a vector artist, generating inline SVG logos, leveraging Live Open APIs (Picsum, Pravatar) for dynamic images, and embedding Tailwind CSS animations.
-
-### 11. 🛠️ Native Tool Calling
-The AI is empowered with native workspace tools: `read_multiple_files`, `update_architecture_context`, `search_codebase`, `find_references`, and an AST-Aware `replace_symbol` function for surgical file patches.
-
-### 12. 🧠 Smart Memory Summarizer
-Never hit token limits again. When your chat history grows too large, a background process intercepts and summarizes older conversations into dense context blocks, preserving crucial architectural decisions.
-
-### 13. 🛡️ Terminal Execution Sandboxing
-Prevents accidental destruction. An aggressive safety interceptor catches and blocks dangerous shell patterns (`rm -rf`, `format`) and cleanly joins multiline AI commands using `&&`.
-
-### 14. 🚨 Terminal Error Interceptor (Quick-Fix)
-Listens to your VS Code terminal. If a Python, Node, Go, or C++ execution crashes with a Traceback/Exception, it automatically shows a popup. One click sends the exact error snippet to the AI for a lightning-fast fix.
-
-### 15. ⚡ Skeleton Expander (Inline Pseudo-code to Code)
-Write comments or pseudo-code directly in your editor (e.g., `# 1. verify cart # 2. process payment`). Select them, press `Ctrl + Shift + Enter`, and the AI will expand them into fully working code seamlessly.
-
-### 16. 🔍 Semantic "Smart" Search Bar
-Press `Ctrl + Alt + F` to open the Smart Search box. Type natural language queries like *"where is the logic to calculate cart total?"*. The RAG Engine scans your codebase and jumps directly to the matching file and line at zero token cost.
-
-### 17. 📊 TDD Scaffolder & Database Visualizer
-Use the 1-click suggestion chips in the chat to instantly generate edge-case unit tests for your active file, or command the AI to scan your entire workspace and draw a `Mermaid.js` ER Diagram of your database schema.
+### 3. Smart Terminal Auto-Routing (CWD Heuristics)
+Small models often execute commands in the workspace root instead of the nested subfolder where `manage.py` or `package.json` resides. The extension inspects commands prior to execution, resolves the true path of project anchors, and seamlessly directs the command to the target folder.
 
 ---
 
-## ✨ Classic Features
+## 🖥️ Local Model & Vision Setup
 
-- **🧠 Semantic RAG Context (@rag):** Built-in BM25 Search Engine for fast offline codebase retrieval.
-- **⚡ Search & Replace Patching:** Intelligent `<<<<<<< SEARCH` and `>>>>>>> REPLACE` blocks to surgically patch files instead of completely overwriting them. 
-- **📁 Drag & Drop Context:** Drop files directly into the chat interface to inject them into the AI's brain.
-- **🔄 Universal Model Support:** Switch between Cloud (Gemini 1.5 Pro, Flash, Gemma) and Offline (Ollama) with one click.
-- **🌐 Deep Web Scraping (@search):** Type `@search <query>` to give the AI real-time internet access. It reads full HTML pages and preserves code blocks for accurate, up-to-date documentation scraping!
-- **🔙 Safe Git-Style Chat Rollbacks:** Click "Rewind" in the chat history, and the system won't just delete the message—it will automatically revert any physical files that the AI modified during that turn!
+Ultra Light AI is tested and optimized for local inference backends such as `llama-server` (llama.cpp) and `Ollama`.
 
----
+### Running with a 4B Model + Multimodal Vision (Gemma / Qwen)
 
-## ⚙️ Configuration & Smart Saves
+Launch `llama-server` with your base model and multimodal vision projector:
 
-To keep your settings portable and secure, Ultra Light AI utilizes a smart dual-save mechanism:
-1. **Global Save:** API keys and global preferences are saved securely in your home directory (`~/.ultra-light-ai/config.json`) to share across projects and prevent GitHub leaks.
-2. **Workspace Save:** Project-specific settings and UI preferences are strictly saved in `.vscode/ultra-light-ai.json`.
-*(Note: The legacy root `.agent-config.json` is now automatically cleaned up and deleted to prevent workspace pollution).*
+```powershell
+& "D:\llama_coo\llama-server.exe" `
+  -m "D:\models\gemma-4-E4B-it-Q4_K_M.gguf" `
+  --mmproj "D:\models\mmproj-F16.gguf" `
+  -ngl 99 `
+  -c 40000 `
+  -fa on `
+  --context-shift `
+  --cache-reuse 256 `
+  --host 127.0.0.1 `
+  --port 8083
+```
 
-> **💡 Note to Users:**
-> Global credentials will automatically apply to any new project you open, allowing you to seamlessly transition between workspaces without re-entering API keys.
-
----
-
-## 🛠️ Step-by-Step Setup Guide (Windows & Mac)
-
-Setting up Ultra Light AI is extremely easy. Whether you are on **Windows** or **macOS**, follow these steps to get started with Cloud APIs or 100% Local Offline models.
-
-### Option A: Quick Start (Free Cloud AI - Recommended for Low-End PCs)
-This is the best option if you have 8GB RAM or less, as it uses 0% of your PC's resources!
-1. **Get an API Key:** Go to Google AI Studio and get a free Gemini API key (or use Groq for fast Llama models).
-2. **Open the Extension:** After installing the extension, press `Ctrl+Shift+A` (Windows/Linux) or `Cmd+Shift+A` (Mac) to open the AI Sidebar.
-3. **Configure the Key:** 
-   - Click the **⚙️ Gear Icon** in the top right of the chat panel.
-   - Under **Brain 1: Main Executor**, select **Cloud (Gemini / Groq / OpenAI)**.
-   - Enter your preferred model (e.g., `gemini-2.5-flash`).
-   - Paste your API key into the input box.
-   - *(Optional)* Do the same for **Brain 2: Supporting Scout** to enable Advanced Mode.
-   - Click **Save Config**.
-4. **Reload:** Press `F5` or `Ctrl+Shift+P` (`Cmd+Shift+P` on Mac) -> type `Developer: Reload Window`. You're ready to code!
-
-### Option B: 100% Free & Private (Local Ollama - Recommended for 16GB+ RAM)
-1. **Install Ollama:** 
-   - **Windows:** Download the `.exe` installer from ollama.com and run it.
-   - **Mac:** Download the macOS `.zip` from ollama.com or run `brew install ollama` via terminal.
-2. **Download a Model:** Open your terminal (Command Prompt/PowerShell on Windows, or Terminal on Mac) and run:
-   - For fast coding: `ollama run qwen2.5-coder:3b`
-   - For deep reasoning: `ollama run qwen2.5-coder:7b`
-   Wait for it to download. Make sure the Ollama app is running in the background (check your system tray on Windows, or menu bar on Mac).
-3. **Configure the Extension:**
-   - Click the **⚙️ Gear Icon** in the chat panel.
-   - Select **Local Offline (Ollama / LM Studio)** for your preferred Brain.
-   - Set the Local API Endpoint to `http://127.0.0.1:11434`.
-   - Type the exact name of the model you downloaded (e.g., `qwen2.5-coder:3b`).
-   - Click **Save Config** and reload VS Code.
+In Ultra Light AI Settings (⚙️ icon in the sidebar):
+1. **API Provider:** `Local (llama-server / Ollama / OpenAI Compatible)`
+2. **Base URL:** `http://127.0.0.1:8083/v1`
+3. **Model Name:** Enter your model tag (or leave as default)
+4. **Max Steps / Turn:** Set according to your workflow (e.g. `20`–`35` for full-stack tasks)
 
 ---
 
-## 🧠 Model Selection Guide (Set Your Expectations)
+## 🎯 Workspace Skills System
 
-Your AI's intelligence depends entirely on the model you choose. **Agentic features (like Architect Mode or multi-file edits) require high reasoning capabilities.**
+Skills provide modular, domain-specific intelligence without modifying system prompts.
 
-| Model Tier | Best For | Hardware Needed | Recommended Models | Expectations |
-| :--- | :--- | :--- | :--- | :--- |
-| **Cloud APIs** (Free/Paid) | Full apps, complex debugging, Architect Mode | Any PC (0% usage) | `gemini-2.5-flash`, `llama-3.3-70b` (Groq) | **Perfect.** Follows complex instructions flawlessly, huge memory, rarely hallucinates. |
-| **Large Local** (7B-14B) | File refactoring, bug fixing, local logic | 16GB+ RAM / Mac M-Series | `qwen2.5-coder:7b`, `llama-3.1-8b` | **Great.** Handles most tasks well. Might slightly struggle with massive multi-file Architect tasks. |
-| **Small Local** (1.5B-3B) | Autocomplete, simple snippets, short questions | 8GB RAM (Low-end PC) | `qwen2.5-coder:3b`, `qwen2.5-coder:1.5b` | **Basic.** *Do NOT expect these to build full apps or follow strict agentic rules.* Good for fast edits, but will hallucinate or forget instructions if given too much context. |
+### Directory Structure
+```
+your-project/
+└── .ultra-light-ai/
+    └── skills/
+        └── my-django-skill/
+            └── SKILL.md
+```
 
-> **💡 Pro-Tip for Low-End PCs (8GB RAM):** Do *not* try to run local models for heavy agentic tasks. Use the free **Gemini API** or **Groq API** (Cloud) to turn your laptop into an AI supercomputer without freezing your RAM!
+### SKILL.md Specification
+```markdown
+---
+name: "django-fullstack"
+description: "Production-ready Django & DRF architecture with strict checklist enforcement"
+trigger_rules: ["django", "manage.py", "drf", "rest_framework"]
+---
+
+## Django Protocol Checklist:
+1. Always verify existing directory layout before running startproject.
+2. Root project folder and app folder MUST have distinct names.
+3. Register every new app immediately in INSTALLED_APPS.
+4. Execute `python manage.py check` before declaring task complete.
+```
+
+### Automatic Conflict Resolution
+- **Custom Overrides Built-in:** If you create a custom skill that triggers for `django`, any system-level fallback skill is **automatically suppressed**.
+- **Transparent UI Indicators:** The sidebar dynamically displays active skills with color-coded badges:
+  - `📁 Custom: .ultra-light-ai/skills/...` (Emerald)
+  - `⚙️ Built-in System Skill` (Amber)
+  - `📋 Enforcing Checklist` (Active verification protocol)
 
 ---
 
-## 🎯 How to Use (Features Guide)
+## ⚙️ Configuration & Key Settings
 
-1. **Add Context Automatically:** 
-   - Check the **`@workspace`** box in the UI to let the AI search your entire codebase (RAG).
-   - Check the **`@active`** box to automatically send your currently open file.
-   - Just type a class or function name (e.g. `AuthService`) and the AI will auto-locate it using VS Code's AST!
-2. **Step-by-Step Architect:** Tick the **`🏢 Architect`** box when asking for a large project (like "Build a Django App"). The AI will guide you step-by-step, providing terminal commands and code blocks one by one for flawless context memory.
-3. **Preview & Apply:** Click **👁️ Preview** to review changes in a Diff View, then click **Apply** to inject them!
+Access the Settings panel via the ⚙️ icon in the sidebar:
 
----
-
-## 🏗️ Architecture & Code Flow
-
-Ultra Light AI avoids heavy dependencies (no React, no Vue) in favor of pure DOM manipulation and native VS Code APIs. 
-
-## 💻 Technologies & Tools Used
-
-To maintain its blazing-fast performance and ultra-lightweight memory footprint (<100MB), this extension relies purely on native solutions and avoids heavy frontend frameworks.
-
-* **TypeScript (Backend & Logic)**: Strongly typed backend ensuring zero runtime errors in production.
-* **VS Code Extension API (`vscode`)**: Deep native integration for AST parsing (LSP), file operations, and editor manipulation.
-* **Vanilla HTML5 / JavaScript (Frontend)**: The Webview UI is written in pure JS to guarantee instant load times and zero framework overhead.
-* **Tailwind CSS (via CDN)**: Used for crafting the hyper-premium, Cyberpunk-themed UI with glassmorphism and glowing hover effects.
-* **Marked.js & DOMPurify**: Safely parses and renders Markdown and code blocks from the AI's response.
-* **esbuild**: A lightning-fast bundler used to package the extension.
-* **BM25 Algorithm (Custom implementation)**: Used for local, offline semantic code search (RAG) without needing external vector databases.
-
-### 📂 Core Files
-- **`src/extension.ts`**: The entry point. Handles `Ctrl+K`, Terminal Error Catching, and State Machine orchestration.
-- **`src/webview/sidebarProvider.ts`**: **The Brain.** Orchestrates Prompt building, RAG execution, LSP symbol resolution, and Composer Diff Previews.
-- **`src/operations/diffPatcher.ts`**: Contains our ultra-resilient 5-tier Search & Replace algorithm that prevents file corruption.
-- **`src/state/conversationHistory.ts`**: Manages multi-turn memory and handles physical file-reversion during chat rollbacks.
+| Setting | Description | Default |
+|---|---|---|
+| **API Provider** | Gemini, Claude, OpenAI, DeepSeek, Groq, OpenRouter, Local | `Local` |
+| **Model Name** | Identifier of the active language model | `gemma-4-E4B-it` |
+| **Max Steps / Turn** | Maximum autonomous tool iterations per conversational turn | `25` |
+| **Context Limit** | Target token window boundary (e.g. 32000, 40000) | `40000` |
+| **Thinking Budget** | Reasoning token allocation for reasoning models | `1024` |
+| **MCP Config** | Opens `.ultra-light-ai/mcp.json` to attach external MCP tools | Click to Open |
+| **Plugins Script** | Opens `.ultra-light-ai/plugins.js` for custom JS runtime hooks | Click to Open |
 
 ---
 
-## 🤝 Contributing
+## ⌨️ Shortcuts & Commands
 
-We just upgraded the extension to full Agentic Status! If you want to help push it further:
-
-1. **Find Bugs:** Open an issue if the AI hallucinates or breaks a file.
-2. **Suggest Improvements:** Ideas for better UI or prompt engineering are always welcome.
-3. **Submit PRs:** Want to add Claude 3.5 Sonnet support or optimize the LSP resolver? PRs are deeply appreciated.
-
-### Developer Setup
-1. Clone the repo.
-2. Run `npm install`.
-3. Press `F5` in VS Code to open the Extension Development Host.
-4. Run `npm run compile` or `npm run watch` to compile TypeScript changes.
+| Shortcut / Command | Action |
+|---|---|
+| `Ctrl+Shift+P` → `Ultra Light AI: Open Chat` | Opens the assistant sidebar |
+| `Ctrl+Shift+P` → `Ultra Light AI: New Chat` | Starts a fresh session with clean context |
+| `Ctrl+Shift+P` → `Ultra Light AI: AI Quick Fix` | Analyzes and fixes current editor diagnostics |
+| `Ctrl+K` (Inline Edit) | Surgically refactors selected code directly in the editor |
+| Terminal Context Menu → `Fix Terminal Error` | Ingests last 60 terminal lines for instant debugging |
 
 ---
-*Happy Coding! Let's build the ultimate AI assistant together.* 🚀
+
+## 📚 Technical Documentation
+
+For an in-depth breakdown of the internal algorithms, token budget allocations, AST skeletonization, and state machine mechanics, consult:
+👉 **[project_logic.md](project_logic.md)**
+
+---
+
+## 📄 License
+
+Ultra Light AI is licensed under the MIT License. Built with passion for high-performance, autonomous, local-first developer tooling.

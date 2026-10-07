@@ -129,6 +129,14 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         };
     }
 
+    // 5b. read_skill signature
+    if (obj.skill_name || (obj.name && (obj.action === 'read_skill' || obj.tool === 'read_skill'))) {
+        return {
+            name: 'read_skill',
+            args: { skill_name: String(obj.skill_name || obj.name) }
+        };
+    }
+
     // 6. check_localhost_health signature
     if (obj.port !== undefined && (obj.port === 3000 || obj.port === 8000 || obj.port === 5173 || obj.port === 8080 || typeof obj.port === 'number')) {
         return {
@@ -696,7 +704,7 @@ export class GeminiCloudClient implements IEngine {
         }
 
         const contents: any[] = [
-            ...history.map(h => ({
+            ...(history || []).map(h => ({
                 role: h.role,
                 parts: [{ text: h.text }]
             })),
@@ -977,7 +985,7 @@ export class LocalOllamaClient implements IEngine {
         let messages: any[] = [];
         if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
         
-        history.forEach(h => {
+        (history || []).forEach(h => {
             messages.push({ role: h.role === 'model' ? 'assistant' : 'user', content: h.text });
         });
 
@@ -1375,9 +1383,9 @@ export class LocalOllamaClient implements IEngine {
                                 return { text: lastFullText || 'Stopped by user.' };
                             }
 
-                            const isTextDetected = toolCalls.some(tc => (tc.id || '').startsWith('call_text_') || (tc.id || '').startsWith('call_repaired_'));
+                            const isTextDetected = toolCalls.some((tc: any) => (tc.id || '').startsWith('call_text_') || (tc.id || '').startsWith('call_repaired_'));
                             if (isTextDetected) {
-                                messages.push({ role: 'assistant', content: raw || `[Invoking tool operation...]` });
+                                messages.push({ role: 'assistant', content: lastFullText || `[Invoking tool operation...]` });
                                 for (const tc of toolCalls) {
                                     if (signal?.aborted) {
                                         if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });

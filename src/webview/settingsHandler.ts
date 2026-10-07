@@ -16,9 +16,6 @@ export class SettingsHandler {
             const globalDir = path.join(os.homedir(), '.ultra-light-ai');
             if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true });
             const configPath = path.join(globalDir, 'config.json');
-
-            const isAdvancedMode = !!(message.config.mainBrain && message.config.supportBrain && message.config.supportBrain.model);
-
             const newConfig: AgentConfig = {
                 // Preserve Legacy structure so older systems don't crash
                 providers: {
@@ -35,10 +32,8 @@ export class SettingsHandler {
                 },
                 activeProvider: message.config.mainBrain?.providerType || 'cloud',
 
-                // New Dual-Brain Config
+                // Model Config
                 mainBrain: message.config.mainBrain,
-                supportBrain: message.config.supportBrain,
-                advancedModeEnabled: isAdvancedMode,
 
                 maxAutonomousToolSteps: Math.min(100, Math.max(5, Number(message.config.maxAutonomousToolSteps) || 30)),
 
