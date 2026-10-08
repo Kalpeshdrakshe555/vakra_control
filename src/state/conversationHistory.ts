@@ -406,16 +406,25 @@ export class ConversationHistory {
         this.saveToFile();
     }
 
+    public addFileBackup(timestamp: number, filepath: string, content: string | null): void {
+        const session = this.activeSession;
+        if (!session || session.messages.length === 0) return;
+        const msg = session.messages.find(m => m.timestamp === timestamp) 
+                 || session.messages[session.messages.length - 1];
+        if (!msg) return;
+        if (!msg.fileBackups) msg.fileBackups = [];
+
+        if (!msg.fileBackups.find(b => b.filepath === filepath)) {
+            msg.fileBackups.push({ filepath, content });
+            this.saveToFile();
+        }
+    }
+
     public addFileBackupToLatestMessage(filepath: string, content: string | null): void {
         const session = this.activeSession;
         if (!session || session.messages.length === 0) return;
         const latestMsg = session.messages[session.messages.length - 1];
-        if (!latestMsg.fileBackups) latestMsg.fileBackups = [];
-        
-        if (!latestMsg.fileBackups.find(b => b.filepath === filepath)) {
-            latestMsg.fileBackups.push({ filepath, content });
-            this.saveToFile();
-        }
+        this.addFileBackup(latestMsg.timestamp, filepath, content);
     }
 
     public deleteMessageByTimestamp(timestamp: number): boolean {

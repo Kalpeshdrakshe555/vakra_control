@@ -236,6 +236,17 @@ export interface BrainConfig {
     temperature?: number;
 }
 
+export interface VoiceConfig {
+    enabled?: boolean;
+    autoSpeak?: boolean;
+    sttProvider?: 'browser' | 'whisper' | 'groq';
+    whisperEndpoint?: string;
+    whisperApiKey?: string;
+    ttsProvider?: 'browser' | 'kokoro' | 'edge';
+    ttsEndpoint?: string;
+    wsGatewayUrl?: string;
+}
+
 export interface AgentConfig {
     // Legacy fields for backward compatibility
     providers?: {
@@ -257,6 +268,7 @@ export interface AgentConfig {
         historyLength: number 
     };
     systemInstructions: string;
+    voice?: VoiceConfig;
 }
 
 /**

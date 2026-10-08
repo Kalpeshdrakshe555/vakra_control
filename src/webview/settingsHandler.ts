@@ -39,10 +39,20 @@ export class SettingsHandler {
 
                 contextLimits: {
                     maxOutputTokens: Number(message.config.maxOutputTokens || message.config.maxTokens || 8192),
-                    maxContextTokens: Number(message.config.maxContextTokens || 7000),
+                    maxContextTokens: Number(message.config.maxContextTokens || 40000),
                     historyLength: Number(message.config.historyLength || 10)
                 },
-                systemInstructions: message.config.systemInstructions
+                systemInstructions: message.config.systemInstructions,
+                voice: message.config.voice || {
+                    enabled: false,
+                    autoSpeak: true,
+                    sttProvider: 'browser',
+                    whisperEndpoint: 'http://127.0.0.1:8000/v1/audio/transcriptions',
+                    whisperApiKey: '',
+                    ttsProvider: 'browser',
+                    ttsEndpoint: 'http://127.0.0.1:8002/v1/audio/speech',
+                    wsGatewayUrl: ''
+                }
             };
 
             fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2), 'utf8');

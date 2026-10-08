@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultra Light Agent Chat</title>
+    <title>Vakra AI</title>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
         rel="stylesheet">
@@ -1051,9 +1051,46 @@
         }
 
         #send-btn.is-stop {
-            background: rgba(248, 113, 113, .14) !important;
-            color: var(--err) !important;
-            box-shadow: inset 0 0 0 1px rgba(248, 113, 113, .4) !important
+            background: rgba(239, 68, 68, 0.22) !important;
+            color: #ef4444 !important;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), inset 0 0 0 1.5px rgba(239, 68, 68, 0.7) !important;
+        }
+
+        #send-btn.is-stop:hover {
+            background: rgba(239, 68, 68, 0.4) !important;
+            color: #ffffff !important;
+            box-shadow: 0 0 14px rgba(239, 68, 68, 0.6), inset 0 0 0 1.5px #ef4444 !important;
+        }
+
+        /* Full-Duplex Voice Assistant Styles */
+        #voice-mic-btn {
+            background: transparent;
+            color: var(--tx2);
+            transition: all .2s ease;
+        }
+        #voice-mic-btn:hover {
+            color: var(--tx);
+            background: var(--bg2);
+        }
+        #voice-mic-btn.active {
+            background: rgba(16, 185, 129, 0.22) !important;
+            color: #10b981 !important;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.45), inset 0 0 0 1.5px rgba(16, 185, 129, 0.7) !important;
+            animation: pulse-mic 1.8s infinite;
+        }
+        #voice-mic-btn.speaking {
+            background: rgba(139, 140, 248, 0.25) !important;
+            color: #8b8cf8 !important;
+            box-shadow: 0 0 12px rgba(139, 140, 248, 0.5), inset 0 0 0 1.5px #8b8cf8 !important;
+        }
+        @keyframes pulse-mic {
+            0% { transform: scale(0.96); }
+            50% { transform: scale(1.06); }
+            100% { transform: scale(0.96); }
+        }
+        .vu-bar {
+            display: inline-block;
+            transition: height 0.08s ease, opacity 0.08s ease;
         }
 
         .model-wrap {
@@ -1127,12 +1164,16 @@
 
         .meter {
             display: flex;
-            justify-content: flex-end;
+            justify-content: space-between;
+            align-items: center;
             gap: 8px;
             margin-top: 6px;
-            padding: 0 4px;
+            padding: 4px 8px;
             font: 10.5px var(--mono);
-            color: var(--tx3)
+            color: var(--tx3);
+            background: rgba(10, 15, 26, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
         }
 
         #at-mention-popup {
@@ -1367,7 +1408,7 @@
             <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="currentColor" stroke="none" />
-                </svg></div><span>Ultra Light Agent</span>
+                </svg></div><span>Vakra AI</span><span class="text-[9px] font-mono font-bold text-cyan-400 bg-cyan-950/60 border border-cyan-500/40 px-1.5 py-0.5 rounded tracking-wide ml-1">4B</span>
         </div>
         <div style="display:flex;gap:2px">
             <button id="reset-state-btn" class="icon-btn" title="Reset State / Clear Chat"><svg width="15" height="15"
@@ -1426,12 +1467,38 @@
 
     <footer class="dock">
         <div id="at-mention-popup"></div>
-        <div id="agent-activity-bar" class="hidden flex items-center justify-between px-3 py-1.5 mb-2 rounded-lg bg-indigo-950/70 border border-indigo-500/40 text-[11px] text-indigo-200">
-            <div class="flex items-center gap-2">
-                <span class="animate-spin text-indigo-400">⚙️</span>
-                <span id="agent-activity-text" class="font-medium">Agent is working...</span>
+        <!-- Voice Assistant Real-Time Full-Duplex HUD -->
+        <div id="voice-hud" class="hidden flex items-center justify-between px-3 py-1.5 mb-2 rounded-lg bg-emerald-950/70 border border-emerald-500/40 text-[11px] text-emerald-200 shadow-md">
+            <div class="flex items-center gap-2 overflow-hidden mr-2">
+                <span id="voice-hud-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0"></span>
+                <span id="voice-hud-status" class="font-medium truncate font-mono">🎙️ Voice Mode: Listening...</span>
+                <div id="voice-vu-meter" class="flex items-center gap-0.5 h-3 flex-shrink-0">
+                    <span class="vu-bar w-0.5 h-1 bg-emerald-400 rounded-full"></span>
+                    <span class="vu-bar w-0.5 h-2 bg-emerald-400 rounded-full"></span>
+                    <span class="vu-bar w-0.5 h-3 bg-emerald-400 rounded-full"></span>
+                    <span class="vu-bar w-0.5 h-1.5 bg-emerald-400 rounded-full"></span>
+                </div>
             </div>
-            <span class="text-[9px] font-mono text-indigo-300 bg-indigo-900/50 px-1.5 py-0.5 rounded">Active</span>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                <span id="voice-shield-badge" class="text-[9px] font-mono text-emerald-300 bg-emerald-900/50 px-1.5 py-0.5 rounded" title="Hardware Acoustic Echo Cancellation & Dynamic Gating Active">Echo Shield On</span>
+                <button id="voice-mute-btn" type="button" onclick="toggleVoiceAssistant()" class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/20 hover:bg-red-500/35 text-red-400 hover:text-red-200 border border-red-500/50 text-[10px] font-mono cursor-pointer transition-all active:scale-95 shadow-sm" title="Turn Off Voice Assistant">
+                    <span>Mute</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="agent-activity-bar" class="hidden flex items-center justify-between px-3 py-1.5 mb-2 rounded-lg bg-indigo-950/70 border border-indigo-500/40 text-[11px] text-indigo-200 shadow-md">
+            <div class="flex items-center gap-2 overflow-hidden mr-2">
+                <span class="animate-spin text-indigo-400 flex-shrink-0">⚡</span>
+                <span id="agent-activity-text" class="font-medium truncate">Agent is working...</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                <span class="text-[9px] font-mono text-indigo-300 bg-indigo-900/50 px-1.5 py-0.5 rounded">Active</span>
+                <button id="activity-stop-btn" type="button" onclick="triggerStopGeneration()" class="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 hover:bg-red-500/35 text-red-400 hover:text-red-200 border border-red-500/50 text-[10px] font-semibold font-mono cursor-pointer transition-all active:scale-95 shadow-sm" title="Stop Generation immediately">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                    <span>Stop</span>
+                </button>
+            </div>
         </div>
 
         <div class="composer">
@@ -1473,7 +1540,15 @@
                     </div>
 
                     <div class="bar-r">
-                        <button id="send-btn" type="button" title="Send Message (Enter)" onclick="submitChat()">
+                        <button id="voice-mic-btn" type="button" class="icon-btn" title="Toggle Full-Duplex Voice Assistant (Barge-In Enabled)" onclick="toggleVoiceAssistant()" style="width:28px;height:28px;border-radius:8px">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                        </button>
+                        <button id="send-btn" type="button" title="Send Message (Enter)">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M12 19V5M5 12l7-7 7 7" />
                             </svg>
@@ -1494,13 +1569,24 @@
                 </div>
             </div>
         </div>
-        <!-- Fix 5: Footer Token & Context Meter -->
+        <!-- Split Token & Context Window Meter -->
         <div class="meter">
-            <span><span id="meter-token-count">0</span> tok</span>
-            <span>·</span>
-            <span id="meter-context-pct">0%</span>
-            <span>·</span>
-            <span id="meter-cost-val">$0.0000</span>
+            <div class="flex items-center gap-2">
+                <span class="flex items-center gap-1" title="Input Tokens (Prompts, codebase context, tools sent to model)">
+                    <span class="text-cyan-400 font-semibold">📥 In:</span>
+                    <span id="meter-input-tokens" class="font-bold text-white">0</span>
+                </span>
+                <span class="text-slate-600">|</span>
+                <span class="flex items-center gap-1" title="Output Tokens (Model generated code, reasoning, responses)">
+                    <span class="text-purple-400 font-semibold">📤 Out:</span>
+                    <span id="meter-output-tokens" class="font-bold text-white">0</span>
+                </span>
+            </div>
+            <div class="flex items-center gap-1.5" title="Active Model Context Window fullness (Used / Max Limit)">
+                <span class="text-slate-400 text-[10px]">Context:</span>
+                <span class="font-bold font-mono text-cyan-300" id="meter-context-usage">0 / 40.0k</span>
+                <span id="meter-context-pct" class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-cyan-950/80 text-cyan-400 border border-cyan-500/30">0%</span>
+            </div>
         </div>
     </footer>
 
@@ -1618,7 +1704,7 @@
                 <div class="space-y-1.5">
                     <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Max
                         Context</label>
-                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 7000"
+                    <input type="number" id="setting-maxContextTokens" min="1000" max="2000000" placeholder="e.g. 40000"
                         class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
                 </div>
                 <div class="space-y-1.5">
@@ -1652,6 +1738,58 @@
                     <span class="text-slate-300 font-mono tracking-wide text-[10px] uppercase">Enable AI Hover
                         Explanations</span>
                 </label>
+            </div>
+
+            <!-- Full-Duplex Voice Assistant Settings -->
+            <div class="p-3 bg-black/30 border border-emerald-500/30 rounded-xl space-y-2.5 mt-4">
+                <div class="flex items-center justify-between border-b border-emerald-500/20 pb-1.5">
+                    <h3 class="text-emerald-300 text-[10px] uppercase font-bold tracking-widest flex items-center gap-1.5 font-mono">
+                        <span>🎙️</span> Full-Duplex Voice Assistant
+                    </h3>
+                    <span class="text-[9px] font-mono text-emerald-300 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded">Barge-In Ready</span>
+                </div>
+                <p class="text-[10px] text-slate-400 leading-relaxed font-sans">
+                    Real-time voice capture with hardware echo cancellation, dynamic RMS gating (0.015 / 0.075), and instant interruption.
+                </p>
+                <div class="space-y-2">
+                    <label class="flex items-center gap-2 cursor-pointer hover:text-emerald-400 transition-colors">
+                        <input type="checkbox" id="setting-voice-autoSpeak" checked class="accent-emerald-400 w-3.5 h-3.5 cursor-pointer">
+                        <span class="text-slate-300 font-mono tracking-wide text-[10px] uppercase">Auto-Speak AI Responses (TTS)</span>
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="space-y-1">
+                            <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">STT Engine</label>
+                            <select id="setting-voice-sttProvider" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                                <option value="browser">Browser Web Speech</option>
+                                <option value="whisper">Local Whisper Server</option>
+                                <option value="groq">Groq Whisper API</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">TTS Engine</label>
+                            <select id="setting-voice-ttsProvider" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                                <option value="browser">Browser Speech Synthesis</option>
+                                <option value="kokoro">Kokoro-82M / FastAPI</option>
+                                <option value="edge">Edge TTS</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Whisper Endpoint & API Key</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" id="setting-voice-whisperEndpoint" placeholder="http://127.0.0.1:8000/v1/audio/transcriptions" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                            <input type="password" id="setting-voice-whisperApiKey" placeholder="API Key (Groq / OpenAI)" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                        </div>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">TTS Endpoint (Kokoro / FastAPI)</label>
+                        <input type="text" id="setting-voice-ttsEndpoint" placeholder="http://127.0.0.1:8002/v1/audio/speech" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">WebSocket Gateway URL (Optional Section 5 Server)</label>
+                        <input type="text" id="setting-voice-wsGateway" placeholder="ws://localhost:8080" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                    </div>
+                </div>
             </div>
 
             <!-- MCP Hub -->
@@ -1720,6 +1858,48 @@
         <div id="history-list" class="p-2 space-y-2"></div>
     </div>
 
+    <!-- Rollback Confirmation Modal Overlay -->
+    <div id="rollback-modal" class="hidden absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 animate-fade-in" style="display: none; pointer-events: none;">
+        <div class="bg-[#0e1320] border border-pink-500/40 rounded-2xl p-4 w-full max-w-sm shadow-2xl space-y-3 flex flex-col max-h-[85vh] text-slate-200">
+            <div class="flex items-center justify-between border-b border-white/10 pb-2.5">
+                <div class="flex items-center gap-2">
+                    <span class="text-pink-400 text-sm">⏪</span>
+                    <h3 class="text-xs font-bold text-white tracking-wide uppercase font-mono">Confirm Checkpoint Rollback</h3>
+                </div>
+                <button id="close-rollback-btn" type="button" class="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 transition cursor-pointer">✕</button>
+            </div>
+
+            <div class="space-y-1">
+                <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Rewind To Prompt:</span>
+                <div id="rollback-prompt-snippet" class="p-2 bg-black/50 border border-white/10 rounded-lg text-slate-300 font-mono text-[11px] max-h-16 overflow-y-auto leading-relaxed select-text"></div>
+            </div>
+
+            <div class="space-y-1.5 flex-1 overflow-hidden flex flex-col min-h-0">
+                <div class="flex items-center justify-between text-[11px]">
+                    <span class="text-slate-400 font-semibold">Codebase Changes:</span>
+                    <span id="rollback-file-count" class="text-pink-400 font-mono text-[10px] font-bold">0 files</span>
+                </div>
+                <div id="rollback-files-list" class="flex-1 overflow-y-auto space-y-1.5 p-1.5 bg-black/40 border border-white/5 rounded-xl text-xs max-h-[180px]">
+                    <!-- Dynamically populated file diff list -->
+                </div>
+            </div>
+
+            <div class="p-2 bg-pink-950/30 border border-pink-500/30 rounded-xl text-[10px] text-pink-300 leading-snug flex items-start gap-2">
+                <span class="text-xs">⚠️</span>
+                <span>Yeh action in files ko unke purane state me revert kar dega, nayi files delete karega, aur chat history ko is checkpoint tak rewind karega.</span>
+            </div>
+
+            <div class="flex items-center justify-end gap-2 pt-1 border-t border-white/10">
+                <button id="cancel-rollback-btn" type="button" class="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-medium transition cursor-pointer">
+                    Cancel
+                </button>
+                <button id="confirm-rollback-btn" type="button" class="px-3.5 py-1.5 bg-pink-600 hover:bg-pink-500 text-white rounded-lg text-xs font-bold transition shadow-md shadow-pink-600/30 cursor-pointer flex items-center gap-1.5">
+                    <span>⏪ Yes, Rollback</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripting -->
     <script>
         const vscode = acquireVsCodeApi();
@@ -1748,21 +1928,456 @@
         let modeSelectDropdown = null;
         let isGenerating = false;
 
+        // ═══════════════════════════════════════════════════════════════════════════════
+        // 🎙️ FULL-DUPLEX REAL-TIME VOICE ASSISTANT ENGINE (EDGE DSP & ECHO SHIELD)
+        // ═══════════════════════════════════════════════════════════════════════════════
+        let isVoiceActive = false;
+        let isAiSpeaking = false;
+        let speechFrameCount = 0;
+        let silenceTimer = null;
+        let voiceAudioStream = null;
+        let voiceAudioContext = null;
+        let voiceProcessor = null;
+        let voiceSource = null;
+        let voiceSpeechRecognition = null;
+        let liveInterimTranscript = '';
+        let accumulatedPcmBuffers = [];
+        let currentVoiceAudioPlayer = null;
+        let voiceWebSocket = null;
+        let voiceConfig = {
+            enabled: false,
+            autoSpeak: true,
+            sttProvider: 'browser',
+            whisperEndpoint: 'http://127.0.0.1:8000/v1/audio/transcriptions',
+            whisperApiKey: '',
+            ttsProvider: 'browser',
+            ttsEndpoint: 'http://127.0.0.1:8002/v1/audio/speech',
+            wsGatewayUrl: ''
+        };
+
+        function updateVoiceHud(statusText, isUserSpeaking = false) {
+            const hud = document.getElementById('voice-hud');
+            const statusEl = document.getElementById('voice-hud-status');
+            const dotEl = document.getElementById('voice-hud-dot');
+            const micBtn = document.getElementById('voice-mic-btn');
+            if (!hud || !isVoiceActive) return;
+
+            if (statusEl) statusEl.textContent = statusText;
+            if (dotEl) {
+                if (isAiSpeaking) {
+                    dotEl.className = 'w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse flex-shrink-0';
+                } else if (isUserSpeaking) {
+                    dotEl.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping flex-shrink-0';
+                } else {
+                    dotEl.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0';
+                }
+            }
+            if (micBtn) {
+                if (isAiSpeaking) {
+                    micBtn.classList.remove('active');
+                    micBtn.classList.add('speaking');
+                } else {
+                    micBtn.classList.remove('speaking');
+                    micBtn.classList.add('active');
+                }
+            }
+        }
+
+        function updateVoiceVuMeter(rms) {
+            const bars = document.querySelectorAll('#voice-vu-meter .vu-bar');
+            if (!bars || bars.length === 0) return;
+            const normalized = Math.min(1, rms * 15);
+            bars.forEach((bar, idx) => {
+                const height = Math.max(2, Math.round(normalized * 12 * ((idx + 1) / 4)));
+                bar.style.height = height + 'px';
+                bar.style.opacity = rms > 0.015 ? '1' : '0.4';
+            });
+        }
+
+        async function startVoiceAssistant() {
+            try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    appendSystemMessage('Microphone access is not supported in this environment.');
+                    return;
+                }
+
+                // 1. Initialize Microphone with Hardware DSP Flags (Blueprint Section 4)
+                voiceAudioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        googEchoCancellation: true,
+                        googAutoGainControl: true,
+                        googNoiseSuppression: true,
+                        googHighpassFilter: true,
+                        googTypingNoiseDetection: true
+                    },
+                    video: false
+                });
+
+                // 2. Setup AudioContext & ScriptProcessor (16kHz PCM streaming)
+                const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+                voiceAudioContext = new AudioCtxClass({ sampleRate: 16000 });
+                voiceSource = voiceAudioContext.createMediaStreamSource(voiceAudioStream);
+                voiceProcessor = voiceAudioContext.createScriptProcessor(4096, 1, 1); // ~256ms chunk buffer
+
+                isVoiceActive = true;
+                speechFrameCount = 0;
+                silenceTimer = null;
+                accumulatedPcmBuffers = [];
+                liveInterimTranscript = '';
+
+                // UI Elements
+                const hud = document.getElementById('voice-hud');
+                if (hud) {
+                    hud.classList.remove('hidden');
+                    hud.style.display = 'flex';
+                }
+                const micBtn = document.getElementById('voice-mic-btn');
+                if (micBtn) {
+                    micBtn.classList.add('active');
+                    micBtn.title = "Voice Assistant Active (Click to Mute)";
+                }
+                updateVoiceHud('🎙️ Voice Mode: Listening...');
+
+                // Optional WebSocket connection to Section 5 gateway
+                if (voiceConfig.wsGatewayUrl && voiceConfig.wsGatewayUrl.startsWith('ws')) {
+                    try {
+                        voiceWebSocket = new WebSocket(voiceConfig.wsGatewayUrl);
+                        voiceWebSocket.onmessage = (evt) => {
+                            try {
+                                const msg = JSON.parse(evt.data);
+                                if (msg.event === 'clear_buffer') {
+                                    if (currentVoiceAudioPlayer) {
+                                        currentVoiceAudioPlayer.pause();
+                                        currentVoiceAudioPlayer = null;
+                                    }
+                                    if (window.speechSynthesis) window.speechSynthesis.cancel();
+                                    isAiSpeaking = false;
+                                } else if (msg.event === 'transcript' && msg.text) {
+                                    chatInput.value = msg.text;
+                                    submitChat();
+                                }
+                            } catch (e) {}
+                        };
+                    } catch (e) {
+                        console.warn('Voice WebSocket gateway connection failed:', e);
+                    }
+                }
+
+                // Web Speech API for instant client-side speech recognition
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (SpeechRecognition && voiceConfig.sttProvider === 'browser') {
+                    try {
+                        voiceSpeechRecognition = new SpeechRecognition();
+                        voiceSpeechRecognition.continuous = true;
+                        voiceSpeechRecognition.interimResults = true;
+                        voiceSpeechRecognition.lang = 'en-US';
+
+                        voiceSpeechRecognition.onresult = (event) => {
+                            if (isAiSpeaking) return; // Discard recognition during bot speech
+                            let interim = '';
+                            let final = '';
+                            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                                if (event.results[i].isFinal) {
+                                    final += event.results[i][0].transcript;
+                                } else {
+                                    interim += event.results[i][0].transcript;
+                                }
+                            }
+                            const spoken = (final || interim).trim();
+                            if (spoken) {
+                                liveInterimTranscript = spoken;
+                                updateVoiceHud('🗣️ ' + spoken, true);
+                            }
+                        };
+
+                        voiceSpeechRecognition.onerror = (err) => {
+                            console.warn('SpeechRecognition error:', err);
+                        };
+
+                        voiceSpeechRecognition.onend = () => {
+                            if (isVoiceActive && voiceSpeechRecognition) {
+                                try { voiceSpeechRecognition.start(); } catch (e) {}
+                            }
+                        };
+
+                        voiceSpeechRecognition.start();
+                    } catch (e) {
+                        console.warn('Web Speech Recognition initialization error:', e);
+                    }
+                }
+
+                // 3. Audio Processing Loop (Real-Time RMS, Dynamic Gating, Barge-In)
+                voiceProcessor.onaudioprocess = (e) => {
+                    if (!isVoiceActive) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+
+                    // Calculate RMS Volume
+                    let sumSquares = 0;
+                    for (let i = 0; i < inputData.length; i++) {
+                        sumSquares += inputData[i] * inputData[i];
+                    }
+                    const rms = Math.sqrt(sumSquares / inputData.length);
+                    updateVoiceVuMeter(rms);
+
+                    // ADAPTIVE ENERGY THRESHOLD (Blueprint Section 4):
+                    // When AI is speaking over speakers: elevate threshold to 0.075 to reject acoustic bleed.
+                    // When AI is silent: sensitive threshold 0.015 to catch natural user voice.
+                    const dynamicThreshold = isAiSpeaking ? 0.075 : 0.015;
+
+                    // Convert Float32 to 16-bit PCM Buffer
+                    const pcmBuffer = new ArrayBuffer(inputData.length * 2);
+                    const view = new DataView(pcmBuffer);
+                    for (let i = 0; i < inputData.length; i++) {
+                        let s = Math.max(-1, Math.min(1, inputData[i]));
+                        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+                    }
+                    const pcmUint8 = new Uint8Array(pcmBuffer);
+
+                    if (rms > dynamicThreshold) {
+                        speechFrameCount++;
+
+                        // INSTANT CLIENT BARGE-IN:
+                        // If AI is playing and user speaks for >= 2 consecutive frames (~500ms):
+                        if (isAiSpeaking && speechFrameCount >= 2) {
+                            console.log('[Barge-In] User interrupted bot. Stopping local audio.');
+                            if (window.speechSynthesis) window.speechSynthesis.cancel();
+                            if (currentVoiceAudioPlayer) {
+                                currentVoiceAudioPlayer.pause();
+                                currentVoiceAudioPlayer = null;
+                            }
+                            isAiSpeaking = false;
+                            triggerStopGeneration();
+                            vscode.postMessage({ command: 'voiceInterrupt' });
+                            if (voiceWebSocket && voiceWebSocket.readyState === WebSocket.OPEN) {
+                                voiceWebSocket.send(JSON.stringify({ event: "interrupt" }));
+                            }
+                            updateVoiceHud('⚡ Interrupted! Listening...', true);
+                        } else if (!isAiSpeaking) {
+                            updateVoiceHud('🗣️ User Speaking...', true);
+                        }
+
+                        silenceTimer = null;
+                        accumulatedPcmBuffers.push(pcmUint8);
+
+                        if (voiceWebSocket && voiceWebSocket.readyState === WebSocket.OPEN) {
+                            const b64Data = btoa(String.fromCharCode(...pcmUint8));
+                            voiceWebSocket.send(JSON.stringify({ event: "media", is_speech: true, payload: b64Data }));
+                        }
+                    } else {
+                        // Trailing silence detection (850ms silence = user finished speaking)
+                        if (!silenceTimer) {
+                            if (speechFrameCount >= 2) {
+                                silenceTimer = Date.now();
+                            }
+                        } else if (Date.now() - silenceTimer > 850) {
+                            if (speechFrameCount >= 2) {
+                                handleUserSpeechEnded();
+                            }
+                            speechFrameCount = 0;
+                            silenceTimer = null;
+                        }
+
+                        if (voiceWebSocket && voiceWebSocket.readyState === WebSocket.OPEN) {
+                            const b64Data = btoa(String.fromCharCode(...pcmUint8));
+                            voiceWebSocket.send(JSON.stringify({ event: "media", is_speech: false, payload: b64Data }));
+                        }
+                    }
+                };
+
+                voiceSource.connect(voiceProcessor);
+                voiceProcessor.connect(voiceAudioContext.destination);
+
+                appendSystemMessage('🎙️ Full-Duplex Voice Assistant armed (Echo Shield & Barge-In Active).');
+            } catch (err) {
+                console.error('Failed to start voice assistant:', err);
+                isVoiceActive = false;
+                appendSystemMessage('Microphone activation failed: ' + (err.message || err));
+            }
+        }
+
+        function stopVoiceAssistant() {
+            isVoiceActive = false;
+            isAiSpeaking = false;
+
+            if (voiceAudioStream) {
+                voiceAudioStream.getTracks().forEach(t => t.stop());
+                voiceAudioStream = null;
+            }
+            if (voiceProcessor) {
+                try { voiceProcessor.disconnect(); } catch (e) {}
+                voiceProcessor = null;
+            }
+            if (voiceSource) {
+                try { voiceSource.disconnect(); } catch (e) {}
+                voiceSource = null;
+            }
+            if (voiceAudioContext) {
+                try { voiceAudioContext.close(); } catch (e) {}
+                voiceAudioContext = null;
+            }
+            if (voiceSpeechRecognition) {
+                try { voiceSpeechRecognition.stop(); } catch (e) {}
+                voiceSpeechRecognition = null;
+            }
+            if (voiceWebSocket) {
+                try { voiceWebSocket.close(); } catch (e) {}
+                voiceWebSocket = null;
+            }
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+            if (currentVoiceAudioPlayer) {
+                currentVoiceAudioPlayer.pause();
+                currentVoiceAudioPlayer = null;
+            }
+
+            const hud = document.getElementById('voice-hud');
+            if (hud) {
+                hud.classList.add('hidden');
+                hud.style.display = 'none';
+            }
+            const micBtn = document.getElementById('voice-mic-btn');
+            if (micBtn) {
+                micBtn.classList.remove('active', 'speaking');
+                micBtn.title = "Toggle Full-Duplex Voice Assistant";
+            }
+        }
+
+        function toggleVoiceAssistant() {
+            if (isVoiceActive) {
+                stopVoiceAssistant();
+            } else {
+                startVoiceAssistant();
+            }
+        }
+
+        function handleUserSpeechEnded() {
+            const transcript = liveInterimTranscript.trim();
+            liveInterimTranscript = '';
+
+            if (transcript) {
+                // Instantly submit recognized text
+                const inputEl = chatInput || document.getElementById('chat-input');
+                if (inputEl) inputEl.value = transcript;
+                submitChat();
+                updateVoiceHud('⚡ Processing query...');
+                accumulatedPcmBuffers = [];
+            } else if (accumulatedPcmBuffers.length > 0) {
+                // Package PCM buffers into WAV and send to backend Whisper STT
+                let totalLen = 0;
+                accumulatedPcmBuffers.forEach(b => totalLen += b.length);
+                const combined = new Uint8Array(totalLen);
+                let offset = 0;
+                accumulatedPcmBuffers.forEach(b => {
+                    combined.set(b, offset);
+                    offset += b.length;
+                });
+                accumulatedPcmBuffers = [];
+
+                let binaryStr = '';
+                for (let i = 0; i < combined.length; i++) {
+                    binaryStr += String.fromCharCode(combined[i]);
+                }
+                const b64Audio = btoa(binaryStr);
+                updateVoiceHud('Transcribing audio via Whisper...');
+                vscode.postMessage({
+                    command: 'voiceAudioTranscribe',
+                    audio: b64Audio,
+                    autoSubmit: true
+                });
+            }
+
+            if (voiceWebSocket && voiceWebSocket.readyState === WebSocket.OPEN) {
+                voiceWebSocket.send(JSON.stringify({ event: "stop" }));
+            }
+        }
+
+        function speakAiResponse(rawText) {
+            if (!rawText || !isVoiceActive) return;
+
+            // Clean spoken text: filter code blocks so bot doesn't read brackets and semicolons
+            const cleanText = rawText
+                .replace(/```[\s\S]*?```/g, ' Code changes applied to workspace files. ')
+                .replace(/`[^`]*`/g, '')
+                .replace(/#{1,6}\s+/g, '')
+                .replace(/\*\*([^*]+)\*\*/g, '$1')
+                .replace(/\*([^*]+)\*/g, '$1')
+                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+                .replace(/[-*•]\s+/g, '')
+                .trim();
+
+            if (!cleanText || cleanText.length < 2) return;
+
+            // If Kokoro/FastAPI TTS configured, request from backend
+            if (voiceConfig.ttsProvider === 'kokoro' || voiceConfig.ttsProvider === 'edge') {
+                isAiSpeaking = true;
+                updateVoiceHud('🤖 AI Speaking (Barge-In Armed)...');
+                vscode.postMessage({
+                    command: 'voiceTTS',
+                    text: cleanText.substring(0, 1000)
+                });
+                return;
+            }
+
+            // Built-in Web Speech Synthesis fallback (0 latency, 100% offline)
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(cleanText);
+                utterance.rate = 1.05;
+                utterance.pitch = 1.0;
+
+                const voices = window.speechSynthesis.getVoices();
+                const naturalVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha')));
+                if (naturalVoice) utterance.voice = naturalVoice;
+
+                utterance.onstart = () => {
+                    isAiSpeaking = true;
+                    updateVoiceHud('🤖 AI Speaking (Barge-In Armed)...');
+                };
+
+                utterance.onend = () => {
+                    isAiSpeaking = false;
+                    if (isVoiceActive) updateVoiceHud('🎙️ Voice Mode: Listening...');
+                };
+
+                utterance.onerror = () => {
+                    isAiSpeaking = false;
+                    if (isVoiceActive) updateVoiceHud('🎙️ Voice Mode: Listening...');
+                };
+
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+
         function setGenerating(generating) {
             isGenerating = !!generating;
             const actBar = document.getElementById('agent-activity-bar');
             if (actBar) {
-                if (isGenerating) actBar.classList.remove('hidden');
-                else actBar.classList.add('hidden');
+                if (isGenerating) {
+                    actBar.classList.remove('hidden');
+                    actBar.style.display = 'flex';
+                } else {
+                    actBar.classList.add('hidden');
+                    actBar.style.display = 'none';
+                }
             }
             const btn = sendBtn || document.getElementById('send-btn');
             if (btn) {
                 if (isGenerating) {
                     btn.title = "Stop Generation";
+                    btn.classList.add('is-stop');
                     btn.classList.add('generating');
                     btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
                 } else {
                     btn.title = "Send Message (Enter)";
+                    btn.classList.remove('is-stop');
                     btn.classList.remove('generating');
                     btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
                 }
@@ -2015,34 +2630,68 @@
         }
 
         // Token & Context Meter Live Calculations
-        let totalSessionTokens = 0;
-        let configuredMaxContextTokens = 8192;
-        function updateTokenMeter(totalTokens, promptTokens = 0, completionTokens = 0) {
-            const countEl = document.getElementById('meter-token-count');
+        let sessionInputTokens = 0;
+        let sessionOutputTokens = 0;
+        let currentTurnContextTokens = 0;
+        let configuredMaxContextTokens = 40000;
+
+        function formatTokenCount(num) {
+            const n = Math.round(Number(num) || 0);
+            if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+            return String(n);
+        }
+
+        function renderTokenMeterUI() {
+            const inEl = document.getElementById('meter-input-tokens');
+            const outEl = document.getElementById('meter-output-tokens');
+            const ctxUsageEl = document.getElementById('meter-context-usage');
             const pctEl = document.getElementById('meter-context-pct');
-            const costEl = document.getElementById('meter-cost-val');
 
-            const tokens = Number(totalTokens) || ((Number(promptTokens) || 0) + (Number(completionTokens) || 0)) || 0;
-            if (tokens > 0) totalSessionTokens = Math.max(totalSessionTokens, tokens);
-            const displayTokens = Math.max(totalSessionTokens, tokens);
+            if (inEl) inEl.innerText = formatTokenCount(sessionInputTokens);
+            if (outEl) outEl.innerText = formatTokenCount(sessionOutputTokens);
 
-            if (countEl && pctEl && costEl) {
-                countEl.innerText = displayTokens >= 1000 ? (displayTokens / 1000).toFixed(1) + 'k' : String(displayTokens);
-                const maxCtx = configuredMaxContextTokens || 8192;
-                const pct = Math.min(100, Math.round((displayTokens / maxCtx) * 100));
-                pctEl.innerText = `${pct}%`;
-                const cost = (displayTokens / 1000000) * 0.15; // ~$0.15 / 1M tokens
-                costEl.innerText = `$${cost.toFixed(4)}`;
+            const maxCtx = configuredMaxContextTokens || 40000;
+            const activeCtx = currentTurnContextTokens || 0;
+            const pct = Math.min(100, Math.round((activeCtx / maxCtx) * 100));
+
+            if (ctxUsageEl) {
+                ctxUsageEl.innerText = `${formatTokenCount(activeCtx)} / ${formatTokenCount(maxCtx)}`;
             }
+
+            if (pctEl) {
+                pctEl.innerText = `${pct}%`;
+                if (pct >= 85) {
+                    pctEl.className = 'px-1.5 py-0.2 rounded text-[10px] font-bold bg-pink-950/80 text-pink-400 border border-pink-500/40 animate-pulse';
+                } else if (pct >= 60) {
+                    pctEl.className = 'px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-500/40';
+                } else {
+                    pctEl.className = 'px-1.5 py-0.2 rounded text-[10px] font-bold bg-cyan-950/80 text-cyan-400 border border-cyan-500/30';
+                }
+            }
+        }
+
+        function updateTokenMeter(totalTokens, promptTokens = 0, completionTokens = 0) {
+            const pTok = Number(promptTokens) || 0;
+            const cTok = Number(completionTokens) || 0;
+            const tTok = Number(totalTokens) || (pTok + cTok) || 0;
+
+            if (pTok > 0) sessionInputTokens += pTok;
+            if (cTok > 0) sessionOutputTokens += cTok;
+            if (tTok > 0) currentTurnContextTokens = tTok;
+            else if (pTok + cTok > 0) currentTurnContextTokens = pTok + cTok;
+
+            renderTokenMeterUI();
         }
 
         function populateSettings(config) {
             if (!config) return;
             if (config.contextLimits?.maxContextTokens) {
-                configuredMaxContextTokens = parseInt(config.contextLimits.maxContextTokens, 10) || 8192;
+                configuredMaxContextTokens = parseInt(config.contextLimits.maxContextTokens, 10) || 40000;
             } else if (config.maxContextTokens) {
-                configuredMaxContextTokens = parseInt(config.maxContextTokens, 10) || 8192;
+                configuredMaxContextTokens = parseInt(config.maxContextTokens, 10) || 40000;
             }
+            renderTokenMeterUI();
 
             if (config.mainBrain) {
                 const mp = document.getElementById('main-provider');
@@ -2096,6 +2745,24 @@
             const hoverInput = document.getElementById('setting-enableHover');
             if (hoverInput) hoverInput.checked = config.enableHoverExplanations === true;
 
+            if (config.voice) {
+                voiceConfig = Object.assign(voiceConfig, config.voice);
+                const autoSpeakEl = document.getElementById('setting-voice-autoSpeak');
+                if (autoSpeakEl) autoSpeakEl.checked = config.voice.autoSpeak !== false;
+                const sttEl = document.getElementById('setting-voice-sttProvider');
+                if (sttEl) sttEl.value = config.voice.sttProvider || 'browser';
+                const ttsEl = document.getElementById('setting-voice-ttsProvider');
+                if (ttsEl) ttsEl.value = config.voice.ttsProvider || 'browser';
+                const whispEpEl = document.getElementById('setting-voice-whisperEndpoint');
+                if (whispEpEl) whispEpEl.value = config.voice.whisperEndpoint || '';
+                const whispKeyEl = document.getElementById('setting-voice-whisperApiKey');
+                if (whispKeyEl) whispKeyEl.value = config.voice.whisperApiKey || '';
+                const ttsEpEl = document.getElementById('setting-voice-ttsEndpoint');
+                if (ttsEpEl) ttsEpEl.value = config.voice.ttsEndpoint || '';
+                const wsGatewayEl = document.getElementById('setting-voice-wsGateway');
+                if (wsGatewayEl) wsGatewayEl.value = config.voice.wsGatewayUrl || '';
+            }
+
             const currentModel = document.getElementById('main-model')?.value || config.mainBrain?.model || 'gemma-4-31b-it';
             const modelBadge = document.getElementById('active-model-badge');
             if (modelBadge) modelBadge.innerText = currentModel;
@@ -2134,13 +2801,13 @@
             }
 
             activeThinkingAccordion = null;
-            getOrCreateActiveThinking('🧠 Thinking & Planning...');
             setGenerating(true);
 
-            // Estimate and update prompt tokens immediately
-            const promptEstimatedTokens = Math.max(1, Math.round(((text ? text.length : 0) + (imagesToSend ? JSON.stringify(imagesToSend).length : 0)) / 4));
-            totalSessionTokens += promptEstimatedTokens;
-            updateTokenMeter(totalSessionTokens, promptEstimatedTokens, 0);
+            // Estimate and update prompt tokens for active turn (1024 vision tokens per image instead of raw base64 string length)
+            const imgTokens = (imagesToSend && imagesToSend.length > 0) ? (imagesToSend.length * 1024) : 0;
+            const promptEstimatedTokens = Math.max(1, Math.round((text ? text.length : 0) / 4) + imgTokens);
+            currentTurnContextTokens = promptEstimatedTokens;
+            renderTokenMeterUI();
 
             const mode = document.getElementById('mode-select')?.value || 'chat';
             const isArchitectMode = (mode === 'architect') || !!options.architectMode;
@@ -2160,8 +2827,82 @@
             renderImagePreview();
         }
 
+        let pendingRollbackTimestamp = null;
+
+        function showRollbackModal(data) {
+            const modal = document.getElementById('rollback-modal');
+            if (!modal) return;
+            pendingRollbackTimestamp = data.timestamp;
+
+            const promptSnippetEl = document.getElementById('rollback-prompt-snippet');
+            if (promptSnippetEl) {
+                promptSnippetEl.textContent = data.promptSnippet || '(Prompt text)';
+            }
+
+            const countEl = document.getElementById('rollback-file-count');
+            const listEl = document.getElementById('rollback-files-list');
+            const files = data.files || [];
+
+            if (countEl) {
+                countEl.textContent = files.length === 1 ? '1 file affected' : `${files.length} files affected`;
+            }
+
+            if (listEl) {
+                listEl.innerHTML = '';
+                if (files.length === 0) {
+                    listEl.innerHTML = `
+                        <div class="text-center py-4 text-slate-400 text-[11px] italic">
+                            Is turn me koi bhi file modify ya create nahi hui thi.<br/>Sirf chat history is checkpoint tak rewind hogi.
+                        </div>
+                    `;
+                } else {
+                    files.forEach(f => {
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = 'p-2 rounded-lg border text-xs flex flex-col gap-1 ' + 
+                            (f.type === 'delete_new' ? 'bg-red-950/40 border-red-500/30' : 'bg-slate-900/80 border-indigo-500/30');
+
+                        const icon = f.type === 'delete_new' ? '🗑️' : '📄';
+                        const actionBadge = f.type === 'delete_new'
+                            ? '<span class="text-[9px] bg-red-900/50 text-red-300 border border-red-500/30 px-1.5 py-0.2 rounded font-mono font-semibold">DELETE (New File)</span>'
+                            : '<span class="text-[9px] bg-indigo-900/50 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.2 rounded font-mono font-semibold">REVERT</span>';
+
+                        itemDiv.innerHTML = `
+                            <div class="flex items-center justify-between gap-2">
+                                <div class="flex items-center gap-1.5 overflow-hidden">
+                                    <span>${icon}</span>
+                                    <span class="font-mono text-white text-[11px] font-semibold truncate" title="${escapeHtml(f.filepath)}">${escapeHtml(f.relativePath)}</span>
+                                </div>
+                                ${actionBadge}
+                            </div>
+                            <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-0.5 border-t border-white/5">
+                                <span>Lines: ${f.currentLines} → ${f.backupLines}</span>
+                                <span class="${f.type === 'delete_new' ? 'text-red-400' : 'text-cyan-400'} font-semibold">${escapeHtml(f.lineDelta)}</span>
+                            </div>
+                        `;
+                        listEl.appendChild(itemDiv);
+                    });
+                }
+            }
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            modal.style.display = 'flex';
+            modal.style.pointerEvents = 'auto';
+        }
+
+        function hideRollbackModal() {
+            const modal = document.getElementById('rollback-modal');
+            if (!modal) return;
+            pendingRollbackTimestamp = null;
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            modal.style.display = 'none';
+            modal.style.pointerEvents = 'none';
+        }
+
         function rollbackChat(timestamp) {
-            vscode.postMessage({ command: 'rollbackChat', timestamp });
+            if (!timestamp) return;
+            vscode.postMessage({ command: 'requestRollbackPreview', timestamp });
         }
 
         function deleteChat(timestamp) {
@@ -2561,6 +3302,7 @@
         let currentStreamBubbleDiv = null;
         let currentStreamTextDiv = null;
         let currentStreamText = '';
+        let currentTurnSearchSources = [];
 
         function handleStreamChunk(text, done, usage) {
             removeThinking();
@@ -2597,13 +3339,12 @@
 
             // Live token counting during generation
             if (usage && (usage.totalTokens || usage.completionTokens)) {
-                const uTokens = Number(usage.totalTokens) || ((Number(usage.promptTokens) || 0) + (Number(usage.completionTokens) || 0));
-                totalSessionTokens = Math.max(totalSessionTokens, uTokens);
-                updateTokenMeter(totalSessionTokens, usage.promptTokens, usage.completionTokens);
+                updateTokenMeter(usage.totalTokens, usage.promptTokens, usage.completionTokens);
             } else if (text && !done) {
                 const deltaTokens = Math.max(1, Math.round(text.length / 4));
-                totalSessionTokens += deltaTokens;
-                updateTokenMeter(totalSessionTokens);
+                currentTurnContextTokens += deltaTokens;
+                sessionOutputTokens += deltaTokens;
+                renderTokenMeterUI();
             }
 
             if (done) {
@@ -2613,6 +3354,42 @@
 
                 if (usage) {
                     updateTokenMeter(usage.totalTokens, usage.promptTokens, usage.completionTokens);
+                }
+
+                // Interactive citations tray below AI response if sources were used and not already in markdown
+                if (currentTurnSearchSources && currentTurnSearchSources.length > 0 && currentStreamBubbleDiv) {
+                    const hasMarkdownSources = /###\s*(?:🌐\s*)?(?:Sources|References)/i.test(currentStreamText);
+                    if (!hasMarkdownSources) {
+                        const sourcesFooter = document.createElement('div');
+                        sourcesFooter.className = 'mt-2 pt-2 border-t border-slate-700/60 flex flex-col gap-1.5';
+                        sourcesFooter.innerHTML = `
+                            <div class="flex items-center gap-1.5 text-[11px] font-semibold text-cyan-300">
+                                <span>🌐</span>
+                                <span>Verified Sources & Citations:</span>
+                            </div>
+                            <div class="flex flex-wrap gap-1.5">
+                                ${currentTurnSearchSources.map((s, idx) => {
+                                    const domain = escapeHtml(s.domain || 'web');
+                                    const title = escapeHtml(s.title || domain);
+                                    const link = s.url ? escapeHtml(s.url) : '';
+                                    return link ? `
+                                        <a href="${link}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-[10.5px] text-cyan-300 hover:text-white bg-slate-800/90 hover:bg-cyan-950/80 border border-slate-700 hover:border-cyan-500/60 px-2 py-0.5 rounded transition-colors group" title="${title} (${link})">
+                                            <span class="font-bold text-cyan-400 font-mono text-[9px]">[${idx + 1}]</span>
+                                            <span class="font-medium truncate max-w-[200px]">${title}</span>
+                                            <span class="text-[9px] text-slate-400 font-mono">(${domain})</span>
+                                            <span class="text-[9px] opacity-70 group-hover:opacity-100">↗</span>
+                                        </a>
+                                    ` : '';
+                                }).filter(Boolean).join('')}
+                            </div>
+                        `;
+                        currentStreamBubbleDiv.appendChild(sourcesFooter);
+                    }
+                    currentTurnSearchSources = [];
+                }
+
+                if (isVoiceActive && voiceConfig.autoSpeak !== false && currentStreamText) {
+                    speakAiResponse(currentStreamText);
                 }
 
                 currentStreamMsgDiv = null;
@@ -2803,18 +3580,24 @@
             } else if (toolName === 'search_web') {
                 const query = escapeHtml(data.query || '');
                 const sources = Array.isArray(data.sources) ? data.sources : [];
+                if (sources.length > 0) {
+                    currentTurnSearchSources.push(...sources);
+                }
                 const sourcesHtml = sources.length > 0 ? `
-                    <div class="flex flex-wrap gap-1.5 mt-2 pt-1.5 border-t border-cyan-500/20">
-                        ${sources.map(s => {
-                            const domain = escapeHtml(s.domain || s.title || (typeof s === 'string' ? s : 'web'));
+                    <div class="flex flex-wrap gap-2 mt-2 pt-2 border-t border-cyan-500/20">
+                        ${sources.map((s, idx) => {
+                            const domain = escapeHtml(s.domain || 'web');
+                            const title = escapeHtml(s.title || domain);
                             const link = s.url ? escapeHtml(s.url) : '';
                             return link ? `
-                                <a href="${link}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-[10px] text-cyan-300 hover:text-cyan-100 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 hover:border-cyan-400 px-2 py-0.5 rounded font-mono truncate max-w-[240px] transition-colors" title="${escapeHtml(s.title || domain)}">
-                                    <span>🌐</span>
-                                    <span class="truncate">${domain}</span>
+                                <a href="${link}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-[11px] text-cyan-300 hover:text-cyan-100 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/40 hover:border-cyan-400 px-2.5 py-1 rounded-md font-sans truncate max-w-[260px] transition-all shadow-sm group" title="${title} (${link})">
+                                    <span class="text-[9px] font-mono text-cyan-400 bg-cyan-900/80 px-1 py-0.2 rounded font-bold">[${idx + 1}]</span>
+                                    <span class="truncate font-medium">${title}</span>
+                                    <span class="text-[9px] text-cyan-400/70 font-mono">(${domain})</span>
+                                    <span class="text-[10px] opacity-70 group-hover:opacity-100">↗</span>
                                 </a>
                             ` : `
-                                <span class="inline-flex items-center gap-1 text-[10px] text-cyan-300 bg-cyan-950/50 border border-cyan-500/40 px-2 py-0.5 rounded font-mono truncate max-w-[240px]">
+                                <span class="inline-flex items-center gap-1 text-[11px] text-cyan-300 bg-cyan-950/60 border border-cyan-500/40 px-2 py-0.5 rounded font-mono truncate max-w-[240px]">
                                     <span>🌐</span>
                                     <span class="truncate">${domain}</span>
                                 </span>
@@ -2823,17 +3606,24 @@
                     </div>
                 ` : '';
 
+                const isCachedHit = !!data.isCached;
+                const statusBadge = isCachedHit
+                    ? `<span class="text-[9px] font-mono text-amber-300 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/40 font-semibold">⚡ Local Cache Hit (${sources.length} Sources)</span>`
+                    : `<span class="text-[9px] font-mono text-emerald-400 bg-emerald-950/50 px-1.5 py-0.5 rounded border border-emerald-500/40">✔ Saved to Artifacts (${sources.length})</span>`;
+
+                const headerIcon = isCachedHit ? '⚡' : '🌐';
+                const headerTitle = isCachedHit ? 'Web Research (Local Artifact Cache):' : 'Live Web Search:';
+
                 innerHtml = `
                     <div class="tool-call-card border-cyan-500/40 bg-slate-900/80 p-2.5 rounded-lg max-w-[95%] w-full shadow-sm">
                         <div class="flex items-center justify-between pb-1">
                             <span class="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
-                                <span>🌐</span>
-                                <span>Live Web Search: <strong class="text-white font-mono">"${query}"</strong></span>
+                                <span>${headerIcon}</span>
+                                <span>${headerTitle} <strong class="text-white font-mono">"${query}"</strong></span>
                             </span>
-                            <span class="text-[9px] font-mono text-emerald-400 bg-emerald-950/50 px-1.5 py-0.5 rounded border border-emerald-500/40">
-                                ✔ Sources Loaded
-                            </span>
+                            ${statusBadge}
                         </div>
+                        ${data.filePath ? `<div class="text-[9.5px] text-slate-400 font-mono mt-0.5 mb-1 truncate" title="${escapeHtml(data.filePath)}">📁 Artifact: ${escapeHtml(data.filePath)}</div>` : ''}
                         ${sourcesHtml}
                     </div>
                 `;
@@ -2985,13 +3775,16 @@
                 if (message.done) {
                     closeActiveThinking();
                     setGenerating(false);
+                } else {
+                    setGenerating(true);
                 }
                 handleStreamChunk(message.text || '', message.done, message.usage);
             }
             // Fix 1: Unified Singleton Thinking Chunk Handling
             else if (message.command === 'thinkingChunk') {
+                setGenerating(true);
                 removeThinking();
-                const thinkingBox = getOrCreateActiveThinking('🧠 Thinking & reasoning...');
+                const thinkingBox = getOrCreateActiveThinking('💭 Thinking & reasoning...');
                 const content = thinkingBox.querySelector('.thinking-content');
                 if (content && message.text) {
                     if (content.querySelector('span.italic')) {
@@ -3003,7 +3796,7 @@
                 }
                 smartScrollToBottom();
             }
-            // Unified Status Update into Single Accordion
+            // Status Update: Show directly on Agent Activity Bar above composer
             else if (message.command === 'statusUpdate') {
                 removeThinking();
                 const actBar = document.getElementById('agent-activity-bar');
@@ -3011,13 +3804,25 @@
                 if (actBar && actText && message.text) {
                     actText.textContent = message.text;
                     actBar.classList.remove('hidden');
+                    actBar.style.display = 'flex';
                 }
-                const thinkingBox = getOrCreateActiveThinking(message.text || 'Thinking...');
-                const label = thinkingBox.querySelector('.thinking-label');
-                if (label && message.text) {
-                    label.textContent = message.text;
+            }
+            else if (message.command === 'rollbackComplete') {
+                setGenerating(false);
+                closeActiveThinking('Rolled back');
+                removeThinking();
+                const actBar = document.getElementById('agent-activity-bar');
+                if (actBar) {
+                    actBar.classList.add('hidden');
+                    actBar.style.display = 'none';
                 }
-                smartScrollToBottom();
+                const btn = sendBtn || document.getElementById('send-btn');
+                if (btn) {
+                    btn.classList.remove('is-stop', 'generating');
+                    btn.title = "Send Message (Enter)";
+                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+                }
+                appendSystemMessage(message.text || '⏪ Chat rolled back to previous checkpoint.');
             }
             else if (message.command === 'terminalCommandCompleted') {
                 let card = document.getElementById('term-card-' + message.callId);
@@ -3120,18 +3925,29 @@
                         }
                     });
 
-                    let restoredTokens = 0;
+                    let restoredIn = 0;
+                    let restoredOut = 0;
+                    let lastTurnCtx = 0;
+
                     message.messages.forEach(msg => {
-                        if (msg.usage && (msg.usage.totalTokens || msg.usage.completionTokens)) {
-                            restoredTokens += Number(msg.usage.totalTokens || msg.usage.completionTokens);
+                        if (msg.usage) {
+                            const p = Number(msg.usage.promptTokens) || 0;
+                            const c = Number(msg.usage.completionTokens) || 0;
+                            restoredIn += p;
+                            restoredOut += c;
+                            if (msg.usage.totalTokens) lastTurnCtx = Number(msg.usage.totalTokens);
+                            else if (p + c > 0) lastTurnCtx = p + c;
                         } else if (msg.text) {
-                            restoredTokens += Math.max(1, Math.round(msg.text.length / 4));
+                            const est = Math.max(1, Math.round(msg.text.length / 4));
+                            if (msg.role === 'user') restoredIn += est;
+                            else restoredOut += est;
                         }
                     });
-                    if (restoredTokens > 0) {
-                        totalSessionTokens = Math.max(totalSessionTokens, restoredTokens);
-                        updateTokenMeter(totalSessionTokens);
-                    }
+
+                    sessionInputTokens = restoredIn;
+                    sessionOutputTokens = restoredOut;
+                    currentTurnContextTokens = lastTurnCtx || 0;
+                    renderTokenMeterUI();
                 }
                 smartScrollToBottom(true);
             }
@@ -3140,6 +3956,45 @@
                 if (message.usage) {
                     updateTokenMeter(message.usage.totalTokens, message.usage.promptTokens, message.usage.completionTokens);
                 }
+            }
+            else if (message.command === 'showRollbackConfirmation') {
+                showRollbackModal(message);
+            }
+            else if (message.command === 'voiceTranscript') {
+                if (message.text) {
+                    const inputEl = chatInput || document.getElementById('chat-input');
+                    if (inputEl) inputEl.value = message.text;
+                    if (message.autoSubmit) submitChat();
+                }
+            }
+            else if (message.command === 'voicePlayAudio') {
+                if (message.audio) {
+                    try {
+                        const audio = new Audio('data:audio/mp3;base64,' + message.audio);
+                        currentVoiceAudioPlayer = audio;
+                        audio.onplay = () => {
+                            isAiSpeaking = true;
+                            updateVoiceHud('🤖 AI Speaking (Barge-In Armed)...');
+                        };
+                        audio.onended = () => {
+                            isAiSpeaking = false;
+                            currentVoiceAudioPlayer = null;
+                            if (isVoiceActive) updateVoiceHud('🎙️ Voice Mode: Listening...');
+                        };
+                        audio.onerror = () => {
+                            isAiSpeaking = false;
+                            currentVoiceAudioPlayer = null;
+                            if (isVoiceActive) updateVoiceHud('🎙️ Voice Mode: Listening...');
+                        };
+                        audio.play();
+                    } catch (e) {
+                        console.error('Audio playback error:', e);
+                        isAiSpeaking = false;
+                    }
+                }
+            }
+            else if (message.command === 'voiceError') {
+                appendSystemMessage('Voice Warning: ' + message.error);
             }
             else if (message.command === 'loadSettings') {
                 populateSettings(message.config);
@@ -3417,6 +4272,21 @@
                     closeSettingsBtn.addEventListener('click', () => toggleSettingsView(false));
                 }
 
+                const closeRollbackBtn = document.getElementById('close-rollback-btn');
+                const cancelRollbackBtn = document.getElementById('cancel-rollback-btn');
+                const confirmRollbackBtn = document.getElementById('confirm-rollback-btn');
+
+                if (closeRollbackBtn) closeRollbackBtn.addEventListener('click', hideRollbackModal);
+                if (cancelRollbackBtn) cancelRollbackBtn.addEventListener('click', hideRollbackModal);
+                if (confirmRollbackBtn) {
+                    confirmRollbackBtn.addEventListener('click', () => {
+                        if (pendingRollbackTimestamp) {
+                            vscode.postMessage({ command: 'confirmRollbackChat', timestamp: pendingRollbackTimestamp });
+                            hideRollbackModal();
+                        }
+                    });
+                }
+
                 const modelPillBtn = document.getElementById('model-pill-btn');
                 const thinkingPopover = document.getElementById('thinking-popover');
                 if (modelPillBtn && thinkingPopover) {
@@ -3524,11 +4394,21 @@
                             timeoutSeconds: parseInt(document.getElementById('setting-timeout')?.value, 10) || 60,
                             systemInstructions: document.getElementById('setting-instructions')?.value?.trim() || '',
                             maxOutputTokens: parseInt(document.getElementById('setting-maxOutputTokens')?.value, 10) || 8192,
-                            maxContextTokens: parseInt(document.getElementById('setting-maxContextTokens')?.value, 10) || 7000,
+                            maxContextTokens: parseInt(document.getElementById('setting-maxContextTokens')?.value, 10) || 40000,
                             historyLength: parseInt(document.getElementById('setting-historyLength')?.value, 10) || 20,
                             maxAutonomousToolSteps: parseInt(document.getElementById('setting-maxToolSteps')?.value, 10) || 30,
                             enableInlineCompletions: !!document.getElementById('setting-enableInline')?.checked,
-                            enableHoverExplanations: !!document.getElementById('setting-enableHover')?.checked
+                            enableHoverExplanations: !!document.getElementById('setting-enableHover')?.checked,
+                            voice: {
+                                enabled: isVoiceActive,
+                                autoSpeak: document.getElementById('setting-voice-autoSpeak')?.checked !== false,
+                                sttProvider: document.getElementById('setting-voice-sttProvider')?.value || 'browser',
+                                ttsProvider: document.getElementById('setting-voice-ttsProvider')?.value || 'browser',
+                                whisperEndpoint: document.getElementById('setting-voice-whisperEndpoint')?.value?.trim() || '',
+                                whisperApiKey: document.getElementById('setting-voice-whisperApiKey')?.value?.trim() || '',
+                                ttsEndpoint: document.getElementById('setting-voice-ttsEndpoint')?.value?.trim() || '',
+                                wsGatewayUrl: document.getElementById('setting-voice-wsGateway')?.value?.trim() || ''
+                            }
                         };
                         vscode.postMessage({ command: 'saveSettings', config });
                     });
@@ -3578,6 +4458,16 @@
                     }
                 }));
                 syncModeUI();
+
+                // Universal link interceptor: open all external http/https URLs via VS Code default browser
+                document.addEventListener('click', (e) => {
+                    const target = e.target;
+                    const a = target && typeof target.closest === 'function' ? target.closest('a') : null;
+                    if (a && a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
+                        e.preventDefault();
+                        vscode.postMessage({ command: 'openExternal', url: a.href });
+                    }
+                });
 
                 // Signal ready to VS Code extension host
                 vscode.postMessage({ command: 'ready' });

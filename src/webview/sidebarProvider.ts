@@ -22,6 +22,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'ultraLightAi.sidebar';
     private _view?: vscode.WebviewView;
     private currentAbortController: AbortController | null = null;
+    private isTurnAbortedByUser: boolean = false;
     private currentTurnToolCalls: Array<{ tool: string; title: string; data: any }> = [];
     private conversationHistory: ConversationHistory;
     private taskPlanner: InMemoryTaskPlanner;
@@ -103,7 +104,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             // 5. Inject CSP <meta> right after <head>
             const cspSource = webviewView.webview.cspSource;
-            const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src ${cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src ${cspSource} https://fonts.gstatic.com; script-src ${cspSource} 'unsafe-inline';">`;
+            const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data: https:; media-src ${cspSource} data: blob:; connect-src ${cspSource} http: https: ws: wss: data: blob:; style-src ${cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src ${cspSource} https://fonts.gstatic.com; script-src ${cspSource} 'unsafe-inline';">`;
             htmlContent = htmlContent.replace(/<head>/i, `<head>\n    ${cspMeta}`);
 
             webviewView.webview.html = htmlContent;
@@ -135,6 +136,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             pendingEditResolvers: this.pendingEditResolvers,
             getAiMetaDir: (root) => this.getAiMetaDir(root),
             abortCurrentStream: () => {
+                this.isTurnAbortedByUser = true;
                 if (this.currentAbortController) {
                     this.currentAbortController.abort();
                     this.currentAbortController = null;
@@ -159,6 +161,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'stopGeneration': {
+                    this.isTurnAbortedByUser = true;
                     if (this.currentAbortController) {
                         this.currentAbortController.abort();
                         this.currentAbortController = null;
@@ -170,6 +173,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'sendChatStream': {
                     const { text, images, timestamp, thinkingBudget, architectMode } = message;
 
+                    this.isTurnAbortedByUser = false;
                     // Fresh abort controller & tool buffer for this turn
                     this.currentAbortController = new AbortController();
                     this.currentTurnToolCalls = [];
@@ -237,10 +241,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             ? workspaceRoot
             : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || this._workspaceRoot);
 
-        let terminal = vscode.window.terminals.find(t => t.name === 'Ultra Light AI');
+        let terminal = vscode.window.terminals.find(t => t.name === 'Vakra AI');
         if (!terminal) {
             terminal = vscode.window.createTerminal({
-                name: 'Ultra Light AI',
+                name: 'Vakra AI',
                 cwd: safeCwd
             });
         }
@@ -259,7 +263,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const config = getAgentConfig(workspaceRoot);
 
             const maxOutputTokens = config?.contextLimits?.maxOutputTokens || 8192;
-            const maxContextTokens = config?.contextLimits?.maxContextTokens || 7000;
+            const maxContextTokens = config?.contextLimits?.maxContextTokens || 40000;
             const maxToolSteps = config?.maxAutonomousToolSteps || 40;
 
             const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
@@ -328,7 +332,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             let finalPrompt = await this.buildPrompt(message.text, workspaceRoot);
 
-            this.conversationHistory.addMessage('user', message.text, undefined, message.timestamp);
+            const turnUserTimestamp = message.timestamp || Date.now();
+            this.conversationHistory.addMessage('user', message.text, undefined, turnUserTimestamp);
 
             const historyLimit = config?.contextLimits?.historyLength || 10;
             const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
@@ -435,8 +440,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         },
                         {
                             name: "research_web_docs",
-                            description: "Researches official online web docs, package APIs, and library guides.",
-                            parameters: { type: "object", properties: { query: { type: "string" }, urls: { type: "array", items: { type: "string" } } }, required: ["query"] }
+                            description: "Researches official online web docs, package APIs, and technical guides from top authoritative websites. Supports offset pagination to stream and read long documentation without truncation.",
+                            parameters: { 
+                                type: "object", 
+                                properties: { 
+                                    query: { type: "string", description: "Topic, library, or error to research" }, 
+                                    urls: { type: "array", items: { type: "string" }, description: "Optional specific URLs to consult (max 2 authoritative sources)" },
+                                    offset: { type: "number", description: "Character offset to read the next chunk of long documentation (default 0)" }
+                                }, 
+                                required: ["query"] 
+                            }
                         }
                     ]
                 }
@@ -450,6 +463,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             const onToolCall = async (functionCall: any) => {
                 detectedToolCalls.push(functionCall);
+
+                // Immediate live status update for the activity bar
+                let toolStatus = `⚡ Running: ${functionCall.name}...`;
+                const toolArgs = functionCall.args || functionCall.arguments || {};
+                if (functionCall.name === 'read_multiple_files') {
+                    const files = toolArgs.filepaths || [];
+                    toolStatus = `📖 Reading: ${Array.isArray(files) ? files.map((f: string) => path.basename(f)).join(', ') : files}`;
+                } else if (functionCall.name === 'write_file') {
+                    toolStatus = `✏️ Writing: ${path.basename(toolArgs.filepath || 'file')}`;
+                } else if (functionCall.name === 'edit_file') {
+                    toolStatus = `⚡ Editing: ${path.basename(toolArgs.filepath || 'file')}`;
+                } else if (functionCall.name === 'search_codebase') {
+                    toolStatus = `🔍 Searching: "${toolArgs.query || ''}"`;
+                } else if (functionCall.name === 'search_web' || functionCall.name === 'research_web_docs') {
+                    toolStatus = `🌐 Searching web: "${toolArgs.query || ''}"`;
+                } else if (functionCall.name === 'run_in_terminal') {
+                    toolStatus = `💻 Running: ${toolArgs.command || ''}`;
+                }
+                this.postMessageToWebview({
+                    command: 'statusUpdate',
+                    text: toolStatus
+                });
+
                 return await ToolDispatcher.dispatch(functionCall, {
                     workspaceRoot: workspaceRoot || '',
                     postMessage: (msg) => {
@@ -470,7 +506,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     pendingEditResolvers: this.pendingEditResolvers,
                     taskPlanner: this.taskPlanner,
                     currentTaskState: this.currentTaskState,
-                    ragEngine: this.ragEngine
+                    ragEngine: this.ragEngine,
+                    recordFileBackup: (filepath: string, oldContent: string | null) => {
+                        this.conversationHistory.addFileBackup(turnUserTimestamp, filepath, oldContent);
+                    }
                 });
             };
 
@@ -517,6 +556,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 tools,
                 onToolCall
             });
+
+            if (this.isTurnAbortedByUser) {
+                this.currentAbortController = null;
+                return;
+            }
 
             this.currentAbortController = null;
 
@@ -591,7 +635,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             );
             this.currentTurnToolCalls = [];
         } catch (error: any) {
-            if (error?.name === 'AbortError' || this.currentAbortController?.signal?.aborted || error?.message?.includes('aborted')) {
+            if (this.isTurnAbortedByUser || error?.name === 'AbortError' || this.currentAbortController?.signal?.aborted || error?.message?.includes('aborted') || error?.message?.includes('stopped')) {
                 // User aborted cleanly - suppress error banner
                 return;
             }
@@ -603,6 +647,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } finally {
             this.currentAbortController = null;
             this.currentTurnToolCalls = [];
+            this.isTurnAbortedByUser = false;
         }
     }
 

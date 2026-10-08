@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Orb - AI Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: radial-gradient(circle at center, #111827 0%, #030712 100%);
+            min-height: 100vh;
+            width: 100vw;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .orb-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #orb {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .status {
+            position: absolute;
+            top: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-size: 0.85rem;
+            text-align: center;
+            z-index: 20;
+            opacity: 0.9;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 8px 18px;
+            border-radius: 9999px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status .icon {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4a9eff;
+            box-shadow: 0 0 10px #4a9eff;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .status .icon.listening {
+            background: #00ff88;
+            box-shadow: 0 0 10px #00ff88;
+        }
+
+        .status .icon.thinking {
+            background: #ffaa00;
+            box-shadow: 0 0 10px #ffaa00;
+        }
+
+        .status .icon.speaking {
+            background: #ff4444;
+            box-shadow: 0 0 10px #ff4444;
+        }
+
+        .status .icon.idle {
+            background: #4a9eff;
+            box-shadow: 0 0 10px #4a9eff;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            z-index: 20;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.18);
+            transform: translateY(-2px);
+        }
+
+        .btn.active {
+            background: rgba(74, 158, 255, 0.3);
+            border-color: rgba(74, 158, 255, 0.6);
+            box-shadow: 0 0 12px rgba(74, 158, 255, 0.4);
+        }
+
+        .btn.mic-btn.listening {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: rgba(239, 68, 68, 0.6);
+            color: #ff8080;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.4;
+                transform: scale(0.85);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="orb-container">
+        <canvas id="orb"></canvas>
+    </div>
+
+    <div class="status" id="status">
+        <span class="icon idle" id="statusIcon"></span>
+        <span id="statusText">State: Idle</span>
+    </div>
+
+    <div class="controls">
+        <button class="btn active" data-state="idle">Idle</button>
+        <button class="btn" data-state="listening">Listening</button>
+        <button class="btn" data-state="thinking">Thinking</button>
+        <button class="btn" data-state="speaking">Speaking</button>
+        <button class="btn mic-btn" id="startBtn">🎙️ Mic Connect</button>
+    </div>
+
+    <script>
+        class VoiceOrb {
+            constructor(options = {}) {
+                this.canvas = options.canvas;
+                this.particleCount = options.particleCount || 12000;
+                this.states = ['idle', 'listening', 'thinking', 'speaking'];
+                this.colors = options.colors || {
+                    idle: '#4a9eff',
+                    listening: '#00ff88',
+                    thinking: '#ffaa00',
+                    speaking: '#ff4444'
+                };
+                this.state = 'idle';
+                this.audioLevel = 0;
+                this.bassLevel = 0;
+                this.highLevel = 0;
+
+                this.init();
+            }
+
+            init() {
+                this.gl = this.canvas.getContext('webgl', { alpha: true, antialias: true });
+                if (!this.gl) {
+                    alert('WebGL not supported');
+                    return;
+                }
+
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+
+                this.createParticles();
+                this.initGL();
+                this.animate();
+            }
+
+            resize() {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+                this.canvas.width = width * Math.min(window.devicePixelRatio, 2);
+                this.canvas.height = height * Math.min(window.devicePixelRatio, 2);
+                this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            createParticles() {
+                this.positions = new Float32Array(this.particleCount * 3);
+                this.basePositions = new Float32Array(this.particleCount * 3);
+                this.colorsArray = new Float32Array(this.particleCount * 3);
+                this.sizes = new Float32Array(this.particleCount);
+                this.spreadFactors = new Float32Array(this.particleCount);
+
+                const baseRadius = 0.85;
+
+                for (let i = 0; i < this.particleCount; i++) {
+                    const phi = Math.acos(1 - 2 * (i + 0.5) / this.particleCount);
+                    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+
+                    const x = baseRadius * Math.sin(phi) * Math.cos(theta);
+                    const y = baseRadius * Math.sin(phi) * Math.sin(theta);
+                    const z = baseRadius * Math.cos(phi);
+
+                    this.positions[i * 3] = x;
+                    this.positions[i * 3 + 1] = y;
+                    this.positions[i * 3 + 2] = z;
+
+                    this.basePositions[i * 3] = x;
+                    this.basePositions[i * 3 + 1] = y;
+                    this.basePositions[i * 3 + 2] = z;
+
+                    this.spreadFactors[i] = 0.3 + Math.random() * 1.5;
+                    this.sizes[i] = 3.0 + Math.random() * 3.0;
+
+                    // Initial cyan-blue tint
+                    this.colorsArray[i * 3] = 0.29;
+                    this.colorsArray[i * 3 + 1] = 0.62;
+                    this.colorsArray[i * 3 + 2] = 1.0;
+                }
+            }
+
+            hexToRgb(hex) {
+                hex = hex.replace('#', '');
+                const bigint = parseInt(hex, 16);
+                return [
+                    ((bigint >> 16) & 255) / 255,
+                    ((bigint >> 8) & 255) / 255,
+                    (bigint & 255) / 255
+                ];
+            }
+
+            initGL() {
+                const gl = this.gl;
+
+                const vsSource = `
+          attribute vec3 aPosition;
+          attribute vec3 aColor;
+          attribute float aSize;
+
+          uniform mat4 uMatrix;
+          uniform mat4 uProjection;
+          varying vec3 vColor;
+
+          void main() {
+            vec4 pos = uMatrix * vec4(aPosition, 1.0);
+            gl_Position = uProjection * pos;
+            gl_PointSize = aSize * (4.5 / -pos.z);
+            vColor = aColor;
+          }
+        `;
+
+                const fsSource = `
+          precision mediump float;
+          varying vec3 vColor;
+
+          void main() {
+            float dist = distance(gl_PointCoord, vec2(0.5));
+            if (dist > 0.5) discard;
+            float alpha = smoothstep(0.5, 0.0, dist);
+            gl_FragColor = vec4(vColor, alpha * 0.9);
+          }
+        `;
+
+                const vs = this.compileShader(gl, vsSource, gl.VERTEX_SHADER);
+                const fs = this.compileShader(gl, fsSource, gl.FRAGMENT_SHADER);
+
+                this.program = gl.createProgram();
+                gl.attachShader(this.program, vs);
+                gl.attachShader(this.program, fs);
+                gl.linkProgram(this.program);
+
+                gl.useProgram(this.program);
+
+                // Attribute Locations
+                this.aPosition = gl.getAttribLocation(this.program, 'aPosition');
+                this.aColor = gl.getAttribLocation(this.program, 'aColor');
+                this.aSize = gl.getAttribLocation(this.program, 'aSize');
+
+                // Uniform Locations
+                this.uMatrix = gl.getUniformLocation(this.program, 'uMatrix');
+                this.uProjection = gl.getUniformLocation(this.program, 'uProjection');
+
+                // Buffers created only ONCE to prevent memory leaks
+                this.posBuffer = gl.createBuffer();
+                this.colorBuffer = gl.createBuffer();
+                this.sizeBuffer = gl.createBuffer();
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, this.colorsArray, gl.DYNAMIC_DRAW);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, this.sizes, gl.STATIC_DRAW);
+
+                // WebGL Settings
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Additive neon glow
+                gl.disable(gl.DEPTH_TEST);
+            }
+
+            compileShader(gl, src, type) {
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, src);
+                gl.compileShader(shader);
+                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                    console.error(gl.getShaderInfoLog(shader));
+                }
+                return shader;
+            }
+
+            setState(newState) {
+                this.state = newState;
+                const rgb = this.hexToRgb(this.colors[newState] || this.colors['idle']);
+
+                for (let i = 0; i < this.particleCount; i++) {
+                    this.colorsArray[i * 3] = rgb[0] + (Math.random() - 0.5) * 0.12;
+                    this.colorsArray[i * 3 + 1] = rgb[1] + (Math.random() - 0.5) * 0.12;
+                    this.colorsArray[i * 3 + 2] = rgb[2] + (Math.random() - 0.5) * 0.12;
+                }
+
+                const gl = this.gl;
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.colorsArray);
+            }
+
+            getProjectionMatrix(aspect) {
+                const fov = 45 * Math.PI / 180;
+                const near = 0.1;
+                const far = 100.0;
+                const top = Math.tan(fov / 2) * near;
+                const right = top * aspect;
+
+                return new Float32Array([
+                    near / right, 0, 0, 0,
+                    0, near / top, 0, 0,
+                    0, 0, -(far + near) / (far - near), -1,
+                    0, 0, -(2 * far * near) / (far - near), 0
+                ]);
+            }
+
+            getModelMatrix(time) {
+                // Translation back on Z-axis (camera distance)
+                const tz = -3.8;
+                const rotSpeed = (this.state === 'thinking') ? 1.8 : 0.4;
+                const angleY = time * 0.4 * rotSpeed;
+                const angleX = Math.sin(time * 0.3) * 0.2;
+
+                const cosY = Math.cos(angleY), sinY = Math.sin(angleY);
+                const cosX = Math.cos(angleX), sinX = Math.sin(angleX);
+
+                // Combined Rotation + Translation Matrix
+                return new Float32Array([
+                    cosY, sinY * sinX, sinY * cosX, 0,
+                    0, cosX, -sinX, 0,
+                    -sinY, cosY * sinX, cosY * cosX, 0,
+                    0, 0, tz, 1
+                ]);
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+
+                const gl = this.gl;
+                const time = performance.now() / 1000;
+
+                // Audio reactivity updates
+                if (this.analyser && this.dataArray) {
+                    this.analyser.getByteFrequencyData(this.dataArray);
+                    let sum = 0;
+                    for (let i = 0; i < this.dataArray.length; i++) sum += this.dataArray[i];
+                    this.audioLevel = Math.min((sum / this.dataArray.length) / 45, 1.4);
+                } else {
+                    this.audioLevel = 0;
+                }
+
+                // Dispersion target calculations
+                let targetSpread = 0.05;
+                if (this.state === 'speaking') {
+                    targetSpread = 0.28 + this.audioLevel * 0.8;
+                } else if (this.state === 'listening') {
+                    targetSpread = 0.12 + this.audioLevel * 0.6;
+                } else if (this.state === 'thinking') {
+                    targetSpread = 0.35 + Math.sin(time * 4.5) * 0.15;
+                } else {
+                    targetSpread = 0.04 + Math.sin(time * 1.5) * 0.02; // Idle pulse
+                }
+
+                // Particle Dispersion calculation
+                for (let i = 0; i < this.particleCount; i++) {
+                    const bx = this.basePositions[i * 3];
+                    const by = this.basePositions[i * 3 + 1];
+                    const bz = this.basePositions[i * 3 + 2];
+
+                    const wave = Math.sin(bx * 3.5 + time * 3.0) *
+                        Math.cos(by * 3.5 + time * 2.5) *
+                        Math.sin(bz * 3.5 + time * 2.0);
+
+                    const spread = (targetSpread * this.spreadFactors[i]) + (wave * 0.04);
+
+                    this.positions[i * 3] = bx * (1.0 + spread);
+                    this.positions[i * 3 + 1] = by * (1.0 + spread);
+                    this.positions[i * 3 + 2] = bz * (1.0 + spread);
+                }
+
+                // Render Frame
+                gl.clearColor(0.0, 0.0, 0.0, 0.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                gl.useProgram(this.program);
+
+                // Upload updated positions
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, this.positions, gl.DYNAMIC_DRAW);
+                gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(this.aPosition);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
+                gl.vertexAttribPointer(this.aColor, 3, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(this.aColor);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuffer);
+                gl.vertexAttribPointer(this.aSize, 1, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(this.aSize);
+
+                // Set uniform matrices
+                const aspect = this.canvas.width / this.canvas.height;
+                gl.uniformMatrix4fv(this.uProjection, false, this.getProjectionMatrix(aspect));
+                gl.uniformMatrix4fv(this.uMatrix, false, this.getModelMatrix(time));
+
+                gl.drawArrays(gl.POINTS, 0, this.particleCount);
+            }
+
+            async connectMic() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.analyser.fftSize = 256;
+                    this.source = this.audioContext.createMediaStreamSource(stream);
+                    this.source.connect(this.analyser);
+                    this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                    return true;
+                } catch (err) {
+                    alert('Microphone error: ' + err.message);
+                    return false;
+                }
+            }
+
+            disconnectMic() {
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                }
+                this.analyser = null;
+                this.dataArray = null;
+            }
+        }
+
+        // App Initialization
+        document.addEventListener('DOMContentLoaded', () => {
+            const orb = new VoiceOrb({
+                canvas: document.getElementById('orb'),
+                particleCount: 12000
+            });
+
+            const statusText = document.getElementById('statusText');
+            const statusIcon = document.getElementById('statusIcon');
+            const buttons = document.querySelectorAll('.btn:not(.mic-btn)');
+            const micBtn = document.getElementById('startBtn');
+            let isMicConnected = false;
+
+            function updateUIState(state) {
+                orb.setState(state);
+                statusText.textContent = `State: ${state.toUpperCase()}`;
+                statusIcon.className = `icon ${state}`;
+
+                buttons.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.state === state);
+                });
+            }
+
+            buttons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    updateUIState(btn.dataset.state);
+                });
+            });
+
+            micBtn.addEventListener('click', async () => {
+                if (!isMicConnected) {
+                    const ok = await orb.connectMic();
+                    if (ok) {
+                        isMicConnected = true;
+                        micBtn.textContent = '🛑 Disconnect Mic';
+                        micBtn.classList.add('listening');
+                        updateUIState('listening');
+                    }
+                } else {
+                    orb.disconnectMic();
+                    isMicConnected = false;
+                    micBtn.textContent = '🎙️ Mic Connect';
+                    micBtn.classList.remove('listening');
+                    updateUIState('idle');
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

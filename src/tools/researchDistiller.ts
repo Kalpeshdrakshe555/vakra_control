@@ -114,8 +114,9 @@ async function searchMultiUrls(query: string, maxResults: number = 8): Promise<s
 export async function executeDeepResearch(
     query: string,
     providedUrls: string[] = [],
-    workspaceRoot: string
-): Promise<string> {
+    workspaceRoot: string,
+    options: { offset?: number; limit?: number } = {}
+): Promise<any> {
     try {
         // Ensure findings folder exists in workspace
         const findingsDir = path.join(workspaceRoot, '.ultra-light-ai', 'findings');
@@ -145,17 +146,54 @@ export async function executeDeepResearch(
             }
         }
 
-        // 2. Discover 5-10 distinct web URLs
+        // 2. Discover max 2 high-authority URLs (clean, zero redundancy)
         let targetUrls = Array.isArray(providedUrls) ? [...providedUrls] : [];
-        if (targetUrls.length < 5) {
-            const discovered = await searchMultiUrls(query, 8 - targetUrls.length);
+        if (targetUrls.length < 2) {
+            const discovered = await searchMultiUrls(query, 3);
             for (const u of discovered) {
                 if (!targetUrls.includes(u)) targetUrls.push(u);
+                if (targetUrls.length >= 2) break;
             }
         }
+        targetUrls = targetUrls.slice(0, 2);
 
-        // 3. Concurrently fetch web context from target URLs (capped at 8 sources max)
-        const fetchPromises = targetUrls.slice(0, 8).map(async (url) => {
+        const safeTopicSlug = query.toLowerCase().replace(/[^a-z0-9]+/g, '_').substring(0, 35).replace(/^_+|_+$/g, '') || 'research';
+        const fileName = `${safeTopicSlug}_research.md`;
+        const filePath = path.join(findingsDir, fileName);
+        const relPath = path.relative(workspaceRoot, filePath);
+        const offset = Math.max(0, options.offset || 0);
+        const limit = Math.min(12000, Math.max(2000, options.limit || 8500));
+
+        // Approach 1 Pagination: If offset > 0 and dossier already exists on disk, read next chunk with 0 network latency!
+        if (offset > 0 && fs.existsSync(filePath)) {
+            const cachedFullDoc = fs.readFileSync(filePath, 'utf8');
+            const chunk = cachedFullDoc.slice(offset, offset + limit);
+            const hasMore = (offset + limit) < cachedFullDoc.length;
+            const endOffset = Math.min(offset + limit, cachedFullDoc.length);
+
+            let pageMsg = `### 📚 Technical Research Continued: "${query}"\n`;
+            pageMsg += `*Source Document: \`${relPath}\` (Total: ${cachedFullDoc.length} chars)*\n`;
+            pageMsg += `*Reading Slice: Characters ${offset} to ${endOffset} (${chunk.length} chars)*\n\n`;
+            pageMsg += `#### 💡 Technical Content (Offset ${offset}):\n\n`;
+            pageMsg += `${chunk}\n\n`;
+            if (hasMore) {
+                pageMsg += `⏩ **More Content Available**: To read the next section, invoke \`research_web_docs(query="${query}", offset=${endOffset})\`.\n`;
+            } else {
+                pageMsg += `✅ **[END OF DOCUMENTATION REACHED - All ${cachedFullDoc.length} characters examined]**\n`;
+            }
+
+            return {
+                topic: query,
+                filePath: relPath,
+                sources: [],
+                distilledBy: 'Cached Full Dossier',
+                summaryMarkdown: chunk,
+                rawTextResult: pageMsg
+            } as any;
+        }
+
+        // 3. Concurrently fetch full web context from top 2 authoritative target URLs
+        const fetchPromises = targetUrls.map(async (url) => {
             try {
                 const text = await fetchWebContext(url);
                 if (text && text.trim().length > 100) {
@@ -174,26 +212,26 @@ export async function executeDeepResearch(
             return `No external documentation could be retrieved for query: "${query}". Please verify internet connectivity or specify direct URLs.`;
         }
 
-        // 4. Distill using LLM
+        // 4. Distill using LLM or structured cleaner
         let distilledMarkdown = '';
-        let brainUsed = 'Deterministic Cleaner (No LLM active)';
+        let brainUsed = 'Deterministic Deep Cleaner (No LLM active)';
         const distiller = getDistillerClient(workspaceRoot);
 
         if (distiller) {
             try {
                 brainUsed = distiller.brainName;
-                // Prepare raw material chunked cleanly
-                const compiledRaw = rawSources.map((s, idx) => `### Source [${idx + 1}]: ${s.source}\n${s.content.substring(0, 2500)}`).join('\n\n---\n\n');
+                // Feed rich raw material (up to 15,000 chars per source) for high-precision distillation
+                const compiledRaw = rawSources.map((s, idx) => `### Source [${idx + 1}]: ${s.source}\n${s.content.substring(0, 15000)}`).join('\n\n---\n\n');
 
-                const distillationPrompt = `You are a Technical Research Distiller for a software engineering agent.
-Your objective: Process the following raw documentation from ${rawSources.length} external sources on "${query}".
+                const distillationPrompt = `You are an Elite Technical Research Distiller for a software engineering agent.
+Your objective: Process the following comprehensive documentation from ${rawSources.length} external sources on "${query}".
 
 RULES:
-1. Strip all noise: Remove advertisements, cookie banners, navigation links, author bios, and marketing fluff.
-2. Extract exact modern API signatures, parameters, types, and setup commands.
-3. Provide 2-3 copy-paste ready, syntactically correct code examples following modern best practices.
+1. Strip all noise: Remove ads, cookie banners, navigation links, author bios, and marketing fluff.
+2. Extract exact modern API signatures, parameters, types, configuration setup, and architecture patterns.
+3. Provide 3-5 complete, working, copy-paste ready code examples following modern best practices.
 4. Highlight breaking changes, deprecated methods, and common gotchas.
-5. Return clean, comprehensive Markdown.
+5. Retain FULL comprehensive detail: Do not summarize or cut code blocks short. Return clean, deep Markdown.
 
 Raw Documentation Material:
 ${compiledRaw}`;
@@ -205,25 +243,21 @@ ${compiledRaw}`;
             }
         }
 
-        // If LLM was unavailable or failed completely, generate structured markdown deterministically
+        // Deterministic fallback if LLM was unavailable: preserve full unabridged content
         if (!distilledMarkdown || distilledMarkdown.trim().length < 50) {
-            distilledMarkdown = `# Technical Research: ${query}\n\n`;
-            distilledMarkdown += `*Compiled from ${rawSources.length} external sources*\n\n`;
+            distilledMarkdown = `# Comprehensive Technical Research: ${query}\n\n`;
+            distilledMarkdown += `*Compiled from ${rawSources.length} primary authoritative sources on ${new Date().toISOString().split('T')[0]}*\n\n`;
             for (const s of rawSources) {
                 distilledMarkdown += `## Source: ${s.source}\n\n${s.content}\n\n---\n\n`;
             }
         }
 
-        // 5. Save distilled findings to disk
-        const safeTopicSlug = query.toLowerCase().replace(/[^a-z0-9]+/g, '_').substring(0, 35).replace(/^_+|_+$/g, '') || 'research';
-        const fileName = `${safeTopicSlug}_research.md`;
-        const filePath = path.join(findingsDir, fileName);
-        
+        // 5. UNBOUNDED DISK SAVE: Save 100% full, unclipped documentation to disk (Zero character limit!)
         fs.writeFileSync(filePath, distilledMarkdown, 'utf8');
 
         // Update findings INDEX.md
         const indexPath = path.join(findingsDir, 'INDEX.md');
-        const indexLine = `- **[${fileName}](./${fileName})**: Research on "${query}" (${rawSources.length} sources, distilled by ${brainUsed} on ${new Date().toISOString().split('T')[0]})\n`;
+        const indexLine = `- **[${fileName}](./${fileName})**: Complete Research on "${query}" (${rawSources.length} sources, ${distilledMarkdown.length} chars, by ${brainUsed} on ${new Date().toISOString().split('T')[0]})\n`;
         try {
             if (fs.existsSync(indexPath)) {
                 fs.appendFileSync(indexPath, indexLine, 'utf8');
@@ -232,9 +266,7 @@ ${compiledRaw}`;
             }
         } catch {}
 
-        const relPath = path.relative(workspaceRoot, filePath);
-
-        // 6. Format comprehensive research with verified citations directly for the model
+        // 6. Format verified citations
         const citationsList = rawSources.map((s, idx) => {
             return `- **[Source ${idx + 1}]**: ${s.source}`;
         }).join('\n');
@@ -255,14 +287,20 @@ ${compiledRaw}`;
             return { title, url };
         });
 
-        // Token-efficient return message for the LLM
+        // 7. DELIVER CLEAN 7,000–10,000 CHARACTERS SLICE TO CONTEXT (Approach 1 Chunk Streaming)
+        const chunk = distilledMarkdown.slice(offset, offset + limit);
+        const hasMore = (offset + limit) < distilledMarkdown.length;
+        const endOffset = Math.min(offset + limit, distilledMarkdown.length);
+
         let returnMsg = `### 📚 Technical Research Completed: "${query}"\n`;
-        returnMsg += `Archived complete guide to: \`${relPath}\`\n\n`;
-        returnMsg += `#### 🔗 Verified Sources:\n${citationsList}\n\n`;
-        returnMsg += `#### 💡 Key Distilled Findings (by ${brainUsed}):\n`;
-        returnMsg += `${distilledMarkdown.trim().slice(0, 1800)}\n\n`;
-        if (distilledMarkdown.length > 1800) {
-            returnMsg += `*(Note: Detailed implementations truncated to preserve tokens. Inspect \`${relPath}\` using read_multiple_files for complete code & API tables.)*\n`;
+        returnMsg += `Archived complete unclipped guide to: \`${relPath}\` (${distilledMarkdown.length} total chars)\n\n`;
+        returnMsg += `#### 🔗 Verified Primary Sources:\n${citationsList}\n\n`;
+        returnMsg += `#### 💡 Technical Findings [Chars ${offset} to ${endOffset} of ${distilledMarkdown.length}]:\n\n`;
+        returnMsg += `${chunk}\n\n`;
+        if (hasMore) {
+            returnMsg += `⏩ **More Content Available**: The document has ${distilledMarkdown.length - endOffset} additional characters. Call \`research_web_docs(query="${query}", offset=${endOffset})\` or read \`${relPath}\` to inspect more.\n`;
+        } else {
+            returnMsg += `✅ **[Complete technical guide delivered without truncation]**\n`;
         }
 
         return {
@@ -270,7 +308,7 @@ ${compiledRaw}`;
             filePath: relPath,
             sources: sourceObjects,
             distilledBy: brainUsed,
-            summaryMarkdown: distilledMarkdown,
+            summaryMarkdown: chunk,
             rawTextResult: returnMsg
         } as any;
     } catch (error: any) {
@@ -435,25 +473,25 @@ export async function searchWebQuickDetailed(query: string): Promise<WebSearchDe
         }
     }
 
-    // Concurrently deep-fetch comprehensive page data (at least 2,000 tokens / up to 10,000 chars) from each website
+    // Concurrently fetch comprehensive page context (7,000+ chars per site for deep technical accuracy)
     const fetchPromises = topThreeResults.map(async (target, idx) => {
         try {
             const pageText = await fetchWebContext(target.url);
             if (pageText && pageText.trim().length > 100) {
-                const pageContent = pageText.trim().slice(0, 10000);
-                return `\n\n=== [WEBSITE ${idx + 1} LIVE EXTRACTED DATA (~2,500 TOKENS) FROM: ${target.url} (${target.domain})] ===\n${pageContent}`;
+                const pageContent = pageText.trim().slice(0, 7500);
+                return `\n\n=== [WEBSITE ${idx + 1} DEEP EXTRACTED CONTEXT (7K+ CHARS): ${target.url} (${target.domain})] ===\n${pageContent}`;
             }
         } catch (e) {
             console.error(`Deep fetch failed for ${target.url}:`, e);
         }
-        return `\n\n=== [WEBSITE ${idx + 1} SNIPPET FROM: ${target.url} (${target.domain})] ===\n${target.snippet}`;
+        return `\n\n=== [WEBSITE ${idx + 1} SNIPPET: ${target.url} (${target.domain})] ===\n${target.snippet}`;
     });
 
     const deepPages = await Promise.all(fetchPromises);
     const livePageContent = deepPages.join('\n');
 
-    const snippetsText = topThreeResults.map((r, i) => `[Source ${i + 1} - ${r.title}]: ${r.snippet} (Link: ${r.url})`).join('\n');
-    const combinedText = `Top 3 Verified Sources:\n${snippetsText}${livePageContent}`;
+    const snippetsText = topThreeResults.map((r, i) => `[Source ${i + 1}]: "${r.title}"\nURL: ${r.url}\nDomain: ${r.domain}\nKey Highlights: ${r.snippet}`).join('\n\n');
+    const combinedText = `Top 3 Verified Sources & Extracts:\n\n${snippetsText}\n\n${livePageContent}`;
 
     const sources: WebSearchSource[] = topThreeResults.map(r => ({
         title: r.title,

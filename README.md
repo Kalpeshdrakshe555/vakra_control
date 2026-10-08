@@ -1,16 +1,17 @@
 <div align="center">
-  <img src="icon.png" width="100" height="100" alt="Ultra Light AI Logo" />
-  <h1>🚀 Ultra Light AI</h1>
-  <p><strong>The High-Performance, Token-Efficient Autonomous AI Coding Assistant for VS Code.</strong></p>
-  <p><em>Engineered from the ground up to empower local small models (3B–7B parameters, 40k context) and cloud frontier models alike with Cursor-level autonomy.</em></p>
+  <img src="icon.png" width="100" height="100" alt="Vakra AI Logo" />
+  <h1>⚡ Vakra AI</h1>
+  <p><strong>The Autonomous, High-Precision AI Coding Agent Tailored for 4B Models & Edge Hardware.</strong></p>
+  <p><em>Engineered from the ground up to empower small local models (3B–7B parameters, 40k context) and frontier LLMs alike with Cursor-level autonomy, full-duplex voice, and deterministic self-healing.</em></p>
 
   <p>
     <a href="#-key-highlights">Highlights</a> •
     <a href="#-architecture--innovations">Architecture</a> •
-    <a href="#-local-model-vision--setup">Local & Vision Setup</a> •
+    <a href="#-production-features">Features</a> •
+    <a href="#-local-model--vision-setup">Local Setup</a> •
     <a href="#-skills-system">Skills System</a> •
     <a href="#-configuration--settings">Settings</a> •
-    <a href="#-documentation">Deep Dive Logic</a>
+    <a href="#-deep-dive-logic">Project Logic</a>
   </p>
 </div>
 
@@ -19,7 +20,13 @@
 ## 🌟 Key Highlights
 
 - **⚡ Tailored for Small Models & Tight Contexts (4B / 40k Window):**  
-  Unlike generic AI tools that collapse without 128k–200k tokens, Ultra Light AI is mathematically optimized to keep 3B–7B local models (e.g. Gemma 4B, Qwen 2.5 Coder, Llama 3.2) sharp, coherent, and loop-free within a strict 32k–40k context budget.
+  Unlike generic AI tools that collapse without 128k–200k tokens, **Vakra AI** is mathematically optimized to keep 3B–7B local models (e.g. Gemma 4B, Qwen 2.5 Coder, Llama 3.2) sharp, coherent, and loop-free within a strict 32k–40k context budget.
+- **🎙️ Full-Duplex Real-Time Voice Assistant:**  
+  Built with dynamic energy threshold gating (0.015 idle / 0.075 speaking), instant barge-in interruption (<500ms), 850ms trailing silence auto-submit, Whisper STT, and Kokoro-82M / Edge TTS speech synthesis.
+- **🌐 Deep Web Search & Verified Dual-Layer Citations:**  
+  Searches DuckDuckGo and deep-fetches 7,000+ characters of rich context per authoritative website. Strictly enforces inline citations `[[1]](url)` and a dedicated `### 🌐 Sources & References` markdown section with one-click external browser opening.
+- **⏪ Granular Rollback & File Recovery Modal:**  
+  Interactive rollback modal showing exact line deltas (`+X / -Y lines`) across every modified or created file. Reverts workspace files to their exact pre-prompt state with zero manual git stashing.
 - **🔄 Autonomous Self-Healing Tool Loop:**  
   Executes file operations, terminal commands, directory explorations, and code modifications in a continuous execution cycle. Automatically captures compiler/runtime errors and self-corrects without manual prompt pasting.
 - **🧠 Zero-Bloat Session Memory & Anti-Reread Heuristics:**  
@@ -30,8 +37,8 @@
   Automatically identifies the correct working directory for framework-specific commands (e.g. searching for `manage.py`, `package.json`, or nested project folders) before running terminal tasks.
 - **👁️ Multimodal Vision Support:**  
   Feed UI screenshots, design mockups, or bug captures directly into the chat. Seamlessly works with local vision projectors (`--mmproj`) in `llama-server` or cloud multimodal vision endpoints.
-- **🔌 Extensible MCP & Plugins Engine:**  
-  One-click configuration for Model Context Protocol servers (`mcp.json`) and custom runtime JavaScript automation scripts (`plugins.js`).
+- **📊 Real-Time Three-Tier Token Meter:**  
+  Live visual breakdown displaying **Input Tokens**, **Output Tokens**, and **Active Context Window %** so developers always know their exact consumption and billing.
 - **🛡️ 100% Offline & Private Capability:**  
   Direct, native integration with local backends (`llama-server`, `Ollama`, `LM Studio`, `vLLM`) via OpenAI-compatible endpoints, keeping proprietary code strictly on your machine.
 
@@ -64,7 +71,7 @@
 ```
 
 ### 1. The Anti-Reread & Session Memory Engine
-In small models, reading entire source files repeatedly exhausts the token budget and triggers repetitive loops. Ultra Light AI intercepts every `readFile` call and stores:
+In small models, reading entire source files repeatedly exhausts the token budget and triggers repetitive loops. Vakra AI intercepts every `readFile` call and stores:
 - File paths visited in the current session.
 - Extracted top-level symbols (functions, classes, interfaces).
 - Import signatures and line counts.  
@@ -80,7 +87,7 @@ Small models often execute commands in the workspace root instead of the nested 
 
 ## 🖥️ Local Model & Vision Setup
 
-Ultra Light AI is tested and optimized for local inference backends such as `llama-server` (llama.cpp) and `Ollama`.
+Vakra AI is tested and optimized for local inference backends such as `llama-server` (llama.cpp) and `Ollama`.
 
 ### Running with a 4B Model + Multimodal Vision (Gemma / Qwen)
 
@@ -99,10 +106,10 @@ Launch `llama-server` with your base model and multimodal vision projector:
   --port 8083
 ```
 
-In Ultra Light AI Settings (⚙️ icon in the sidebar):
+In Vakra AI Settings (⚙️ icon in the sidebar):
 1. **API Provider:** `Local (llama-server / Ollama / OpenAI Compatible)`
 2. **Base URL:** `http://127.0.0.1:8083/v1`
-3. **Model Name:** Enter your model tag (or leave as default)
+3. **Model Name:** Enter your model tag (e.g. `gemma-4-31b-it` or `gemma-4-E4B-it`)
 4. **Max Steps / Turn:** Set according to your workflow (e.g. `20`–`35` for full-stack tasks)
 
 ---
@@ -151,10 +158,10 @@ Access the Settings panel via the ⚙️ icon in the sidebar:
 | Setting | Description | Default |
 |---|---|---|
 | **API Provider** | Gemini, Claude, OpenAI, DeepSeek, Groq, OpenRouter, Local | `Local` |
-| **Model Name** | Identifier of the active language model | `gemma-4-E4B-it` |
+| **Model Name** | Identifier of the active language model | `gemma-4-31b-it` |
 | **Max Steps / Turn** | Maximum autonomous tool iterations per conversational turn | `25` |
 | **Context Limit** | Target token window boundary (e.g. 32000, 40000) | `40000` |
-| **Thinking Budget** | Reasoning token allocation for reasoning models | `1024` |
+| **Voice STT / TTS** | Browser Web Speech, local Whisper, Kokoro-82M, Edge TTS | `Browser` |
 | **MCP Config** | Opens `.ultra-light-ai/mcp.json` to attach external MCP tools | Click to Open |
 | **Plugins Script** | Opens `.ultra-light-ai/plugins.js` for custom JS runtime hooks | Click to Open |
 
@@ -164,15 +171,15 @@ Access the Settings panel via the ⚙️ icon in the sidebar:
 
 | Shortcut / Command | Action |
 |---|---|
-| `Ctrl+Shift+P` → `Ultra Light AI: Open Chat` | Opens the assistant sidebar |
-| `Ctrl+Shift+P` → `Ultra Light AI: New Chat` | Starts a fresh session with clean context |
-| `Ctrl+Shift+P` → `Ultra Light AI: AI Quick Fix` | Analyzes and fixes current editor diagnostics |
+| `Ctrl+Shift+P` → `Vakra AI: Open Chat` | Opens the assistant sidebar |
+| `Ctrl+Shift+P` → `Vakra AI: New Chat` | Starts a fresh session with clean context |
+| `Ctrl+Shift+P` → `Vakra AI: AI Quick Fix` | Analyzes and fixes current editor diagnostics |
 | `Ctrl+K` (Inline Edit) | Surgically refactors selected code directly in the editor |
 | Terminal Context Menu → `Fix Terminal Error` | Ingests last 60 terminal lines for instant debugging |
 
 ---
 
-## 📚 Technical Documentation
+## 📚 Deep Dive Logic
 
 For an in-depth breakdown of the internal algorithms, token budget allocations, AST skeletonization, and state machine mechanics, consult:
 👉 **[project_logic.md](project_logic.md)**
@@ -181,4 +188,4 @@ For an in-depth breakdown of the internal algorithms, token budget allocations, 
 
 ## 📄 License
 
-Ultra Light AI is licensed under the MIT License. Built with passion for high-performance, autonomous, local-first developer tooling.
+Vakra AI is licensed under the MIT License. Built with passion for high-performance, autonomous, local-first developer tooling.

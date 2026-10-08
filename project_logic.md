@@ -1,4 +1,4 @@
-# 🧠 Ultra Light AI — System Architecture & Core Logics (`project_logic.md`)
+# ⚡ Vakra AI — System Architecture & Core Logics (`project_logic.md`)
 
 > **Document Status:** Comprehensive Technical Specification  
 > **Target Target:** Small Parameter Models (3B–7B, e.g. Gemma 4B, Qwen 2.5 Coder) on Restricted Context Windows (32k–40k tokens), as well as Frontier LLMs.
@@ -232,6 +232,73 @@ Developers want to pass UI screenshots or designs and have the model reproduce t
    - Enforce semantic layout tags (`<header>`, `<main>`, `<section>`).
    - Use modern Tailwind CSS / responsive flexbox grids.
 
+### 3.8. Atomic Checkpoint Rollback & Pre-Flight Confirmation System (`src/webview/handlers/messageDispatcher.ts`, `src/state/conversationHistory.ts`)
+
+#### Problem:
+If a user issues an accidental command or the AI edits files improperly, typical assistants only clear chat text upon rewinding. The underlying modified files and newly generated code remain on disk, leaving the user with a broken or corrupt workspace.
+
+#### Implementation Logic:
+1. **Deterministic File State Capture:**
+   During autonomous tool execution in `ToolDispatcher` (`write_file`, `edit_file`):
+   - For existing files, the exact pre-edit `utf8` file content is recorded in memory.
+   - For newly created files, a tombstone (`content: null`) is recorded.
+   - The backup is registered onto the turn's user message timestamp via `conversationHistory.addFileBackup(turnTimestamp, fullPath, oldContent)`.
+2. **Pre-Flight Rollback Inspection:**
+   When the user clicks the rewind button on a prompt:
+   - The extension intercepts the action with `requestRollbackPreview` instead of blindly overwriting disk.
+   - It computes the exact file delta:
+     - New files: flagged as `DELETE (New File)` with exact line counts (`-N lines`).
+     - Modified files: flagged as `REVERT` with before/after line metrics ($N \rightarrow M$ lines).
+3. **Interactive Visual Confirmation Modal:**
+   A cyber-styled confirmation modal presents the user with:
+   - Prompt snippet being rewound.
+   - Scrollable list of affected files with red/cyan line delta indicators.
+   - Explicit `[Cancel]` vs `[⏪ Yes, Rollback]` actions.
+4. **Atomic Disk & Chat Synchronization:**
+   Upon user confirmation (`confirmRollbackChat`):
+   - Modified files are restored to their exact pre-turn bytes.
+   - Newly generated files are unlinked from disk.
+   - Any dirty open tabs in VS Code are reverted.
+   - Chat history is rewound to the selected timestamp, and the user's prompt text is re-injected into the input box for immediate editing.
+
+---
+
+### 3.9. Production-Grade Full-Duplex Voice Assistant (`src/voice/voiceEngine.ts`, `src/webview/ui.html`, `FULL_DUPLEX_VOICE_ASSISTANT_BLUEPRINT.md`)
+
+#### Architectural Goals:
+Real-time, voice-driven coding assistant with conversational interruption (barge-in) and acoustic echo immunity, running seamlessly inside the VS Code environment.
+
+#### Key Mechanics:
+1. **Hardware DSP WebRTC Constraints:** Microphone capture enforces native hardware acoustic echo cancellation (`echoCancellation`, `googEchoCancellation`, `noiseSuppression`, `autoGainControl`) via `navigator.mediaDevices.getUserMedia` at 16kHz 16-bit mono PCM.
+2. **Dynamic Gating & Echo Shield:**
+   - **Idle Threshold:** 0.015 RMS for sensitive user speech capture.
+   - **Bot-Speaking Threshold:** Elevates to 0.075 RMS during audio playback to shield against laptop speaker bleed.
+3. **Instant Client-Side Barge-In (Interruption):**
+   When the AI is speaking over speakers and the user speaks for >= 2 consecutive frames (~500ms), the engine instantly:
+   - Aborts bot speech playback (`speechSynthesis.cancel()`, pauses audio elements).
+   - Aborts active model generation (`triggerStopGeneration()`, `voiceInterrupt`).
+   - Switches the UI into listening mode immediately.
+4. **Trailing Silence Detection:** 850ms of silence after detected speech triggers sentence completion and automated query submission (`submitChat()`).
+5. **Open-Source Stack Compatibility:** Integrates Web Speech API (zero-latency offline fallback), local Whisper / Groq Whisper STT (`voiceAudioTranscribe`), and Kokoro-82M / Edge-TTS speech synthesis.
+
+---
+
+### 3.5 Web Search Token Optimization & Dual-Layer Citations Engine
+1. **Deep Context Extraction (7,000+ Characters per Source):**
+   - Extracts comprehensive page content capped at ~7,500 characters per authoritative website.
+   - 3 verified sources provide over 22,000 characters of rich technical context, documentation, API signatures, and release details, ensuring maximum accuracy and precision without loss of nuances.
+2. **Mandatory Citations Directive:**
+   - [src/webview/tools/toolDispatcher.ts](src/webview/tools/toolDispatcher.ts) strictly binds the model to provide industry-standard source citations (`[[1] Title/Domain](URL)`) both inline and in a final `### 🌐 Sources & References` markdown section.
+   - Prevents link hallucination by feeding verified, indexed source URLs directly into the tool anchor.
+3. **Dual-Layer Interactive UI Citations:**
+   - [src/webview/ui.html](src/webview/ui.html) captures all verified sources from `toolCallEvent` and displays sleek, interactive source cards in the search tool block.
+   - If the model omits markdown citations in text, the webview automatically appends a dedicated `Verified Sources & Citations` tray below the assistant message with one-click links.
+   - All external `http://` and `https://` URLs are routed through VS Code's `vscode.env.openExternal` via `messageDispatcher.ts`, guaranteeing safe and immediate opening in the user's default browser.
+4. **Deep Technical Research & Offset Pagination Architecture (`research_web_docs`):**
+   - **Max 2 Authoritative Sources:** Discards redundant noise from shallow blogs; focuses exclusively on official GitHub repositories and primary documentation portals.
+   - **Unbounded Disk Storage:** Complete, unabridged technical manuals (up to 35,000+ characters) are stored permanently in `.ultra-light-ai/findings/<topic>_research.md` with zero artificial truncation.
+   - **Approach 1 Offset Pagination:** Delivers 7,000 to 10,000 characters of high-signal API signatures and working code to the active context. The model can seamlessly read subsequent sections by invoking `research_web_docs(query, offset=...)`, streaming directly from the disk cache with 0ms network latency.
+
 ---
 
 ## 4. Token Budget Allocation Matrix (40k Context Model)
@@ -265,4 +332,4 @@ Developers want to pass UI screenshots or designs and have the model reproduce t
 
 ---
 
-*Authored for the Ultra Light AI development team. Maintained for continuous performance optimization on edge-grade local models.*
+*Authored for the Vakra AI development team. Maintained for continuous performance optimization on edge-grade local models.*

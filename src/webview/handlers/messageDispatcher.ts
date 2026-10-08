@@ -7,6 +7,7 @@ import { SettingsHandler } from '../settingsHandler';
 import { TerminalCapture } from '../../tools/terminalCapture';
 import { SessionMemory } from '../../state/sessionMemory';
 import { getAgentConfig } from '../../config';
+import { transcribeAudio, synthesizeSpeech } from '../../voice/voiceEngine';
 
 export interface DispatchContext {
     workspaceRoot: string;
@@ -43,7 +44,7 @@ export class MessageDispatcher {
                         timeoutSeconds: config?.providers?.cloud?.timeoutSeconds || 60,
                         systemInstructions: config?.systemInstructions || 'You are an AI coding agent.',
                         maxOutputTokens: config?.contextLimits?.maxOutputTokens || 8192,
-                        maxContextTokens: config?.contextLimits?.maxContextTokens || 7000,
+                        maxContextTokens: config?.contextLimits?.maxContextTokens || 40000,
                         historyLength: config?.contextLimits?.historyLength || 10,
                         maxAutonomousToolSteps: config?.maxAutonomousToolSteps || 30,
                         enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
@@ -69,7 +70,8 @@ export class MessageDispatcher {
             }
 
             case 'stopGeneration':
-            case 'abortStream': {
+            case 'abortStream':
+            case 'voiceInterrupt': {
                 if (ctx.abortCurrentStream) {
                     ctx.abortCurrentStream();
                 }
@@ -77,11 +79,156 @@ export class MessageDispatcher {
                 return;
             }
 
+            case 'voiceAudioTranscribe': {
+                try {
+                    const rawBase64 = message.audio || '';
+                    if (!rawBase64) break;
+                    const pcmBuffer = Buffer.from(rawBase64, 'base64');
+                    const config = getAgentConfig(workspaceRoot);
+                    const text = await transcribeAudio(pcmBuffer, config?.voice);
+                    postMessage({
+                        command: 'voiceTranscript',
+                        text: text,
+                        autoSubmit: message.autoSubmit !== false
+                    });
+                } catch (error: any) {
+                    console.error('Voice transcription error:', error);
+                    postMessage({
+                        command: 'voiceError',
+                        error: error?.message || 'Voice transcription failed'
+                    });
+                }
+                break;
+            }
+
+            case 'voiceTTS': {
+                try {
+                    const text = message.text || '';
+                    if (!text) break;
+                    const config = getAgentConfig(workspaceRoot);
+                    const audioBase64 = await synthesizeSpeech(text, config?.voice);
+                    if (audioBase64) {
+                        postMessage({
+                            command: 'voicePlayAudio',
+                            audio: audioBase64
+                        });
+                    }
+                } catch (error: any) {
+                    console.error('Voice TTS error:', error);
+                }
+                break;
+            }
+
+            case 'requestRollbackPreview': {
+                if (!message.timestamp) break;
+                const messages = conversationHistory.getAllMessages();
+                const targetIdx = messages.findIndex((m: any) => m.timestamp === message.timestamp);
+                if (targetIdx === -1) {
+                    vscode.window.showWarningMessage('Checkpoint not found for rollback.');
+                    break;
+                }
+
+                const userMsg = messages[targetIdx];
+                const msgsToRevert = messages.slice(targetIdx);
+                const fileToOldestContent = new Map<string, string | null>();
+
+                // 1. Inspect recorded file backups
+                for (const msg of msgsToRevert) {
+                    if ((msg as any).fileBackups) {
+                        for (const backup of (msg as any).fileBackups) {
+                            if (!fileToOldestContent.has(backup.filepath)) {
+                                fileToOldestContent.set(backup.filepath, backup.content);
+                            }
+                        }
+                    }
+                }
+
+                // 2. Secondary safety net: Inspect tool call events in msgsToRevert
+                for (const msg of msgsToRevert) {
+                    if (msg.toolCalls) {
+                        for (const tc of msg.toolCalls) {
+                            if (tc.tool === 'write_file' || tc.tool === 'edit_file') {
+                                const fp = tc.data?.filepath;
+                                if (fp) {
+                                    const fullPath = path.isAbsolute(fp) ? fp : path.join(workspaceRoot || '', fp);
+                                    if (!fileToOldestContent.has(fullPath)) {
+                                        if (tc.data?.isNew) {
+                                            fileToOldestContent.set(fullPath, null);
+                                        } else if (tc.data?.oldContent !== undefined) {
+                                            fileToOldestContent.set(fullPath, tc.data.oldContent);
+                                        } else if (workspaceRoot) {
+                                            const snap = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
+                                            if (snap !== null) {
+                                                fileToOldestContent.set(fullPath, snap);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const previewFiles: Array<{
+                    filepath: string;
+                    relativePath: string;
+                    type: 'delete_new' | 'revert_modified';
+                    currentLines: number;
+                    backupLines: number;
+                    lineDelta: string;
+                }> = [];
+
+                for (const [filepath, backupContent] of fileToOldestContent.entries()) {
+                    const existsNow = fs.existsSync(filepath);
+                    const relativePath = workspaceRoot ? path.relative(workspaceRoot, filepath).replace(/\\/g, '/') : filepath;
+
+                    if (backupContent === null) {
+                        // Newly created file -> will be deleted
+                        const currentContent = existsNow ? fs.readFileSync(filepath, 'utf8') : '';
+                        const currentLines = currentContent ? currentContent.split(/\r?\n/).length : 0;
+                        previewFiles.push({
+                            filepath,
+                            relativePath,
+                            type: 'delete_new',
+                            currentLines,
+                            backupLines: 0,
+                            lineDelta: `-${currentLines} lines (will be deleted)`
+                        });
+                    } else {
+                        // Modified file -> will be reverted
+                        const currentContent = existsNow ? fs.readFileSync(filepath, 'utf8') : '';
+                        const currentLines = currentContent ? currentContent.split(/\r?\n/).length : 0;
+                        const backupLines = backupContent ? backupContent.split(/\r?\n/).length : 0;
+                        const diff = backupLines - currentLines;
+                        const diffStr = diff === 0 ? 'content restored' : (diff > 0 ? `+${diff} lines` : `${diff} lines`);
+                        previewFiles.push({
+                            filepath,
+                            relativePath,
+                            type: 'revert_modified',
+                            currentLines,
+                            backupLines,
+                            lineDelta: `${diffStr} (${currentLines} → ${backupLines} lines)`
+                        });
+                    }
+                }
+
+                postMessage({
+                    command: 'showRollbackConfirmation',
+                    timestamp: message.timestamp,
+                    promptSnippet: (userMsg?.text || '').trim(),
+                    files: previewFiles
+                });
+                break;
+            }
+
+            case 'confirmRollbackChat':
+            case 'executeRollback':
             case 'rollbackChat': {
                 if (message.timestamp) {
                     const messages = conversationHistory.getAllMessages();
                     const targetIdx = messages.findIndex((m: any) => m.timestamp === message.timestamp);
                     let revertedCount = 0;
+                    let deletedCount = 0;
 
                     if (targetIdx !== -1) {
                         const msgsToRevert = messages.slice(targetIdx);
@@ -97,14 +244,50 @@ export class MessageDispatcher {
                             }
                         }
 
+                        // Secondary fallback: tool calls
+                        for (const msg of msgsToRevert) {
+                            if (msg.toolCalls) {
+                                for (const tc of msg.toolCalls) {
+                                    if (tc.tool === 'write_file' || tc.tool === 'edit_file') {
+                                        const fp = tc.data?.filepath;
+                                        if (fp) {
+                                            const fullPath = path.isAbsolute(fp) ? fp : path.join(workspaceRoot || '', fp);
+                                            if (!fileToOldestContent.has(fullPath)) {
+                                                if (tc.data?.isNew) {
+                                                    fileToOldestContent.set(fullPath, null);
+                                                } else if (tc.data?.oldContent !== undefined) {
+                                                    fileToOldestContent.set(fullPath, tc.data.oldContent);
+                                                } else if (workspaceRoot) {
+                                                    const snap = FileVersioning.getLatestSnapshot(workspaceRoot, fullPath);
+                                                    if (snap !== null) {
+                                                        fileToOldestContent.set(fullPath, snap);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         for (const [filepath, content] of fileToOldestContent.entries()) {
                             try {
                                 if (content === null) {
-                                    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
-                                    revertedCount++;
+                                    if (fs.existsSync(filepath)) {
+                                        fs.unlinkSync(filepath);
+                                        deletedCount++;
+                                    }
                                 } else {
+                                    const parentDir = path.dirname(filepath);
+                                    if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
                                     fs.writeFileSync(filepath, content, 'utf8');
                                     revertedCount++;
+                                }
+
+                                // Sync with any open document in VS Code
+                                const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filepath);
+                                if (openDoc && openDoc.isDirty) {
+                                    vscode.commands.executeCommand('workbench.action.files.revert', openDoc.uri);
                                 }
                             } catch (e) {
                                 console.error('Rollback file error:', filepath, e);
@@ -126,11 +309,17 @@ export class MessageDispatcher {
                             command: 'restoreHistory',
                             messages: conversationHistory.getAllMessages()
                         });
+                        const totalAffected = revertedCount + deletedCount;
+                        const statusMsg = totalAffected > 0
+                            ? `⏪ Rollback complete: Reverted ${revertedCount} file(s), deleted ${deletedCount} new file(s), and restored prompt.`
+                            : `⏪ Chat rolled back to previous checkpoint.`;
                         postMessage({
-                            command: 'statusUpdate',
-                            text: `⏪ Rollback complete: Reverted ${revertedCount} file(s) and restored prompt.`
+                            command: 'rollbackComplete',
+                            text: statusMsg,
+                            revertedCount,
+                            deletedCount
                         });
-                        vscode.window.showInformationMessage(`⏪ Chat rolled back. Restored previous workspace state.`);
+                        vscode.window.showInformationMessage(`⏪ Workspace rolled back: ${revertedCount} modified, ${deletedCount} deleted.`);
                     }
                 }
                 break;
@@ -366,6 +555,17 @@ export class MessageDispatcher {
 
             case 'runInTerminal': {
                 await ctx.handleRunInTerminal(message.text || message.cmd);
+                break;
+            }
+
+            case 'openExternal': {
+                if (message.url) {
+                    try {
+                        await vscode.env.openExternal(vscode.Uri.parse(message.url));
+                    } catch (e) {
+                        console.error('Failed to open external URL:', e);
+                    }
+                }
                 break;
             }
 

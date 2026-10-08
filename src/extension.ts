@@ -53,14 +53,14 @@ export function activate(context: vscode.ExtensionContext) {
         globalRagEngine = new RagEngine(root);
         
         setTimeout(() => {
-            if (statusBarItem) statusBarItem.text = '$(sync~spin) Ultra Light AI (Indexing...)';
+            if (statusBarItem) statusBarItem.text = '$(sync~spin) Vakra AI (Indexing...)';
             globalRagEngine?.buildIndex()
                 .then(() => {
-                    if (statusBarItem) statusBarItem.text = '$(sparkle) Ultra Light AI';
+                    if (statusBarItem) statusBarItem.text = '$(sparkle) Vakra AI';
                 })
                 .catch(err => {
                     outputChannel.appendLine(`RAG Indexing Error: ${err}`);
-                    if (statusBarItem) statusBarItem.text = '$(sparkle) Ultra Light AI';
+                    if (statusBarItem) statusBarItem.text = '$(sparkle) Vakra AI';
                 });
         }, 3000);
 
@@ -97,7 +97,7 @@ export function activate(context: vscode.ExtensionContext) {
     // STATUS BAR ITEM
     // ──────────────────────────────────────────────────────────────────────
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.text = '$(sparkle) Ultra Light AI';
+    statusBarItem.text = '$(sparkle) Vakra AI';
     statusBarItem.tooltip = `Active Model: ${model}`;
     statusBarItem.command = 'ultra-light-ai.openSidebar';
     statusBarItem.show();

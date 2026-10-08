@@ -1,7 +1,7 @@
 {
   "name": "ultra-light-ai",
-  "displayName": "Ultra Light AI",
-  "description": "A Copilot-style AI coding assistant — inline completions, chat, code actions, and more",
+  "displayName": "Vakra AI",
+  "description": "An autonomous AI coding agent optimized for small 4B models — inline completions, agentic coding, voice, and RAG",
   "version": "0.1.0",
   "publisher": "ultra-light-ai",
   "icon": "icon.png",
@@ -32,62 +32,62 @@
     "commands": [
       {
         "command": "ultra-light-ai.openSidebar",
-        "title": "Ultra Light AI: Open Chat",
+        "title": "Vakra AI: Open Chat",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "ultra-light-ai.newChat",
-        "title": "Ultra Light AI: New Chat",
+        "title": "Vakra AI: New Chat",
         "icon": "$(add)"
       },
       {
         "command": "ultra-light-ai.switchModel",
-        "title": "Ultra Light AI: Switch Model",
+        "title": "Vakra AI: Switch Model",
         "icon": "$(symbol-misc)"
       },
       {
         "command": "ultra-light-ai.inlineChat",
-        "title": "Ultra Light AI: Explain Selection (Inline Chat)",
+        "title": "Vakra AI: Explain Selection (Inline Chat)",
         "icon": "$(lightbulb)"
       },
       {
         "command": "ultra-light-ai.addFileContext",
-        "title": "Ultra Light AI: Add Active File to Chat Context",
+        "title": "Vakra AI: Add Active File to Chat Context",
         "icon": "$(file-add)"
       },
       {
         "command": "ultra-light-ai.aiFix",
-        "title": "Ultra Light AI: AI Quick Fix"
+        "title": "Vakra AI: AI Quick Fix"
       },
       {
         "command": "ultra-light-ai.explainCode",
-        "title": "Ultra Light AI: Explain Code"
+        "title": "Vakra AI: Explain Code"
       },
       {
         "command": "ultra-light-ai.refactorSelection",
-        "title": "Ultra Light AI: Refactor Selection"
+        "title": "Vakra AI: Refactor Selection"
       },
       {
         "command": "ultra-light-ai.generateDocs",
-        "title": "Ultra Light AI: Generate Documentation"
+        "title": "Vakra AI: Generate Documentation"
       },
       {
         "command": "ultra-light-ai.inlineEdit",
-        "title": "Ultra Light AI: Inline Edit (Ctrl+K)"
+        "title": "Vakra AI: Inline Edit (Ctrl+K)"
       },
       {
         "command": "ultra-light-ai.fixTerminalError",
-        "title": "Ultra Light AI: Fix Terminal Error",
+        "title": "Vakra AI: Fix Terminal Error",
         "icon": "$(warning)"
       },
       {
         "command": "ultra-light-ai.skeletonExpand",
-        "title": "Ultra Light AI: Skeleton Expand",
+        "title": "Vakra AI: Skeleton Expand",
         "icon": "$(zap)"
       },
       {
         "command": "ultra-light-ai.smartSearch",
-        "title": "Ultra Light AI: Semantic Smart Search",
+        "title": "Vakra AI: Semantic Smart Search",
         "icon": "$(search)"
       }
     ],
@@ -160,7 +160,7 @@
       "activitybar": [
         {
           "id": "ultra-light-ai-chat-panel",
-          "title": "Ultra Light AI",
+          "title": "Vakra AI",
           "icon": "$(sparkle)"
         }
       ]
@@ -170,12 +170,12 @@
         {
           "type": "webview",
           "id": "ultra-light-ai-sidebar",
-          "name": "AI Chat"
+          "name": "Vakra AI"
         }
       ]
     },
     "configuration": {
-      "title": "Ultra Light AI",
+      "title": "Vakra AI",
       "properties": {
         "ultraLightAI.geminiApiKey": {
           "type": "string",

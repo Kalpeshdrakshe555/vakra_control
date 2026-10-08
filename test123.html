@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Compact Voice Orb - No Clipping</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #060608;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        /* Canvas poori screen lega taaki particles square me cut na ho */
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* Soft compact center glow */
+        .glow-core {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 220px;
+            height: 220px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(56, 189, 248, 0.28) 0%, transparent 70%);
+            filter: blur(50px);
+            pointer-events: none;
+            transition: all 0.5s ease;
+            z-index: 1;
+        }
+
+        /* Bottom UI controls */
+        .controls-panel {
+            position: absolute;
+            bottom: 35px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            z-index: 10;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            border-radius: 9999px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(12px);
+            font-size: 11px;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #38bdf8;
+            box-shadow: 0 0 10px #38bdf8;
+            animation: pulse 1.6s infinite ease-in-out;
+        }
+
+        .btn-container {
+            display: flex;
+            gap: 8px;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #eaeaea;
+            padding: 7px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-1px);
+        }
+
+        button.active-mic {
+            background: #ef4444;
+            border-color: #f87171;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.4;
+                transform: scale(0.85);
+            }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+
+<body>
+
+    <div class="glow-core" id="glowCore"></div>
+    <canvas id="orbCanvas"></canvas>
+
+    <div class="controls-panel">
+        <div class="status-pill">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusLabel">State: IDLE</span>
+        </div>
+
+        <div class="btn-container">
+            <button onclick="setOrbState('idle')">Idle</button>
+            <button onclick="setOrbState('listening')">Listening</button>
+            <button onclick="setOrbState('thinking')">Thinking</button>
+            <button onclick="setOrbState('speaking')">Speaking</button>
+            <button id="micBtn" onclick="toggleMic()">🎙️ Enable Mic</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('orbCanvas');
+        const glowCore = document.getElementById('glowCore');
+        const statusLabel = document.getElementById('statusLabel');
+        const statusDot = document.getElementById('statusDot');
+
+        const scene = new THREE.Scene();
+
+        // Camera ko thoda piche rakha hai taaki center me neat aur chhota dikhe
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 4.8;
+
+        const renderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            alpha: true,
+            antialias: true
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        // Particles count aur compact radius
+        const particleCount = 11000;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const baseCoords = new Float32Array(particleCount * 3);
+        const spreadFactors = new Float32Array(particleCount);
+        const colors = new Float32Array(particleCount * 3);
+
+        // Orb ka size chhota rakha hai (0.65)
+        const baseRadius = 0.65;
+
+        for (let i = 0; i < particleCount; i++) {
+            const phi = Math.acos(1 - 2 * (i + 0.5) / particleCount);
+            const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+
+            const nx = Math.sin(phi) * Math.cos(theta);
+            const ny = Math.sin(phi) * Math.sin(theta);
+            const nz = Math.cos(phi);
+
+            const x = baseRadius * nx;
+            const y = baseRadius * ny;
+            const z = baseRadius * nz;
+
+            positions[i * 3] = x;
+            positions[i * 3 + 1] = y;
+            positions[i * 3 + 2] = z;
+
+            baseCoords[i * 3] = x;
+            baseCoords[i * 3 + 1] = y;
+            baseCoords[i * 3 + 2] = z;
+
+            // Natural spread variability
+            spreadFactors[i] = 0.3 + Math.random() * 1.5;
+
+            colors[i * 3] = 0.35;
+            colors[i * 3 + 1] = 0.65;
+            colors[i * 3 + 2] = 1.0;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+            size: 0.018,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+
+        const orb = new THREE.Points(geometry, material);
+        scene.add(orb);
+
+        // States & Colors
+        let currentState = 'idle';
+        let targetSpread = 0.0;
+        let currentSpread = 0.0;
+        let voiceVolume = 0.0;
+
+        const stateTheme = {
+            idle: { r: 0.35, g: 0.65, b: 1.0, glow: 'rgba(56, 189, 248, 0.3)' },
+            listening: { r: 0.2, g: 0.95, b: 0.6, glow: 'rgba(52, 211, 153, 0.4)' },
+            thinking: { r: 0.8, g: 0.35, b: 1.0, glow: 'rgba(168, 85, 247, 0.45)' },
+            speaking: { r: 1.0, g: 0.45, b: 0.2, glow: 'rgba(251, 146, 60, 0.45)' }
+        };
+
+        function setOrbState(state) {
+            currentState = state;
+            statusLabel.innerText = `State: ${state.toUpperCase()}`;
+
+            const t = stateTheme[state];
+            glowCore.style.background = `radial-gradient(circle, ${t.glow} 0%, transparent 70%)`;
+            statusDot.style.background = `rgb(${t.r * 255}, ${t.g * 255}, ${t.b * 255})`;
+            statusDot.style.boxShadow = `0 0 10px rgb(${t.r * 255}, ${t.g * 255}, ${t.b * 255})`;
+
+            const colorAttr = geometry.attributes.color;
+            for (let i = 0; i < particleCount; i++) {
+                colorAttr.setXYZ(
+                    i,
+                    Math.min(1, t.r + (Math.random() - 0.5) * 0.12),
+                    Math.min(1, t.g + (Math.random() - 0.5) * 0.12),
+                    Math.min(1, t.b + (Math.random() - 0.5) * 0.12)
+                );
+            }
+            colorAttr.needsUpdate = true;
+        }
+
+        const clock = new THREE.Clock();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+
+            const time = clock.getElapsedTime();
+            const posAttr = geometry.attributes.position;
+
+            // Controlled spread limits taaki screen bhar na jaye par border bhi na lage
+            if (currentState === 'speaking') {
+                targetSpread = 0.25 + voiceVolume * 0.8;
+            } else if (currentState === 'listening') {
+                targetSpread = 0.12 + voiceVolume * 0.6;
+            } else if (currentState === 'thinking') {
+                targetSpread = 0.35 + Math.sin(time * 4.5) * 0.15;
+            } else {
+                targetSpread = 0.04 + Math.sin(time * 1.5) * 0.02; // Gentle breathing
+            }
+
+            currentSpread += (targetSpread - currentSpread) * 0.08;
+
+            const rotSpeed = (currentState === 'thinking') ? 1.4 : 0.35;
+            orb.rotation.y = time * 0.2 * rotSpeed;
+            orb.rotation.x = Math.sin(time * 0.2) * 0.1;
+
+            for (let i = 0; i < particleCount; i++) {
+                const bx = baseCoords[i * 3];
+                const by = baseCoords[i * 3 + 1];
+                const bz = baseCoords[i * 3 + 2];
+
+                const spreadMultiplier = spreadFactors[i];
+
+                // Smooth wave distortion
+                const wave = Math.sin(bx * 3.2 + time * 2.5) *
+                    Math.cos(by * 3.2 + time * 2.2) *
+                    Math.sin(bz * 3.2 + time * 1.8);
+
+                const dirX = bx / baseRadius;
+                const dirY = by / baseRadius;
+                const dirZ = bz / baseRadius;
+
+                const totalDisplacement = (currentSpread * spreadMultiplier * 0.9) + (wave * 0.05);
+
+                posAttr.setXYZ(
+                    i,
+                    bx + dirX * totalDisplacement,
+                    by + dirY * totalDisplacement,
+                    bz + dirZ * totalDisplacement
+                );
+            }
+
+            posAttr.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        renderLoop();
+
+        // Microphone setup
+        let audioCtx, analyser, micStream;
+        let isListening = false;
+
+        async function toggleMic() {
+            const btn = document.getElementById('micBtn');
+
+            if (!isListening) {
+                try {
+                    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 256;
+
+                    const source = audioCtx.createMediaStreamSource(micStream);
+                    source.connect(analyser);
+
+                    isListening = true;
+                    btn.classList.add('active-mic');
+                    btn.innerText = '🛑 Mute Mic';
+                    setOrbState('listening');
+
+                    readMicVolume();
+                } catch (e) {
+                    alert('Mic access error: ' + e.message);
+                }
+            } else {
+                if (micStream) micStream.getTracks().forEach(t => t.stop());
+                if (audioCtx) audioCtx.close();
+                isListening = false;
+                voiceVolume = 0;
+                btn.classList.remove('active-mic');
+                btn.innerText = '🎙️ Enable Mic';
+                setOrbState('idle');
+            }
+        }
+
+        function readMicVolume() {
+            if (!isListening) return;
+
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(data);
+
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) {
+                sum += data[i];
+            }
+            const avg = sum / data.length;
+
+            voiceVolume = Math.min(avg / 50, 1.2);
+
+            requestAnimationFrame(readMicVolume);
+        }
+    </script>
+</body>
+
+</html>

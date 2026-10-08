@@ -24,6 +24,7 @@ export interface ToolExecutionContext {
     taskPlanner: any;
     currentTaskState?: any;
     ragEngine?: any;
+    recordFileBackup?: (filepath: string, oldContent: string | null) => void;
 }
 
 export class ToolDispatcher {
@@ -190,6 +191,9 @@ export class ToolDispatcher {
                 if (fileAlreadyExists) {
                     try { FileVersioning.saveSnapshot(workspaceRoot, fullPath, oldContent); } catch {}
                 }
+                if (ctx.recordFileBackup) {
+                    ctx.recordFileBackup(fullPath, fileAlreadyExists ? oldContent : null);
+                }
                 fs.writeFileSync(fullPath, content, 'utf8');
                 try {
                     const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
@@ -263,6 +267,9 @@ export class ToolDispatcher {
             const newContent = fileContent.replace(oldText, newText);
 
             FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
+            if (ctx.recordFileBackup) {
+                ctx.recordFileBackup(fullPath, fileContent);
+            }
             fs.writeFileSync(fullPath, newContent, 'utf8');
 
             try {
@@ -482,14 +489,31 @@ export class ToolDispatcher {
                 const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
                 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
+                const sourcesList = (searchRes.sources || []).map((s, idx) => 
+                    `[${idx + 1}] Title: "${s.title}" | Domain: ${s.domain} | URL: ${s.url}`
+                ).join('\n');
+
                 return `[REAL-TIME CALENDAR ANCHOR: Today is ${formatDate(now)}, Yesterday was ${formatDate(yesterday)}, Tomorrow is ${formatDate(tomorrow)}]
-[LIVE WEB SEARCH RESULTS for "${query}" from Top 3 Authoritative Websites]:
+
+[VERIFIED SOURCES FOR CITATIONS]:
+${sourcesList || 'No direct source URLs available.'}
+
+[LIVE WEB SEARCH EXTRACTS for "${query}"]:
 ${searchRes.text}
 
-[CRITICAL INSTRUCTION]:
-1. Synthesize these live facts directly into a clear, comprehensive answer with exact scores, runs, wickets, overs, and match status.
-2. If the user asked in Hindi/Hinglish (e.g. "kal"), clarify the exact calendar date (${formatDate(yesterday)} for completed matches / ${formatDate(tomorrow)} for upcoming fixtures).
-3. Present all facts and scores directly to the user. Do NOT deflect or say "I cannot provide live scores, visit website X".`;
+[CRITICAL INSTRUCTION - FACT SYNTHESIS & CITATIONS]:
+1. Synthesize these live facts directly into a clear, comprehensive, and well-structured answer.
+2. MANDATORY CITATIONS & REFERENCES (Industry Standard):
+   - You MUST cite the sources you used so the user can verify all facts, specs, and claims.
+   - Use inline citation badges where relevant (e.g. [[1]](url) or [[2]](url)) next to key claims, specs, numbers, dates, or architectures.
+   - At the VERY END of your response, ALWAYS provide a dedicated sources section:
+     ### 🌐 Sources & References
+     - [[1] Title or Domain](url) - Brief note on what data was retrieved from here
+     - [[2] Title or Domain](url) - Brief note on what data was retrieved from here
+   - Never fabricate or guess URLs. Use ONLY the exact URLs listed above under [VERIFIED SOURCES FOR CITATIONS].
+3. For technical queries (models, embeddings, frameworks, APIs): provide exact model sizes, parameter counts, dimensions, context windows, and practical code snippets.
+4. For live events/sports: provide exact scores, dates, and match status directly.
+5. Present the synthesized facts directly without deflection.`;
             } catch (err: any) {
                 return `Web search failed: ${err.message}`;
             }
@@ -499,6 +523,8 @@ ${searchRes.text}
             if (!workspaceRoot) return "Error: No workspace open.";
             const query = args.query || args.prompt || '';
             const urls = Array.isArray(args.urls) ? args.urls : [];
+            const offset = typeof args.offset === 'number' ? args.offset : 0;
+            const limit = typeof args.limit === 'number' ? args.limit : (typeof args.chunk_size === 'number' ? args.chunk_size : 8500);
 
             if (!query && urls.length === 0) {
                 return "Error: query or urls required for web research.";
@@ -506,11 +532,13 @@ ${searchRes.text}
 
             postMessage({
                 command: 'statusUpdate',
-                text: `🌐 Deep research & dossier generation for: "${query}"...`
+                text: offset > 0 
+                    ? `📖 Reading documentation slice (Offset: ${offset})...`
+                    : `🌐 Deep research & dossier generation for: "${query}"...`
             });
 
             try {
-                const res: any = await executeDeepResearch(query, urls, workspaceRoot);
+                const res: any = await executeDeepResearch(query, urls, workspaceRoot, { offset, limit });
 
                 const sources = Array.isArray(res?.sources) ? res.sources : [];
                 const filePath = res?.filePath || '';
@@ -519,19 +547,17 @@ ${searchRes.text}
                 postMessage({
                     command: 'toolCallEvent',
                     tool: 'research_web_docs',
-                    title: `Dossier Created: ${query}`,
+                    title: offset > 0 ? `Doc Slice Read: ${query}` : `Dossier Created: ${query}`,
                     data: {
                         callId: 'research_' + Date.now(),
                         query,
                         filePath,
-                        sources
+                        sources,
+                        offset
                     }
                 });
 
-                // Dual Delivery: Save dossier to disk AND return extracted findings straight to context
-                const keySnippet = resultText.length > 2500 ? resultText.substring(0, 2500) + '\n... (Full technical dossier saved to disk)' : resultText;
-
-                return `[RESEARCH COMPLETE: Full technical dossier saved to \`${filePath}\`]\n\nEXTRACTED FINDINGS FOR IMMEDIATE USE:\n${keySnippet}`;
+                return resultText;
             } catch (err: any) {
                 return `Web research failed: ${err.message}`;
             }

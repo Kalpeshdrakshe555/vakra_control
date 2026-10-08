@@ -133,7 +133,7 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
                 if (masterRes.ok) {
                     const text = await masterRes.text();
                     if (text && text.length > 50) {
-                        return text.substring(0, 10000);
+                        return text.substring(0, 35000);
                     }
                 }
             } catch {}
@@ -151,7 +151,7 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
                 if (hfRes.ok) {
                     const text = await hfRes.text();
                     if (text && text.length > 50) {
-                        return text.substring(0, 10000);
+                        return text.substring(0, 35000);
                     }
                 }
             } catch {}
@@ -176,7 +176,7 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
 
         // If raw text or markdown or JSON, return directly without stripping code
         if (bodyText && (contentType.includes('text/plain') || contentType.includes('text/markdown') || url.endsWith('.md') || url.endsWith('.txt'))) {
-            return bodyText.substring(0, 10000);
+            return bodyText.substring(0, 35000);
         }
 
         let cleanText = '';
@@ -219,7 +219,7 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
                 if (jinaRes.ok) {
                     const jinaText = await jinaRes.text();
                     if (jinaText && jinaText.trim().length > 100) {
-                        return jinaText.trim().substring(0, 10000);
+                        return jinaText.trim().substring(0, 35000);
                     }
                 }
             } catch (jinaErr) {
@@ -227,8 +227,8 @@ export async function fetchWebContext(rawUrl: string): Promise<string> {
             }
         }
 
-        // Truncate to maximum of 10000 characters (~2500 tokens)
-        return cleanText ? cleanText.substring(0, 10000) : '';
+        // High capacity documentation retention (up to 35,000 characters)
+        return cleanText ? cleanText.substring(0, 35000) : '';
     } catch (error) {
         console.error(`fetchWebContext failed for ${rawUrl}:`, error);
         return '';
