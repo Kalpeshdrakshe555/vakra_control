@@ -331,6 +331,7 @@
             }
 
             setState(newState) {
+                if (!this.gl || !this.program) return;
                 this.state = newState;
                 const rgb = this.hexToRgb(this.colors[newState] || this.colors['idle']);
 
@@ -454,6 +455,10 @@
 
             async connectMic() {
                 try {
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                        alert('Microphone requires a secure context (https:// or localhost)');
+                        return false;
+                    }
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     this.analyser = this.audioContext.createAnalyser();

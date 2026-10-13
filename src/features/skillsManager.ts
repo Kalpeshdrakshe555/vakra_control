@@ -36,29 +36,7 @@ export class SkillsManager {
         return uniqueDirs.filter(d => fs.existsSync(d));
     }
 
-    public static readonly BUILTIN_SKILLS: CustomSkill[] = [
-        {
-            name: 'django',
-            description: 'Production-grade Django project architecture, conventions, and verification steps',
-            triggerRules: ['django', 'manage.py', 'django-admin', 'drf', 'django rest framework', 'python backend', 'startapp', 'models.py', 'urls.py', 'views.py'],
-            instructions: `## Django Project Protocol & Conventions:
-1. SCATTERED NAMING RULE:
-   - The root project folder and the Django app folder MUST have DIFFERENT names.
-   - Example: Project folder "core" or "backend", App folder "shop" or "users". Never name both the same.
-2. APP REGISTRATION:
-   - When you create an app, immediately add it to INSTALLED_APPS in settings.py.
-3. DUAL-TIER URL ROUTING:
-   - Main urls.py must include the app's urls: path('', include('app_name.urls')).
-   - The app must have its own urls.py with app_name and urlpatterns.
-4. MIGRATIONS & DB:
-   - Model changes always require: "python manage.py makemigrations" followed by "python manage.py migrate".
-5. VERIFICATION:
-   - Always run "python manage.py check" (or "python <subfolder>/manage.py check" if in a subdirectory) to verify settings, models, and routes.
-   - NEVER run interactive "python manage.py shell".
-6. RESEARCH ON FAILURE:
-   - If a Django import or configuration fails, use research_web_docs with the specific error before guessing fixes.`
-        }
-    ];
+    public static readonly BUILTIN_SKILLS: CustomSkill[] = [];
 
     public static loadSkills(workspaceRoot: string): CustomSkill[] {
         const skillsMap = new Map<string, CustomSkill>();
@@ -229,12 +207,11 @@ export class SkillsManager {
 
             const isMatch = 
                 triggerOnGeneric ||
-                skill.triggerRules.some(rule => rule && lowerPrompt.includes(rule.toLowerCase())) ||
-                lowerPrompt.includes(skillNameLower) ||
+                skill.triggerRules.some(rule => rule && new RegExp(`\\b${rule.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i').test(lowerPrompt)) ||
+                new RegExp(`\\b${skillNameLower.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i').test(lowerPrompt) ||
                 lowerPrompt.includes(`@${skillNameLower}`) ||
                 lowerPrompt.includes(`@skill:${skillNameLower}`) ||
-                lowerPrompt.includes(`@skill ${skillNameLower}`) ||
-                (skill.description && skill.description.toLowerCase().split(/\s+/).some(w => w.length > 4 && lowerPrompt.includes(w)));
+                lowerPrompt.includes(`@skill ${skillNameLower}`);
 
             if (isMatch && !matchedSkills.some(s => s.name.toLowerCase() === skill.name.toLowerCase())) {
                 matchedSkills.push(skill);

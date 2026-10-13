@@ -48,7 +48,9 @@ export class MessageDispatcher {
                         historyLength: config?.contextLimits?.historyLength || 10,
                         maxAutonomousToolSteps: config?.maxAutonomousToolSteps || 30,
                         enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
-                        enableHoverExplanations: vsConfig.get('enableHoverExplanations', false)
+                        enableHoverExplanations: vsConfig.get('enableHoverExplanations', false),
+                        webBrainBridge: config?.webBrainBridge,
+                        voice: config?.voice
                     }
                 });
 
@@ -423,6 +425,51 @@ export class MessageDispatcher {
 
             case 'saveSettings': {
                 await SettingsHandler.handleSaveSettings(message, workspaceRoot, ctx.getAiMetaDir, postMessage);
+                break;
+            }
+
+            case 'testWebBrainBridge': {
+                try {
+                    const { WebBrainBridgeClient } = require('../../bridge/webBrainBridge');
+                    const port = Number(message.port) || 9222;
+                    const result = await WebBrainBridgeClient.testConnection(port);
+                    postMessage({
+                        command: 'webBrainBridgeTestResult',
+                        result
+                    });
+                } catch (e: any) {
+                    postMessage({
+                        command: 'webBrainBridgeTestResult',
+                        result: {
+                            success: false,
+                            message: `Error testing connection: ${e?.message || e}`,
+                            tabs: []
+                        }
+                    });
+                }
+                break;
+            }
+
+            case 'launchWebBrainBrowser': {
+                try {
+                    const { WebBrainBridgeClient } = require('../../bridge/webBrainBridge');
+                    const port = Number(message.port) || 9222;
+                    const provider = message.provider === 'gemini' ? 'gemini' : 'chatgpt';
+                    const result = await WebBrainBridgeClient.launchBrowser(port, provider);
+                    postMessage({
+                        command: 'webBrainBridgeTestResult',
+                        result
+                    });
+                } catch (e: any) {
+                    postMessage({
+                        command: 'webBrainBridgeTestResult',
+                        result: {
+                            success: false,
+                            message: `Error launching browser: ${e?.message || e}`,
+                            tabs: []
+                        }
+                    });
+                }
                 break;
             }
 

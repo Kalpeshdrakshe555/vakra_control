@@ -42,7 +42,7 @@ export class PromptClassifier {
 
         const allFuncs = tools[0].functionDeclarations;
         // Core editing and planner tools are ALWAYS essential for autonomous multi-step reasoning
-        const ALWAYS_ALLOWED = ['plan_set', 'plan_done', 'plan_update', 'list_directory_tree', 'read_multiple_files', 'write_file', 'edit_file', 'replace_symbol'];
+        const ALWAYS_ALLOWED = ['plan_set', 'plan_done', 'plan_update', 'list_directory_tree', 'read_multiple_files', 'write_file', 'edit_file', 'replace_symbol', 'consult_web_brain'];
 
         let categoryAllowed: string[] = [];
         

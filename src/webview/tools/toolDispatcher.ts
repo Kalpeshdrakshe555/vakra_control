@@ -11,6 +11,7 @@ import { DependencyGraph } from '../../utils/dependencyGraph';
 import { extractBrandDNA, orchestrateAssets, DesignSemantics } from '../../utils/designBrain';
 import { LivingIndex } from '../../indexer/livingIndex';
 import { executeDeepResearch, searchWebQuick, searchWebQuickDetailed } from '../../tools/researchDistiller';
+import { UnifiedWebSearch } from '../../tools/unifiedWebSearch';
 import { SkillsManager } from '../../features/skillsManager';
 
 export interface ToolExecutionContext {
@@ -25,6 +26,7 @@ export interface ToolExecutionContext {
     currentTaskState?: any;
     ragEngine?: any;
     recordFileBackup?: (filepath: string, oldContent: string | null) => void;
+    config?: any;
 }
 
 export class ToolDispatcher {
@@ -32,6 +34,8 @@ export class ToolDispatcher {
     private static lastReadFiles: Set<string> = new Set<string>();
     private static lastFailedCommand: string | null = null;
     private static filesModifiedSinceLastCommand: boolean = false;
+    private static lastWebBrainPrompt: string = '';
+    private static webBrainCallCountWithoutAction: number = 0;
 
     public static async dispatch(functionCall: any, ctx: ToolExecutionContext): Promise<any> {
         if (ctx.signal?.aborted) {
@@ -157,6 +161,7 @@ export class ToolDispatcher {
         if (name === 'write_file') {
             this.consecutiveReadCount = 0;
             this.lastReadFiles.clear();
+            this.webBrainCallCountWithoutAction = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
 
@@ -243,6 +248,7 @@ export class ToolDispatcher {
         if (name === 'edit_file') {
             this.consecutiveReadCount = 0;
             this.lastReadFiles.clear();
+            this.webBrainCallCountWithoutAction = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
 
@@ -314,6 +320,7 @@ export class ToolDispatcher {
 
         if (name === 'execute_terminal_command') {
             this.consecutiveReadCount = 0;
+            this.webBrainCallCountWithoutAction = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { command } = args;
             if (!command) return "Error: command is required.";
@@ -465,6 +472,10 @@ export class ToolDispatcher {
             return await ToolRegistry.executeTool('list_directory_tree', JSON.stringify(args), workspaceRoot);
         }
 
+        /* ========================================================================= */
+        /* [VERSION 1 - LEGACY DISPATCHER FOR search_web & research_web_docs - PRESERVED FOR ROLLBACK]
+        // To rollback to Version 1 legacy tools, simply uncomment the block below and comment out Version 2.
+        /*
         if (name === 'search_web') {
             const query = args.query || args.prompt || '';
             if (!query) return "Error: 'query' parameter is required for search_web.";
@@ -562,7 +573,254 @@ ${searchRes.text}
                 return `Web research failed: ${err.message}`;
             }
         }
+        */
+        /* ========================================================================= */
+
+        /* ========================================================================= */
+        /* [VERSION 2 - UNIFIED WEB SEARCH (5K CHUNK STREAMING & AUTO-PAGINATION)] */
+        /* Both search_web and research_web_docs route to this single unified engine */
+        /* ========================================================================= */
+        if (name === 'search_web' || name === 'research_web_docs') {
+            const query = args.query || args.prompt || '';
+            const urls = Array.isArray(args.urls) ? args.urls : [];
+            const offset = typeof args.offset === 'number' ? args.offset : 0;
+            const chunkSize = typeof args.chunk_size === 'number' ? args.chunk_size : 5000;
+
+            if (!query && urls.length === 0) {
+                return "Error: 'query' or 'urls' parameter is required for web search.";
+            }
+
+            postMessage({
+                command: 'statusUpdate',
+                text: offset > 0
+                    ? `📖 Streaming next 5k doc slice (Offset: ${offset})...`
+                    : `🌐 Unified Web Search (5k/site extraction): "${query}"...`
+            });
+
+            try {
+                const searchRes = await UnifiedWebSearch.execute({
+                    query,
+                    urls,
+                    offset,
+                    chunk_size: chunkSize
+                }, workspaceRoot);
+
+                const titleText = offset > 0
+                    ? `Doc Slice (Offset ${offset}): ${query}`
+                    : `Web Search: ${query}`;
+
+                postMessage({
+                    command: 'toolCallEvent',
+                    tool: 'search_web',
+                    title: titleText,
+                    data: {
+                        query,
+                        sources: searchRes.sources,
+                        offset: searchRes.offset,
+                        isCached: searchRes.isCached
+                    }
+                });
+
+                return searchRes.text;
+            } catch (err: any) {
+                return `Web search failed: ${err?.message || err}`;
+            }
+        }
+
+        if (name === 'consult_web_brain') {
+            const prompt = (args.prompt || args.query || args.message || '').trim();
+            if (!prompt) return "Error: 'prompt' parameter is required to consult the web brain.";
+
+            // Normalize prompt for duplicate loop prevention
+            const normPrompt = prompt.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+            const normLast = this.lastWebBrainPrompt.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+
+            const isDuplicate = normPrompt.length > 10 && (normPrompt === normLast || normPrompt.startsWith(normLast) || normLast.startsWith(normPrompt));
+
+            if (isDuplicate && this.webBrainCallCountWithoutAction > 0) {
+                return `[REPEATED WEB BRAIN CONSULTATION BLOCKED]:
+You have already received the complete guidance and code from Web Brain for this request in the previous turn.
+Do NOT send duplicate requests to Web Brain!
+You must now execute the provided steps immediately:
+1. Call 'write_file' for EVERY file that Web Brain instructed to create or update.
+2. Call 'execute_terminal_command' for any shell/setup commands provided.
+Proceed immediately to file creation and code implementation.`;
+            }
+
+            if (this.webBrainCallCountWithoutAction >= 2) {
+                return `[ACTION REQUIRED BEFORE NEXT WEB BRAIN CONSULTATION]:
+Web Brain has already given you actionable instructions. You have queried Web Brain twice consecutively without creating files or running commands.
+You MUST write the planned files using 'write_file' or execute terminal commands using 'execute_terminal_command' before consulting Web Brain again.`;
+            }
+
+            const provider = ctx.config?.webBrainBridge?.provider?.toUpperCase() || 'GEMINI';
+            postMessage({
+                command: 'statusUpdate',
+                text: `🌐 Consulting ${provider} Web in Chrome...`
+            });
+
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'consult_web_brain',
+                title: `Consulting ${provider} Web`,
+                data: { prompt }
+            });
+
+            try {
+                // Auto-enrich prompt with Windows PowerShell environment & micro-step rules
+                let finalPromptToSend = prompt;
+                if (!prompt.includes('[ENVIRONMENT & EXECUTION PROTOCOL')) {
+                    const wsName = workspaceRoot ? path.basename(workspaceRoot) : 'workspace';
+                    finalPromptToSend = `[ENVIRONMENT & EXECUTION PROTOCOL FOR GEMINI]:
+- Operating System: Windows (PowerShell)
+- Working Directory: Workspace Root ('${wsName}').
+- PowerShell Rules: NEVER chain commands with '&&'. Output each command cleanly. Never use standalone 'cd <dir>'.
+- MICRO-STEP DISCIPLINE: Provide STRICTLY ONE single step at a time!
+  * If providing commands: provide ONLY the commands for this single step.
+  * If providing code: provide ONLY ONE file at a time so the local agent can write it before proceeding.
+  * Clearly specify what the next step will be.
+
+[CURRENT REQUEST]:
+${prompt}`;
+                }
+                const answer = await bridge.sendWebPromptAndGetResponse(finalPromptToSend, undefined, ctx.signal);
+
+                this.lastWebBrainPrompt = prompt;
+                this.webBrainCallCountWithoutAction++;
+
+                postMessage({
+                    command: 'statusUpdate',
+                    text: `📥 Received response from ${provider} Web.`
+                });
+
+                return ToolDispatcher.formatWebBrainGuidance(answer);
+            } catch (err: any) {
+                return `Failed to consult Web Brain: ${err?.message || err}`;
+            }
+        }
 
         return `Tool '${name}' executed via fallback.`;
+    }
+
+    private static extractWebBrainActionItems(rawText: string): { files: string[]; commands: string[] } {
+        const files: Set<string> = new Set();
+        const commands: Set<string> = new Set();
+
+        const codeBlockRegex = /```([a-zA-Z0-9_\-\.\/\\:]*)\r?\n([\s\S]*?)```/g;
+        let match: RegExpExecArray | null;
+
+        while ((match = codeBlockRegex.exec(rawText)) !== null) {
+            const headerTag = (match[1] || '').trim();
+            const codeContent = match[2];
+            const matchStartIndex = match.index;
+
+            let detectedFile: string | null = null;
+
+            if (headerTag.includes(':')) {
+                const part = headerTag.split(':')[1]?.trim();
+                if (part && /\.[a-zA-Z0-9]{1,8}$/.test(part)) {
+                    detectedFile = part.replace(/["']/g, '');
+                }
+            } else if (/file=["']?([^"'\s]+)["']?/i.test(headerTag)) {
+                const m = headerTag.match(/file=["']?([^"'\s]+)["']?/i);
+                if (m && m[1]) detectedFile = m[1];
+            } else {
+                const parts = headerTag.split(/\s+/);
+                if (parts.length > 1 && /\.[a-zA-Z0-9]{1,8}$/.test(parts[1])) {
+                    detectedFile = parts[1];
+                }
+            }
+
+            if (!detectedFile) {
+                const codeLines = codeContent.slice(0, 300).split(/\r?\n/).slice(0, 3);
+                for (const cl of codeLines) {
+                    const commentMatch = cl.match(/(?:\/\/|\/\*|#|<!--)\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]{1,8})(?:\s*\*\/|-->)?/);
+                    if (commentMatch && commentMatch[1] && !commentMatch[1].startsWith('http')) {
+                        const candidate = commentMatch[1].trim();
+                        if (candidate.includes('/') || candidate.includes('\\') || candidate.includes('.')) {
+                            detectedFile = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!detectedFile) {
+                const precedingText = rawText.slice(Math.max(0, matchStartIndex - 300), matchStartIndex);
+                const precedingLines = precedingText.split(/\r?\n/).filter(l => l.trim().length > 0);
+                const lastLine = precedingLines[precedingLines.length - 1] || '';
+                const secondLastLine = precedingLines[precedingLines.length - 2] || '';
+
+                for (const pl of [lastLine, secondLastLine]) {
+                    const preMatch = pl.match(/(?:file|path|create|update)?[:\s*#`]*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]{1,8})[`*:]*/i);
+                    if (preMatch && preMatch[1] && !preMatch[1].startsWith('http') && !preMatch[1].startsWith('www')) {
+                        const cand = preMatch[1].trim();
+                        if ((cand.includes('/') || cand.includes('\\') || cand.includes('.')) && !cand.endsWith('.com') && !cand.endsWith('.org')) {
+                            detectedFile = cand;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            const isShellBlock = /^(bash|sh|zsh|shell|cmd|powershell)$/i.test(headerTag) ||
+                /^\s*(npm|pnpm|yarn|npx|pip|python|django-admin|git|cd)\b/m.test(codeContent.trim());
+
+            if (isShellBlock && !detectedFile) {
+                const cmdLines = codeContent.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+                for (const cl of cmdLines) {
+                    if (cl.length > 2 && cl.length < 200) {
+                        commands.add(cl.replace(/^[\$#>]\s*/, ''));
+                    }
+                }
+            } else if (detectedFile) {
+                const cleanPath = detectedFile.replace(/[`"'()\[\]]/g, '').trim();
+                if (cleanPath && !cleanPath.endsWith('.md') && !cleanPath.endsWith('.png') && !cleanPath.endsWith('.jpg')) {
+                    files.add(cleanPath);
+                }
+            }
+        }
+
+        return {
+            files: Array.from(files),
+            commands: Array.from(commands)
+        };
+    }
+
+    private static formatWebBrainGuidance(rawAnswer: string): string {
+        const extracted = ToolDispatcher.extractWebBrainActionItems(rawAnswer);
+        if (extracted.files.length === 0 && extracted.commands.length === 0) {
+            return rawAnswer;
+        }
+
+        const fileList = extracted.files.length > 0
+            ? extracted.files.map((f, i) => `  ${i + 1}. \`write_file\` -> "${f}"`).join('\n')
+            : '  (No new code files detected)';
+
+        const cmdList = extracted.commands.length > 0
+            ? extracted.commands.slice(0, 8).map((c, i) => `  ${i + 1}. \`execute_terminal_command\` -> "${c}"`).join('\n')
+            : '  (No terminal commands detected)';
+
+        const banner = `[WEB BRAIN ACTION CHECKLIST - MANDATORY EXECUTION PROTOCOL]
+================================================================================
+⚠️ CRITICAL INSTRUCTION FOR AUTONOMOUS AGENT:
+Web Brain has provided the complete code and instructions below.
+You are strictly FORBIDDEN from stopping, calling finish prematurely, or re-querying Web Brain until EVERY file listed below is written to disk!
+
+📋 REQUIRED FILES TO CREATE / UPDATE:
+${fileList}
+
+💻 REQUIRED COMMANDS TO EXECUTE:
+${cmdList}
+
+⚡ EXECUTION RULES:
+1. Call 'write_file' for each file above sequentially. Copy the FULL implementation from the response below.
+2. DO NOT skip any file. DO NOT insert placeholder comments like '// ... rest of code'.
+3. DO NOT call 'consult_web_brain' again until all files above are created and all commands run.
+================================================================================
+
+`;
+
+        return banner + rawAnswer;
     }
 }

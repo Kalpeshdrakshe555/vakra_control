@@ -101,8 +101,8 @@ TOOLS:
 - write_file(filepath, content)
 - edit_file(filepath, old_text, new_text)
 - execute_terminal_command(command)
-- search_web(query)
-- research_web_docs(query, urls[])
+- search_web(query, offset?, urls?) - Continuous 5k-chunk web extraction from top 2 sites. Use offset to stream deeper slices (e.g. 5000, 10000).
+- consult_web_brain(prompt) - Consults Gemini/ChatGPT Web in the browser like a human pair programmer for code, steps, and troubleshooting.
 - finish(summary)`;
 
     static buildHead(): string {
@@ -184,7 +184,19 @@ You are operating as a Senior Systems Architect:
 
             if (taskCategory === 'ui') parts.push(PromptBuilder.DESIGN_MODULE);
 
-            if (structuralRepoMap?.trim()) parts.push(`[REPO MAP]\n${structuralRepoMap.trim()}`);
+            if (config?.webBrainBridge?.enabled) {
+                const providerName = config.webBrainBridge.provider?.toUpperCase() || 'GEMINI';
+                parts.push(`[BROWSER AI EXPERT: ${providerName} WEB PAIR-PROGRAMMER]
+You have access to the 'consult_web_brain(prompt)' tool connected to ${providerName} Web in Chrome.
+CRITICAL RULES FOR CONSULTING WEB BRAIN:
+1. STRICT ONE-SHOT CONSULTATION PER STEP: Never send duplicate or repeated prompts to 'consult_web_brain'. Once Web Brain gives you code or steps, DO NOT query it again until you have fully applied everything it provided.
+2. COMPLETE IMPLEMENTATION OF ALL FILES (MANDATORY): When Web Brain provides code for multiple files, you MUST sequentially call 'write_file' for EVERY SINGLE file provided!
+   - Write the FULL, complete code provided by Web Brain. Never omit code, functions, or use placeholder comments.
+   - Do NOT stop after writing only 1 or 2 files. Keep calling 'write_file' turn-by-turn until ALL files in Web Brain's response are written to disk.
+3. EXECUTE COMMANDS: Run setup and package install commands with 'execute_terminal_command'.
+4. FOLLOW-UP: Only call 'consult_web_brain' again after all current files and commands are completed, or if a terminal verification command produces an error you need Web Brain to diagnose.
+5. FINISH: When all components/files are written and verified, call 'finish'.`);
+            }
 
             basePrefix = parts.length ? '\n\n' + parts.join('\n\n') : '';
             if (PromptBuilder.prefixCache.size > 8) PromptBuilder.prefixCache.clear();
@@ -353,20 +365,20 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         const W = PromptBuilder.WRITE;
         switch (task.phase) {
             case 'audit':
-                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web'];
+                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web', 'consult_web_brain'];
             case 'plan':
-                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web'];
+                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web', 'consult_web_brain'];
             case 'execute':
                 return [
                     ...R, ...W,
                     'execute_terminal_command',
-                    'finish', 'research_web_docs', 'search_web',
+                    'finish', 'research_web_docs', 'search_web', 'consult_web_brain',
                     ...(hasUiTask ? ['generate_ui_blueprint'] : [])
                 ];
             case 'verify':
                 return [
                     ...R, 'execute_terminal_command',
-                    ...W, 'finish', 'research_web_docs', 'search_web'
+                    ...W, 'finish', 'research_web_docs', 'search_web', 'consult_web_brain'
                 ];
             case 'done':
                 return ['finish'];

@@ -247,6 +247,14 @@ export interface VoiceConfig {
     wsGatewayUrl?: string;
 }
 
+export interface WebBrainBridgeConfig {
+    enabled?: boolean;
+    provider?: 'chatgpt' | 'gemini';
+    cdpPort?: number;
+    activeSessionId?: string;
+    autoEscalateOnError?: boolean;
+}
+
 export interface AgentConfig {
     // Legacy fields for backward compatibility
     providers?: {
@@ -259,7 +267,7 @@ export interface AgentConfig {
     mainBrain?: BrainConfig;
 
     temperature?: number; // 0.0 - 1.0 (default 0.4)
-    maxAutonomousToolSteps?: number; // 5 - 100 (default 30)
+    maxAutonomousToolSteps?: number; // 5 - 500 (default 50)
 
     contextLimits: { 
         maxTokens?: number; 
@@ -269,6 +277,7 @@ export interface AgentConfig {
     };
     systemInstructions: string;
     voice?: VoiceConfig;
+    webBrainBridge?: WebBrainBridgeConfig;
 }
 
 /**

@@ -267,29 +267,38 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const maxToolSteps = config?.maxAutonomousToolSteps || 40;
 
             const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-            let mainClient;
-
+            // 1. Initialize Main Brain Model (Local Ollama, Groq, Apinex, OpenAI, or Gemini Cloud)
             const mainBrain = config?.mainBrain;
             const providerType = mainBrain?.providerType || 'cloud';
             const customEndpoint = mainBrain?.endpoint?.trim();
             const keyStr = mainBrain?.apiKey?.trim() || keys[0]?.trim() || '';
 
+            let mainBrainClient;
             if (providerType === 'apinex') {
                 const ep = customEndpoint || 'https://api.apinex.bond/v1';
-                mainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', ep, keyStr);
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', ep, keyStr);
             } else if (providerType === 'openai') {
                 const ep = customEndpoint || 'https://api.openai.com/v1';
-                mainClient = new LocalOllamaClient(mainBrain?.model || 'gpt-4o', ep, keyStr);
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'gpt-4o', ep, keyStr);
             } else if (customEndpoint && customEndpoint !== 'http://127.0.0.1:11434' && customEndpoint !== 'http://localhost:11434') {
-                mainClient = new LocalOllamaClient(mainBrain?.model || model || 'deepseek-chat', customEndpoint, keyStr);
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || model || 'deepseek-chat', customEndpoint, keyStr);
             } else if (providerType === 'local') {
-                mainClient = new LocalOllamaClient(mainBrain?.model || 'llama3', mainBrain?.endpoint || 'http://127.0.0.1:11434', keyStr);
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'llama3', mainBrain?.endpoint || 'http://127.0.0.1:11434', keyStr);
             } else {
-                if (keyStr.startsWith('sk-apx')) mainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', 'https://api.apinex.bond/v1', keyStr);
-                else if (keyStr.startsWith('gsk_')) mainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
-                else if (keyStr.startsWith('sk-or-')) mainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
-                else if (keyStr.startsWith('sk-')) mainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
-                else mainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
+                if (keyStr.startsWith('sk-apx')) mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', 'https://api.apinex.bond/v1', keyStr);
+                else if (keyStr.startsWith('gsk_')) mainBrainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
+                else if (keyStr.startsWith('sk-or-')) mainBrainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
+                else if (keyStr.startsWith('sk-')) mainBrainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
+                else mainBrainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
+            }
+
+            // 2. Main Brain is ALWAYS the primary orchestrating model (No middle layers/interception!)
+            const mainClient = mainBrainClient;
+            if (config?.webBrainBridge?.enabled) {
+                this.postMessageToWebview({
+                    command: 'statusUpdate',
+                    text: `🌐 Web Brain Tool Ready: ${config.webBrainBridge.provider?.toUpperCase() || 'GEMINI'} Web available via consult_web_brain`
+                });
             }
 
             if (mainClient) {
@@ -373,11 +382,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         },
                         {
                             name: "search_web",
-                            description: "Searches the live web for quick answers, sports scores, documentation snippets, and real-time facts.",
+                            description: "Searches the live web and scrapes top 2 authoritative websites (5,000 chars each). Inspect the returned content; if you need more depth, pass offset (e.g. offset=5000, 10000) to stream the next 5k chunk continuously without truncation.",
                             parameters: {
                                 type: "object",
                                 properties: {
-                                    query: { type: "string", description: "Search query" }
+                                    query: { type: "string", description: "Search query or topic" },
+                                    offset: { type: "number", description: "Character offset to read next 5k slice (e.g. 0, 5000, 10000). Default is 0." },
+                                    urls: { type: "array", items: { type: "string" }, description: "Optional specific URLs to scrape directly (max 2 authoritative sources)" }
                                 },
                                 required: ["query"]
                             }
@@ -455,6 +466,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             ];
 
+            if (config?.webBrainBridge?.enabled) {
+                const bridgeProvider = config.webBrainBridge.provider?.toUpperCase() || 'GEMINI';
+                tools[0].functionDeclarations.push({
+                    name: "consult_web_brain",
+                    description: `Consults ${bridgeProvider} Web in your running Chrome browser. Ask it for step-by-step guidance, code, architecture, terminal commands, or error debugging. The browser tab maintains the conversation context turn-by-turn just like a human chatting with ${bridgeProvider}. Use its response to execute terminal commands and write files.`,
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            prompt: { type: "string", description: "The exact prompt, instruction, or follow-up question to send to the browser AI" }
+                        },
+                        required: ["prompt"]
+                    }
+                });
+            }
+
             const turnExecutedToolCards: Array<{ tool: string; title: string; data: any }> = [];
 
             let isInsideThink = false;
@@ -480,6 +506,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     toolStatus = `🌐 Searching web: "${toolArgs.query || ''}"`;
                 } else if (functionCall.name === 'run_in_terminal') {
                     toolStatus = `💻 Running: ${toolArgs.command || ''}`;
+                } else if (functionCall.name === 'consult_web_brain') {
+                    toolStatus = `🌐 Consulting ${config?.webBrainBridge?.provider?.toUpperCase() || 'GEMINI'} Web...`;
                 }
                 this.postMessageToWebview({
                     command: 'statusUpdate',
@@ -488,6 +516,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
                 return await ToolDispatcher.dispatch(functionCall, {
                     workspaceRoot: workspaceRoot || '',
+                    config: config,
                     postMessage: (msg) => {
                         if (msg.command === 'toolCallEvent') {
                             this.currentTurnToolCalls.push({
@@ -656,6 +685,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         let contextSources: ContextSource[] = [];
 
         if (workspaceRoot) {
+            // Auto-ground model with PLAN.md so it never loses track of its current step
+            const planCandidates = [
+                path.join(workspaceRoot, 'PLAN.md'),
+                path.join(workspaceRoot, '.ultra-light-ai', 'PLAN.md'),
+                path.join(workspaceRoot, 'plan.md')
+            ];
+            for (const p of planCandidates) {
+                if (fs.existsSync(p)) {
+                    try {
+                        const planContent = fs.readFileSync(p, 'utf8').trim();
+                        if (planContent) {
+                            contextSources.push({
+                                name: 'Active Project Plan (PLAN.md)',
+                                content: `[CURRENT WORKSPACE PLAN]\n${planContent}\n\n[MANDATORY EXECUTION DIRECTIVE]:\n1. Find the FIRST unchecked step (- [ ]) in this plan.\n2. Execute ONLY that step right now.\n3. After completing it, mark it (- [x]) in PLAN.md using edit_file.`,
+                                priority: 15
+                            });
+                            break;
+                        }
+                    } catch {}
+                }
+            }
+
             try {
                 const activeSkill = SkillsManager.getMatchingSkillInstructions(text, workspaceRoot);
                 if (activeSkill) {

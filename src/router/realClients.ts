@@ -23,7 +23,8 @@ const KNOWN_TOOLS_LIST = [
     'get_symbol_outline',
     'check_localhost_health',
     'update_architecture_context',
-    'generate_ui_blueprint'
+    'generate_ui_blueprint',
+    'consult_web_brain'
 ];
 const KNOWN_TOOLS_REGEX_STR = KNOWN_TOOLS_LIST.join('|');
 
@@ -123,9 +124,15 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
     // 5. search_web signature
     if (obj.query || obj.search_query || obj.search) {
         const q = obj.query || obj.search_query || obj.search;
+        const parsedOffset = typeof obj.offset === 'number' ? obj.offset : (obj.offset !== undefined ? Number(obj.offset) || 0 : undefined);
+        const parsedUrls = Array.isArray(obj.urls) ? obj.urls : (obj.url ? [String(obj.url)] : undefined);
         return {
             name: 'search_web',
-            args: { query: String(q) }
+            args: {
+                query: String(q),
+                ...(parsedOffset !== undefined ? { offset: parsedOffset } : {}),
+                ...(parsedUrls ? { urls: parsedUrls } : {})
+            }
         };
     }
 
@@ -205,7 +212,7 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
     return null;
 }
 
-function extractTextToolCalls(text: string): Array<{ name: string; args: any; raw: string }> {
+export function extractTextToolCalls(text: string): Array<{ name: string; args: any; raw: string }> {
     const results: Array<{ name: string; args: any; raw: string }> = [];
     if (!text || typeof text !== 'string') return results;
 
@@ -1058,6 +1065,14 @@ export class LocalOllamaClient implements IEngine {
                 stream: stream,
                 temperature: this.temperature
             };
+
+            // Allocate full 32K context window for Ollama so 4B models never suffer silent context truncation
+            if (isOllama) {
+                requestBody.options = {
+                    num_ctx: 32768,
+                    temperature: this.temperature
+                };
+            }
 
             // Only add tools on non-streaming or tool-loop iterations
             if (openAITools && openAITools.length > 0) {

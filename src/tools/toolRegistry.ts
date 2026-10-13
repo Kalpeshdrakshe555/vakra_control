@@ -44,20 +44,40 @@ export class ToolRegistry {
             }
         });
 
-        // 0. research_web_docs
+        // =========================================================================
+        // [VERSION 1 - LEGACY TOOL: research_web_docs - PRESERVED FOR ROLLBACK]
+        // =========================================================================
         this.registerTool({
             name: 'research_web_docs',
-            description: 'Autonomous Sub-Agent: Researches web documentation, saves clean markdown under .ultra-light-ai/research/, and returns an executive summary.',
+            description: 'Legacy web documentation researcher (Version 1).',
             parameters: '{"query": "string", "urls": ["url1", "url2"]}',
             execute: async (argsStr: string, workspaceRoot: string) => {
                 try {
                     const parsed = JSON.parse(argsStr || '{}');
-                    const query = parsed.query || 'Documentation Research';
-                    const urls = parsed.urls || [];
-                    const { researchWebDocs } = require('./scraper');
-                    return await researchWebDocs(query, urls, workspaceRoot);
+                    const { UnifiedWebSearch } = require('./unifiedWebSearch');
+                    const res = await UnifiedWebSearch.execute(parsed, workspaceRoot);
+                    return res.text;
                 } catch (e: any) {
-                    return `Research sub-agent error: ${e?.message || e}`;
+                    return `Research error: ${e?.message || e}`;
+                }
+            }
+        });
+
+        // =========================================================================
+        // [VERSION 2 - UNIFIED WEB SEARCH: 5K CHUNK STREAMING & AUTO-PAGINATION]
+        // =========================================================================
+        this.registerTool({
+            name: 'search_web',
+            description: 'Searches live web and scrapes top 2 authoritative websites (5,000 chars each). Use offset to read next 5k slice.',
+            parameters: '{"query": "string", "offset": 0, "urls": ["url1", "url2"]}',
+            execute: async (argsStr: string, workspaceRoot: string) => {
+                try {
+                    const parsed = JSON.parse(argsStr || '{}');
+                    const { UnifiedWebSearch } = require('./unifiedWebSearch');
+                    const res = await UnifiedWebSearch.execute(parsed, workspaceRoot);
+                    return res.text;
+                } catch (e: any) {
+                    return `Web search error: ${e?.message || e}`;
                 }
             }
         });

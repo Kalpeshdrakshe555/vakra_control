@@ -1557,11 +1557,12 @@
                 </div>
 
                 <!-- Row 2: Mode Selector & Status -->
-                <div class="bar-row-sub">
+                <div class="bar-row-sub" style="display:flex;align-items:center;gap:6px;margin-top:4px">
                     <div class="seg" id="mode-seg" role="tablist" aria-label="Session mode" style="width:100%;display:flex">
                         <button type="button" data-mode="chat" class="on" style="flex:1;text-align:center">Chat</button>
                         <button type="button" data-mode="architect" style="flex:1;text-align:center">Architect</button>
                     </div>
+                    <button id="web-brain-quick-toggle" type="button" class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-slate-700 bg-slate-900/60 text-slate-400 transition-all cursor-pointer hover:border-slate-500 shrink-0" title="Quick Toggle Web Brain (Gemini/ChatGPT Web in Chrome)"><span>🌐</span><span id="web-brain-toggle-label">Web Brain: OFF</span></button>
                     <select id="mode-select" class="hidden">
                         <option value="chat">💬 Chat</option>
                         <option value="architect">🏢 Architect</option>
@@ -1716,7 +1717,7 @@
                 <div class="space-y-1.5">
                     <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase"
                         title="Maximum sequential tool calls the model can execute per turn before pausing (5 - 100)">Max Steps / Turn</label>
-                    <input type="number" id="setting-maxToolSteps" min="5" max="100" placeholder="e.g. 30"
+                    <input type="number" id="setting-maxToolSteps" min="5" max="500" placeholder="e.g. 50"
                         class="w-full bg-white/5 border border-white/10 hover:border-cyber-neonCyan/50 focus:border-cyber-neonCyan focus:bg-white/10 text-white rounded-lg px-2.5 py-2 outline-none transition-all duration-200 shadow-sm font-mono placeholder:text-slate-600 text-xs">
                 </div>
             </div>
@@ -1789,6 +1790,52 @@
                         <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">WebSocket Gateway URL (Optional Section 5 Server)</label>
                         <input type="text" id="setting-voice-wsGateway" placeholder="ws://localhost:8080" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
                     </div>
+                </div>
+            </div>
+
+            <!-- 🌐 Web Brain Bridge (Browser Automation) -->
+            <div class="p-3 bg-black/30 border border-cyan-500/30 rounded-xl space-y-2.5 mt-4">
+                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-1.5">
+                    <h3 class="text-cyan-300 text-[10px] uppercase font-bold tracking-widest flex items-center gap-1.5 font-mono">
+                        <span>🌐</span> Web Brain Bridge (Browser Automation)
+                    </h3>
+                    <span id="web-brain-status-badge" class="text-[9px] font-mono text-cyan-300 bg-cyan-950/60 border border-cyan-500/40 px-2 py-0.5 rounded">CDP Session</span>
+                </div>
+                <p class="text-[10px] text-slate-400 leading-relaxed font-sans">
+                    Connects directly to your human-logged-in ChatGPT or Gemini web session via Chrome Remote Debugging. Zero Cloudflare blocks, full single-session continuity, and unlimited free frontier reasoning.
+                </p>
+                <div class="space-y-2">
+                    <label class="flex items-center gap-2 cursor-pointer hover:text-cyan-400 transition-colors">
+                        <input type="checkbox" id="setting-webBrain-enabled" class="accent-cyan-400 w-3.5 h-3.5 cursor-pointer">
+                        <span class="text-slate-200 font-mono tracking-wide text-[10.5px] font-bold uppercase">Enable Web Brain Bridge (Use ChatGPT / Gemini Web)</span>
+                    </label>
+
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="space-y-1">
+                            <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Provider</label>
+                            <select id="setting-webBrain-provider" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                                <option value="chatgpt">ChatGPT (chatgpt.com)</option>
+                                <option value="gemini">Gemini (gemini.google.com)</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="block text-slate-400 font-mono tracking-wider text-[9px] uppercase">Chrome Debug Port</label>
+                            <input type="number" id="setting-webBrain-port" value="9222" placeholder="9222" class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-2 py-1.5 outline-none text-xs font-mono">
+                        </div>
+                    </div>
+
+                    <div class="pt-1 flex items-center justify-between">
+                        <span class="text-[9.5px] text-slate-500 font-mono">Run: <code class="text-cyan-400 bg-black/40 px-1 py-0.5 rounded">chrome.exe --remote-debugging-port=9222</code></span>
+                        <div class="flex items-center gap-2">
+                            <button type="button" id="launch-cdp-chrome-btn" class="flex items-center gap-1 px-2.5 py-1 rounded bg-gradient-to-r from-cyan-600/40 to-blue-600/40 hover:from-cyan-600/60 hover:to-blue-600/60 border border-cyan-400/50 text-cyan-200 text-[10px] font-mono font-bold cursor-pointer transition-all active:scale-95 shadow-sm">
+                                <span>🚀</span> Auto-Launch Chrome
+                            </button>
+                            <button type="button" id="test-cdp-connection-btn" class="flex items-center gap-1 px-2 py-1 rounded bg-cyan-950/60 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono cursor-pointer transition-all active:scale-95 shadow-sm">
+                                <span>🔌</span> Test Connection
+                            </button>
+                        </div>
+                    </div>
+                    <div id="cdp-test-status" class="hidden text-[10px] font-mono p-1.5 rounded border"></div>
                 </div>
             </div>
 
@@ -2550,7 +2597,15 @@
         let sessionAutoApproveTerminal = false;
 
         // Thinking Budget Popover
-        let currentThinkingBudget = localStorage.getItem('vakra_thinking_budget') || 'mid';
+        // Thinking Budget Popover (Safe LocalStorage fallback)
+        let currentThinkingBudget = 'mid';
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                currentThinkingBudget = window.localStorage.getItem('vakra_thinking_budget') || 'mid';
+            }
+        } catch (_) {
+            currentThinkingBudget = 'mid';
+        }
 
         function updateThinkingBadgeUI() {
             const currentThinkingBadge = document.getElementById('current-thinking-badge');
@@ -2763,9 +2818,40 @@
                 if (wsGatewayEl) wsGatewayEl.value = config.voice.wsGatewayUrl || '';
             }
 
+            if (config.webBrainBridge) {
+                const wbEnabled = document.getElementById('setting-webBrain-enabled');
+                if (wbEnabled) wbEnabled.checked = config.webBrainBridge.enabled === true;
+                const wbProv = document.getElementById('setting-webBrain-provider');
+                if (wbProv) wbProv.value = config.webBrainBridge.provider || 'chatgpt';
+                const wbPort = document.getElementById('setting-webBrain-port');
+                if (wbPort) wbPort.value = config.webBrainBridge.cdpPort || 9222;
+                const wbBadge = document.getElementById('web-brain-status-badge');
+                updateWebBrainQuickToggleUI(config.webBrainBridge.enabled === true);
+                if (wbBadge) {
+                    wbBadge.textContent = config.webBrainBridge.enabled ? 'ACTIVE (CDP)' : 'OFFLINE';
+                    wbBadge.className = config.webBrainBridge.enabled 
+                        ? 'text-[9px] font-mono text-emerald-300 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded font-bold'
+                        : 'text-[9px] font-mono text-slate-400 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded';
+                }
+            }
+
             const currentModel = document.getElementById('main-model')?.value || config.mainBrain?.model || 'gemma-4-31b-it';
             const modelBadge = document.getElementById('active-model-badge');
             if (modelBadge) modelBadge.innerText = currentModel;
+        }
+
+        
+        function updateWebBrainQuickToggleUI(enabled) {
+            const btn = document.getElementById('web-brain-quick-toggle');
+            const label = document.getElementById('web-brain-toggle-label');
+            if (!btn || !label) return;
+            if (enabled) {
+                btn.className = 'flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-cyan-400/60 bg-cyan-950/80 text-cyan-300 font-bold shadow-sm transition-all cursor-pointer hover:bg-cyan-900/60 shrink-0';
+                label.textContent = 'Web Brain: ON';
+            } else {
+                btn.className = 'flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-slate-700 bg-slate-900/60 text-slate-400 transition-all cursor-pointer hover:border-slate-500 shrink-0';
+                label.textContent = 'Web Brain: OFF';
+            }
         }
 
         function checkTokenWarning() {
@@ -3807,6 +3893,21 @@
                     actBar.style.display = 'flex';
                 }
             }
+            else if (message.command === 'webBrainBridgeTestResult') {
+                const res = message.result;
+                const statusEl = document.getElementById('cdp-test-status');
+                if (statusEl) {
+                    statusEl.classList.remove('hidden');
+                    if (res && res.success) {
+                        statusEl.className = 'text-[10px] font-mono p-2 rounded border border-emerald-500/50 bg-emerald-950/40 text-emerald-300';
+                        const tabsList = (res.tabs || []).map(t => '• ' + escapeHtml(t)).join('<br>');
+                        statusEl.innerHTML = '✔ ' + escapeHtml(res.message) + '<br><div class="mt-1 text-[9px] text-slate-300 max-h-24 overflow-y-auto">' + tabsList + '</div>';
+                    } else {
+                        statusEl.className = 'text-[10px] font-mono p-2 rounded border border-red-500/50 bg-red-950/40 text-red-300';
+                        statusEl.innerHTML = '✖ ' + escapeHtml(res ? res.message : 'Connection test failed');
+                    }
+                }
+            }
             else if (message.command === 'rollbackComplete') {
                 setGenerating(false);
                 closeActiveThinking('Rolled back');
@@ -4301,7 +4402,11 @@
                             const budget = opt.getAttribute('data-budget');
                             if (budget) {
                                 currentThinkingBudget = budget;
-                                localStorage.setItem('vakra_thinking_budget', budget);
+                                try {
+                                if (typeof window !== 'undefined' && window.localStorage) {
+                                    window.localStorage.setItem('vakra_thinking_budget', budget);
+                                }
+                            } catch (_) {}
                                 updateThinkingBadgeUI();
                             }
                             thinkingPopover.classList.add('hidden');
@@ -4408,9 +4513,80 @@
                                 whisperApiKey: document.getElementById('setting-voice-whisperApiKey')?.value?.trim() || '',
                                 ttsEndpoint: document.getElementById('setting-voice-ttsEndpoint')?.value?.trim() || '',
                                 wsGatewayUrl: document.getElementById('setting-voice-wsGateway')?.value?.trim() || ''
+                            },
+                            webBrainBridge: {
+                                enabled: !!document.getElementById('setting-webBrain-enabled')?.checked,
+                                provider: document.getElementById('setting-webBrain-provider')?.value || 'chatgpt',
+                                cdpPort: parseInt(document.getElementById('setting-webBrain-port')?.value, 10) || 9222,
+                                autoEscalateOnError: true
                             }
                         };
                         vscode.postMessage({ command: 'saveSettings', config });
+                    });
+                }
+
+                // 🌐 Web Brain Bridge Event Listeners
+                const testCdpBtn = document.getElementById('test-cdp-connection-btn');
+                if (testCdpBtn) {
+                    testCdpBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const portInput = document.getElementById('setting-webBrain-port');
+                        const port = parseInt(portInput ? portInput.value : '9222', 10) || 9222;
+                        const statusEl = document.getElementById('cdp-test-status');
+                        if (statusEl) {
+                            statusEl.classList.remove('hidden');
+                            statusEl.className = 'text-[10px] font-mono p-1.5 rounded border border-cyan-500/40 bg-cyan-950/40 text-cyan-300 animate-pulse';
+                            statusEl.textContent = 'Testing CDP connection on port ' + port + '...';
+                        }
+                        vscode.postMessage({ command: 'testWebBrainBridge', port });
+                    });
+                }
+
+                const launchCdpBtn = document.getElementById('launch-cdp-chrome-btn');
+                if (launchCdpBtn) {
+                    launchCdpBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const portInput = document.getElementById('setting-webBrain-port');
+                        const port = parseInt(portInput ? portInput.value : '9222', 10) || 9222;
+                        const statusEl = document.getElementById('cdp-test-status');
+                        if (statusEl) {
+                            statusEl.classList.remove('hidden');
+                            statusEl.className = 'text-[10px] font-mono p-1.5 rounded border border-cyan-500/40 bg-cyan-950/40 text-cyan-300 animate-pulse';
+                            statusEl.textContent = 'Launching Chrome on port ' + port + '...';
+                        }
+                        const provInput = document.getElementById('setting-webBrain-provider');
+                        const provider = provInput ? provInput.value : 'chatgpt';
+                        vscode.postMessage({ command: 'launchWebBrainBrowser', port, provider });
+                    });
+                }
+
+                
+                const quickWbToggle = document.getElementById('web-brain-quick-toggle');
+                if (quickWbToggle) {
+                    quickWbToggle.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const cb = document.getElementById('setting-webBrain-enabled');
+                        const isNowActive = cb ? !cb.checked : true;
+                        if (cb) {
+                            cb.checked = isNowActive;
+                            cb.dispatchEvent(new Event('change'));
+                        }
+                        updateWebBrainQuickToggleUI(isNowActive);
+                        const saveBtn = document.getElementById('save-settings-btn');
+                        if (saveBtn) saveBtn.click();
+                    });
+                }
+
+                const wbEnabledEl = document.getElementById('setting-webBrain-enabled');
+                if (wbEnabledEl) {
+                    wbEnabledEl.addEventListener('change', (e) => {
+                        const badge = document.getElementById('web-brain-status-badge');
+                        if (badge) {
+                            badge.textContent = e.target.checked ? 'ACTIVE (CDP)' : 'OFFLINE';
+                            badge.className = e.target.checked 
+                                ? 'text-[9px] font-mono text-emerald-300 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded font-bold'
+                                : 'text-[9px] font-mono text-slate-400 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded';
+                        }
                     });
                 }
 

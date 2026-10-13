@@ -71,8 +71,9 @@ export class TerminalCapture {
                 }
             }
 
+            const sanitizedCommand = (os.platform() === 'win32') ? command.replace(/\s+&&\s+/g, '; ') : command;
             try {
-                cp.exec(command, { cwd: effectiveCwd, maxBuffer: 1024 * 1024, timeout: 30000, shell }, (error, stdout, stderr) => {
+                cp.exec(sanitizedCommand, { cwd: effectiveCwd, maxBuffer: 1024 * 1024, timeout: 60000, shell }, (error, stdout, stderr) => {
                     let fullOutput = '';
                     let exitCode = 0;
                     let isError = false;
