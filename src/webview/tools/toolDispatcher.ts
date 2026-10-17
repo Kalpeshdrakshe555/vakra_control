@@ -13,6 +13,13 @@ import { LivingIndex } from '../../indexer/livingIndex';
 import { executeDeepResearch, searchWebQuick, searchWebQuickDetailed } from '../../tools/researchDistiller';
 import { UnifiedWebSearch } from '../../tools/unifiedWebSearch';
 import { SkillsManager } from '../../features/skillsManager';
+import { guardTool } from '../../guards';
+import { validateFile, formatValidationReport } from '../../validators';
+import { redact } from '../../security/secretsFilter';
+import { buildWrapper, parseReply, splitReplyIntoTasks, TaskExecutor } from '../../brain';
+import { getModelProfile } from '../../config/modelProfile';
+import { RuntimePlugins } from '../../plugins/runtimePlugins';
+import { StateLedger } from '../../state/stateLedger';
 
 export interface ToolExecutionContext {
     workspaceRoot: string;
@@ -27,6 +34,7 @@ export interface ToolExecutionContext {
     ragEngine?: any;
     recordFileBackup?: (filepath: string, oldContent: string | null) => void;
     config?: any;
+    userPrompt?: string;
 }
 
 export class ToolDispatcher {
@@ -34,10 +42,17 @@ export class ToolDispatcher {
     private static lastReadFiles: Set<string> = new Set<string>();
     private static lastFailedCommand: string | null = null;
     private static filesModifiedSinceLastCommand: boolean = false;
-    private static lastWebBrainPrompt: string = '';
-    private static webBrainCallCountWithoutAction: number = 0;
 
     public static async dispatch(functionCall: any, ctx: ToolExecutionContext): Promise<any> {
+        const rawResult = await this.internalDispatch(functionCall, ctx);
+        return await RuntimePlugins.afterToolExecute({
+            toolName: functionCall.name,
+            rawOutput: rawResult,
+            workspaceRoot: ctx.workspaceRoot
+        });
+    }
+
+    private static async internalDispatch(functionCall: any, ctx: ToolExecutionContext): Promise<any> {
         if (ctx.signal?.aborted) {
             throw new Error('Operation aborted by user.');
         }
@@ -55,6 +70,192 @@ export class ToolDispatcher {
                 SessionMemory.getInstance(workspaceRoot).recordToolResult('finish', args, summary, true);
             }
             return summary;
+        }
+
+        if (name === 'set_task_plan') {
+            if (!workspaceRoot) return "Error: No workspace open.";
+            const rawSteps = args.steps || args.plan || [];
+            const stepList = (Array.isArray(rawSteps) ? rawSteps : [rawSteps]).filter(Boolean).map((s: any) => typeof s === 'string' ? s.trim() : (s.title || s.step || ''));
+
+            if (stepList.length === 0) {
+                return "Error: 'steps' must be a non-empty array of high-level macro steps (e.g. ['Step 1: Setup Models', 'Step 2: Create Views', 'Step 3: Map URLs']).";
+            }
+
+            const userRequirements = args.user_requirements || args.requirements || ctx.userPrompt || 'Project Goal';
+            const goal = args.goal || userRequirements.split('\n')[0].slice(0, 200);
+
+            if (ctx.taskPlanner) {
+                if (typeof ctx.taskPlanner.syncWithDisk === 'function') {
+                    ctx.taskPlanner.syncWithDisk(workspaceRoot);
+                }
+                if (typeof ctx.taskPlanner.setMacroPlan === 'function') {
+                    try {
+                        ctx.taskPlanner.setMacroPlan(userRequirements, stepList);
+                    } catch (e) {
+                        console.error('Failed to update InMemoryTaskPlanner:', e);
+                    }
+                } else if (typeof ctx.taskPlanner.setPlan === 'function') {
+                    try {
+                        ctx.taskPlanner.setPlan(goal, stepList);
+                    } catch (e) {}
+                }
+            }
+
+            const planSteps = stepList.map((s, idx) => ({
+                id: idx + 1,
+                title: s,
+                done: false
+            }));
+
+            if (ctx.currentTaskState) {
+                ctx.currentTaskState.plan = planSteps;
+                ctx.currentTaskState.phase = 'plan_approval';
+            }
+
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'set_task_plan',
+                title: `High-Level Plan Established (${planSteps.length} Steps)`,
+                data: {
+                    userRequirements,
+                    steps: planSteps.map(p => p.title)
+                }
+            });
+
+            try {
+                StateLedger.sync(workspaceRoot, {
+                    goal: userRequirements,
+                    steps: planSteps.map(p => ({
+                        id: p.id,
+                        title: p.title,
+                        status: 'pending'
+                    })),
+                    latestActionSummary: `Macro plan established with ${planSteps.length} steps. Awaiting user approval.`
+                });
+            } catch (e) {
+                console.error('[StateLedger] Sync error on set_task_plan:', e);
+            }
+
+            const planMarkdown = `# 🎯 User Requirements\n${userRequirements}\n--------------------------------------------------\n` + planSteps.map(p => `[ ] Step ${p.id}: ${p.title}`).join('\n');
+
+            return `[PLAN.MD ESTABLISHED IN WORKSPACE]:\n\n${planMarkdown}\n\n🛑 STOP AND SHOW PLAN TO USER NOW:\nPresent this plan clearly to the user in your response and ask:\n"Maine aapki requirement ke according yeh plan banaya hai. Kya yeh sahi hai ya isme koi changes chahiye?"\n\n⚠️ CRITICAL DIRECTIVE: DO NOT execute any code, file edits, or terminal commands until the user responds and approves this plan! Once the user approves, you will call 'expand_plan_step' to expand Step 1 into detailed micro sub-steps.`;
+        }
+
+        if (name === 'expand_plan_step') {
+            if (!workspaceRoot) return "Error: No workspace open.";
+            const stepId = typeof args.step_id === 'number' ? args.step_id : parseInt(String(args.step_id || '1'), 10) || 1;
+            const rawSubSteps = args.sub_steps || args.steps || [];
+            const subStepList = (Array.isArray(rawSubSteps) ? rawSubSteps : [rawSubSteps]).filter(Boolean).map((s: any) => typeof s === 'string' ? s.trim() : (s.title || s.step || ''));
+
+            if (subStepList.length === 0) {
+                return "Error: 'sub_steps' must be a non-empty array of detailed micro steps (e.g. ['Step 1.1: Create Profile model', 'Step 1.2: Add migrations']).";
+            }
+
+            if (ctx.taskPlanner) {
+                if (typeof ctx.taskPlanner.syncWithDisk === 'function') {
+                    ctx.taskPlanner.syncWithDisk(workspaceRoot);
+                }
+                if (typeof ctx.taskPlanner.expandStep === 'function') {
+                    ctx.taskPlanner.expandStep(stepId, subStepList);
+                }
+            }
+
+            if (ctx.currentTaskState) {
+                ctx.currentTaskState.activeStepId = stepId;
+                ctx.currentTaskState.phase = 'execute';
+            }
+
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'expand_plan_step',
+                title: `Step ${stepId} Expanded (${subStepList.length} Sub-Steps)`,
+                data: { stepId, subSteps: subStepList }
+            });
+
+            const subStepsFormatted = subStepList.map((s, idx) => `      [ ] Step ${stepId}.${idx + 1}: ${s}`).join('\n');
+
+            return `[STEP ${stepId} EXPANDED IN PLAN.MD]:\n${subStepsFormatted}\n\n👉 CURRENT ACTIVE SUB-STEP: Step ${stepId}.1\n\n⚡ MANDATORY SUB-STEP REASONING: Before writing or editing any code, output a 2-3 line [STEP ${stepId}.1 BLUEPRINT] stating:\n1. Target file and exact functions/classes to add or modify\n2. Logic, types, and imports\n3. Verification command\nThen execute Step ${stepId}.1 and immediately call complete_plan_step upon completion.`;
+        }
+
+        if (name === 'complete_plan_step') {
+            if (!workspaceRoot) return "Error: No workspace open.";
+            const rawSubId = args.sub_step_id ?? args.subStepId ?? args.sub_step ?? args.step_id ?? args.stepId ?? args.step ?? args.id ?? args.step_number;
+            const subStepId = rawSubId !== undefined && rawSubId !== null ? String(rawSubId) : undefined;
+            const summary = args.summary || args.title || args.note || args.description || 'Step completed';
+            const rawFiles = args.modified_files || args.files || args.modifiedFiles || args.touched_files;
+            const modifiedFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles.map(String) : [String(rawFiles)]) : undefined;
+            const logicSummary = args.logic_summary || args.logicSummary || args.logic || summary;
+
+            let completionResult: { parentStepDone: boolean; completedTitle: string; nextActive?: string; parentStepId?: number } = {
+                parentStepDone: false,
+                completedTitle: summary
+            };
+
+            if (ctx.taskPlanner) {
+                if (typeof ctx.taskPlanner.syncWithDisk === 'function') {
+                    ctx.taskPlanner.syncWithDisk(workspaceRoot);
+                }
+                if (typeof ctx.taskPlanner.completeSubStep === 'function') {
+                    try {
+                        completionResult = ctx.taskPlanner.completeSubStep(subStepId, summary, modifiedFiles, logicSummary);
+                    } catch (e) {
+                        console.error('Failed to complete sub-step in InMemoryTaskPlanner:', e);
+                    }
+                } else if (typeof ctx.taskPlanner.updatePlan === 'function') {
+                    try {
+                        ctx.taskPlanner.updatePlan({ stepId: subStepId ? parseInt(subStepId, 10) : undefined, status: 'done', note: summary });
+                    } catch (e) {}
+                }
+            }
+
+            const completedTitle = completionResult.completedTitle || summary;
+            SessionMemory.getInstance(workspaceRoot).recordSubTaskDone(completedTitle);
+
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'complete_plan_step',
+                title: completionResult.parentStepDone ? `Finished Step ${completionResult.parentStepId || ''}` : `Done: ${completedTitle}`,
+                data: { completedTitle, summary, parentStepDone: completionResult.parentStepDone }
+            });
+
+            try {
+                StateLedger.sync(workspaceRoot, {
+                    goal: ctx.userPrompt,
+                    latestActionSummary: completionResult.parentStepDone 
+                        ? `Finished Step ${completionResult.parentStepId || ''}: ${completedTitle}`
+                        : `Sub-step completed: ${completedTitle}`
+                });
+            } catch (e) {}
+
+            // CRITICAL USER HANDOFF: When ALL sub-steps of a parent step are completed, STOP AND WAIT FOR USER INPUT!
+            if (completionResult.parentStepDone) {
+                const finishedId = completionResult.parentStepId || 1;
+                const nextStepId = finishedId + 1;
+
+                return `🎉 ALL SUB-STEPS FOR STEP ${finishedId} ARE COMPLETE!\n[x] Step ${finishedId} is now verified and marked complete in PLAN.md.\n\n🛑 STOP AND HANDOFF TO USER:\nOutput a clean, concise summary of what was completed and verified in Step ${finishedId}.\nThen ask the user:\n"Step ${finishedId} successfully complete ho gaya hai aur PLAN.md update ho chuki hai. Kya ab hum Step ${nextStepId} start karein?"\n\n⚠️ DO NOT EXECUTE OR START STEP ${nextStepId} UNTIL THE USER RESPONDS!`;
+            }
+
+            // Otherwise, advance to the next active sub-step within the same parent step
+            const nextActiveSub = completionResult.nextActive || 'Next Sub-Step';
+            return `✅ Sub-step completed: "${completedTitle}" in PLAN.md.\n\n👉 NEXT ACTIVE SUB-STEP: "${nextActiveSub}".\n\n⚡ Formulate your 2-3 line [BLUEPRINT] for ${nextActiveSub}, make the edit, verify, and call complete_plan_step.`;
+        }
+
+        if (name === 'read_state_ledger') {
+            if (!workspaceRoot) return "Error: No workspace open.";
+            const planPath = path.join(workspaceRoot, '.ultra-light-ai', 'PLAN.md');
+            let ledgerContent = '';
+            if (fs.existsSync(planPath)) {
+                ledgerContent = fs.readFileSync(planPath, 'utf8');
+            } else {
+                ledgerContent = StateLedger.read(workspaceRoot);
+            }
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'read_state_ledger',
+                title: 'Consulted Plan & Architecture (PLAN.md)',
+                data: { length: ledgerContent.length }
+            });
+            return ledgerContent;
         }
 
         if (name === 'read_multiple_files') {
@@ -161,7 +362,6 @@ export class ToolDispatcher {
         if (name === 'write_file') {
             this.consecutiveReadCount = 0;
             this.lastReadFiles.clear();
-            this.webBrainCallCountWithoutAction = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
 
@@ -190,7 +390,7 @@ export class ToolDispatcher {
 
             const callId = 'write_' + Date.now();
 
-            const applyWriteToDisk = async () => {
+            const applyWriteToDisk = async (): Promise<string | null> => {
                 const parentDir = path.dirname(fullPath);
                 if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
                 if (fileAlreadyExists) {
@@ -204,21 +404,44 @@ export class ToolDispatcher {
                     const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
                     if (openDoc && openDoc.isDirty) await openDoc.save();
                 } catch {}
+
+                // Execute Runtime Plugin afterFileWrite syntax guard
+                const pluginCheck = await RuntimePlugins.afterFileWrite({
+                    filePath: fullPath,
+                    fileContent: content,
+                    oldContent: fileAlreadyExists ? oldContent : null,
+                    workspaceRoot
+                });
+                if (!pluginCheck.success && pluginCheck.revertRequested) {
+                    return pluginCheck.feedback || 'File syntax error detected. Reverted.';
+                }
+
                 SessionMemory.getInstance(workspaceRoot).recordToolResult('write_file', args, 'File written successfully', true);
                 this.filesModifiedSinceLastCommand = true;
                 LivingIndex.refreshBlueprint(workspaceRoot).catch(() => {});
+                return null;
+            };
+
+            const getValidationSuffix = async (): Promise<string> => {
+                if (workspaceRoot) {
+                    const valResults = await validateFile(fullPath, { workspaceRoot });
+                    return formatValidationReport(fullPath, valResults);
+                }
+                return '';
             };
 
             // If session is already auto-approved, write immediately
             if (ctx.isEditSessionAutoApproved) {
-                await applyWriteToDisk();
+                const writeErr = await applyWriteToDisk();
+                if (writeErr) return writeErr;
                 postMessage({
                     command: 'toolCallEvent',
                     tool: 'write_file',
                     title: fileAlreadyExists ? 'Updated File' : 'Created File',
                     data: { callId, filepath, content, oldContent, length: content.length, isNew: !fileAlreadyExists, isAutoApproved: true }
                 });
-                return `Successfully wrote file: ${filepath} (${content.length} characters).${blastRadiusMsg}`;
+                const valSuffix = await getValidationSuffix();
+                return `Successfully wrote file: ${filepath} (${content.length} characters).${blastRadiusMsg}${valSuffix}`;
             }
 
             // Otherwise, pause and wait for user card approval
@@ -239,8 +462,13 @@ export class ToolDispatcher {
                         resolve(`User rejected write operation for ${filepath}.`);
                         return;
                     }
-                    await applyWriteToDisk();
-                    resolve(`Successfully wrote file: ${filepath} (${content.length} characters).${blastRadiusMsg}`);
+                    const writeErr = await applyWriteToDisk();
+                    if (writeErr) {
+                        resolve(writeErr);
+                        return;
+                    }
+                    const valSuffix = await getValidationSuffix();
+                    resolve(`Successfully wrote file: ${filepath} (${content.length} characters).${blastRadiusMsg}${valSuffix}`);
                 });
             });
         }
@@ -248,7 +476,6 @@ export class ToolDispatcher {
         if (name === 'edit_file') {
             this.consecutiveReadCount = 0;
             this.lastReadFiles.clear();
-            this.webBrainCallCountWithoutAction = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
 
@@ -259,6 +486,10 @@ export class ToolDispatcher {
             const oldText = args.old_text ?? args.oldText;
             const newText = args.new_text ?? args.newText;
 
+            if (typeof oldText !== 'string' || typeof newText !== 'string') {
+                return "Error: Both 'old_text' and 'new_text' strings are required for edit_file.";
+            }
+
             const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
             if (!safeCheck.safe) return `Invalid path: ${filepath}`;
             const fullPath = safeCheck.resolvedPath;
@@ -266,11 +497,56 @@ export class ToolDispatcher {
             if (!fs.existsSync(fullPath)) return `Error: File not found: ${filepath}`;
 
             let fileContent = fs.readFileSync(fullPath, 'utf8');
-            if (!fileContent.includes(oldText)) {
-                return `edit_file failed: old_text snippet was not found in ${filepath}.`;
+
+            // 1. Try exact match
+            let matchedOldText = null;
+            if (fileContent.includes(oldText)) {
+                matchedOldText = oldText;
+            } else {
+                // 2. Try normalized line endings (Windows CRLF vs LF)
+                const normFile = fileContent.replace(/\r\n/g, '\n');
+                const normOld = oldText.replace(/\r\n/g, '\n');
+                if (normFile.includes(normOld)) {
+                    fileContent = normFile;
+                    matchedOldText = normOld;
+                } else {
+                    // 3. Line-by-line trimmed fallback match (ignores trailing spaces / indentation quirks)
+                    const fileLines = fileContent.split(/\r?\n/);
+                    const oldLines = oldText.split(/\r?\n/).map(l => l.trimEnd());
+
+                    if (oldLines.length > 0 && oldLines[0].trim().length > 0) {
+                        let foundIdx = -1;
+                        for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
+                            let match = true;
+                            for (let j = 0; j < oldLines.length; j++) {
+                                if (fileLines[i + j].trimEnd() !== oldLines[j]) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) {
+                                foundIdx = i;
+                                break;
+                            }
+                        }
+
+                        if (foundIdx !== -1) {
+                            fileContent = fileLines.join('\n');
+                            matchedOldText = fileLines.slice(foundIdx, foundIdx + oldLines.length).join('\n');
+                        }
+                    }
+                }
             }
 
-            const newContent = fileContent.replace(oldText, newText);
+            if (!matchedOldText) {
+                // Unblock re-reads so the model is NEVER trapped in a blind loop!
+                this.lastReadFiles.clear();
+                this.consecutiveReadCount = 0;
+                const sampleLines = fileContent.split(/\r?\n/).slice(0, 35).map((l, i) => `${i + 1}: ${l}`).join('\n');
+                return `edit_file failed: old_text snippet was not found in ${filepath}.\n[DIAGNOSTIC]: File has been unlocked. Inspect the exact line content below and provide the matching lines:\n${sampleLines.slice(0, 900)}`;
+            }
+
+            const newContent = fileContent.replace(matchedOldText, newText);
 
             FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
             if (ctx.recordFileBackup) {
@@ -284,6 +560,17 @@ export class ToolDispatcher {
                     await openDoc.save();
                 }
             } catch {}
+
+            // Execute Runtime Plugin afterFileWrite syntax guard
+            const pluginCheck = await RuntimePlugins.afterFileWrite({
+                filePath: fullPath,
+                fileContent: newContent,
+                oldContent: fileContent,
+                workspaceRoot
+            });
+            if (!pluginCheck.success && pluginCheck.revertRequested) {
+                return pluginCheck.feedback || 'File syntax error detected. Reverted.';
+            }
 
             SessionMemory.getInstance(workspaceRoot).recordToolResult('edit_file', args, 'File patch applied successfully', true);
             this.filesModifiedSinceLastCommand = true;
@@ -315,12 +602,17 @@ export class ToolDispatcher {
                 }
             } catch {}
 
-            return `Successfully edited file: ${filepath}.${blastRadiusMsg}`;
+            let valSuffix = '';
+            if (workspaceRoot) {
+                const valResults = await validateFile(fullPath, { workspaceRoot });
+                valSuffix = formatValidationReport(fullPath, valResults);
+            }
+
+            return `Successfully edited file: ${filepath}.${blastRadiusMsg}${valSuffix}`;
         }
 
         if (name === 'execute_terminal_command') {
             this.consecutiveReadCount = 0;
-            this.webBrainCallCountWithoutAction = 0;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { command } = args;
             if (!command) return "Error: command is required.";
@@ -346,7 +638,13 @@ export class ToolDispatcher {
                     data: { command: cmd, explanation, callId: autoCallId, isAutoApproved: true }
                 });
                 const res = await TerminalCapture.runAndCapture(cmd, workspaceRoot);
-                SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', args, res.output || (res.error ? 'Error' : '') || '', res.exitCode === 0);
+                const isSuccess = res.exitCode === 0 && !res.error;
+                if (isSuccess) {
+                    this.lastFailedCommand = null;
+                } else {
+                    this.lastFailedCommand = cmd;
+                }
+                SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', args, res.output || (res.error ? 'Error' : '') || '', isSuccess);
                 postMessage({
                     command: 'terminalCommandCompleted',
                     callId: autoCallId,
@@ -355,7 +653,8 @@ export class ToolDispatcher {
                     output: res.output,
                     commandText: cmd
                 });
-                return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}`;
+                const failureHint = res.error ? '\n\n💡 TIP: If this error is unfamiliar or involves framework/dependency issues, call search_web(query="<framework> <exact error>") to inspect documentation before guessing code edits.' : '';
+                return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}${failureHint}`;
             }
 
             const callId = 'cmd_' + Date.now();
@@ -368,8 +667,15 @@ export class ToolDispatcher {
 
             return await new Promise<string>((resolve) => {
                 ctx.pendingTerminalResolvers.set(callId, (resText) => {
-                    SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', args, resText, !resText.includes('FAILED'));
-                    resolve(resText);
+                    const isSuccess = !resText.includes('FAILED');
+                    if (isSuccess) {
+                        this.lastFailedCommand = null;
+                    } else {
+                        this.lastFailedCommand = cmd;
+                    }
+                    SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', args, resText, isSuccess);
+                    const failureHint = !isSuccess ? '\n\n💡 TIP: If this error is unfamiliar or involves framework/dependency issues, call search_web(query="<framework> <exact error>") to inspect documentation before guessing code edits.' : '';
+                    resolve(resText + failureHint);
                 });
             });
         }
@@ -627,200 +933,6 @@ ${searchRes.text}
             }
         }
 
-        if (name === 'consult_web_brain') {
-            const prompt = (args.prompt || args.query || args.message || '').trim();
-            if (!prompt) return "Error: 'prompt' parameter is required to consult the web brain.";
-
-            // Normalize prompt for duplicate loop prevention
-            const normPrompt = prompt.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-            const normLast = this.lastWebBrainPrompt.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-
-            const isDuplicate = normPrompt.length > 10 && (normPrompt === normLast || normPrompt.startsWith(normLast) || normLast.startsWith(normPrompt));
-
-            if (isDuplicate && this.webBrainCallCountWithoutAction > 0) {
-                return `[REPEATED WEB BRAIN CONSULTATION BLOCKED]:
-You have already received the complete guidance and code from Web Brain for this request in the previous turn.
-Do NOT send duplicate requests to Web Brain!
-You must now execute the provided steps immediately:
-1. Call 'write_file' for EVERY file that Web Brain instructed to create or update.
-2. Call 'execute_terminal_command' for any shell/setup commands provided.
-Proceed immediately to file creation and code implementation.`;
-            }
-
-            if (this.webBrainCallCountWithoutAction >= 2) {
-                return `[ACTION REQUIRED BEFORE NEXT WEB BRAIN CONSULTATION]:
-Web Brain has already given you actionable instructions. You have queried Web Brain twice consecutively without creating files or running commands.
-You MUST write the planned files using 'write_file' or execute terminal commands using 'execute_terminal_command' before consulting Web Brain again.`;
-            }
-
-            const provider = ctx.config?.webBrainBridge?.provider?.toUpperCase() || 'GEMINI';
-            postMessage({
-                command: 'statusUpdate',
-                text: `🌐 Consulting ${provider} Web in Chrome...`
-            });
-
-            postMessage({
-                command: 'toolCallEvent',
-                tool: 'consult_web_brain',
-                title: `Consulting ${provider} Web`,
-                data: { prompt }
-            });
-
-            try {
-                // Auto-enrich prompt with Windows PowerShell environment & micro-step rules
-                let finalPromptToSend = prompt;
-                if (!prompt.includes('[ENVIRONMENT & EXECUTION PROTOCOL')) {
-                    const wsName = workspaceRoot ? path.basename(workspaceRoot) : 'workspace';
-                    finalPromptToSend = `[ENVIRONMENT & EXECUTION PROTOCOL FOR GEMINI]:
-- Operating System: Windows (PowerShell)
-- Working Directory: Workspace Root ('${wsName}').
-- PowerShell Rules: NEVER chain commands with '&&'. Output each command cleanly. Never use standalone 'cd <dir>'.
-- MICRO-STEP DISCIPLINE: Provide STRICTLY ONE single step at a time!
-  * If providing commands: provide ONLY the commands for this single step.
-  * If providing code: provide ONLY ONE file at a time so the local agent can write it before proceeding.
-  * Clearly specify what the next step will be.
-
-[CURRENT REQUEST]:
-${prompt}`;
-                }
-                const answer = await bridge.sendWebPromptAndGetResponse(finalPromptToSend, undefined, ctx.signal);
-
-                this.lastWebBrainPrompt = prompt;
-                this.webBrainCallCountWithoutAction++;
-
-                postMessage({
-                    command: 'statusUpdate',
-                    text: `📥 Received response from ${provider} Web.`
-                });
-
-                return ToolDispatcher.formatWebBrainGuidance(answer);
-            } catch (err: any) {
-                return `Failed to consult Web Brain: ${err?.message || err}`;
-            }
-        }
-
         return `Tool '${name}' executed via fallback.`;
-    }
-
-    private static extractWebBrainActionItems(rawText: string): { files: string[]; commands: string[] } {
-        const files: Set<string> = new Set();
-        const commands: Set<string> = new Set();
-
-        const codeBlockRegex = /```([a-zA-Z0-9_\-\.\/\\:]*)\r?\n([\s\S]*?)```/g;
-        let match: RegExpExecArray | null;
-
-        while ((match = codeBlockRegex.exec(rawText)) !== null) {
-            const headerTag = (match[1] || '').trim();
-            const codeContent = match[2];
-            const matchStartIndex = match.index;
-
-            let detectedFile: string | null = null;
-
-            if (headerTag.includes(':')) {
-                const part = headerTag.split(':')[1]?.trim();
-                if (part && /\.[a-zA-Z0-9]{1,8}$/.test(part)) {
-                    detectedFile = part.replace(/["']/g, '');
-                }
-            } else if (/file=["']?([^"'\s]+)["']?/i.test(headerTag)) {
-                const m = headerTag.match(/file=["']?([^"'\s]+)["']?/i);
-                if (m && m[1]) detectedFile = m[1];
-            } else {
-                const parts = headerTag.split(/\s+/);
-                if (parts.length > 1 && /\.[a-zA-Z0-9]{1,8}$/.test(parts[1])) {
-                    detectedFile = parts[1];
-                }
-            }
-
-            if (!detectedFile) {
-                const codeLines = codeContent.slice(0, 300).split(/\r?\n/).slice(0, 3);
-                for (const cl of codeLines) {
-                    const commentMatch = cl.match(/(?:\/\/|\/\*|#|<!--)\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]{1,8})(?:\s*\*\/|-->)?/);
-                    if (commentMatch && commentMatch[1] && !commentMatch[1].startsWith('http')) {
-                        const candidate = commentMatch[1].trim();
-                        if (candidate.includes('/') || candidate.includes('\\') || candidate.includes('.')) {
-                            detectedFile = candidate;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!detectedFile) {
-                const precedingText = rawText.slice(Math.max(0, matchStartIndex - 300), matchStartIndex);
-                const precedingLines = precedingText.split(/\r?\n/).filter(l => l.trim().length > 0);
-                const lastLine = precedingLines[precedingLines.length - 1] || '';
-                const secondLastLine = precedingLines[precedingLines.length - 2] || '';
-
-                for (const pl of [lastLine, secondLastLine]) {
-                    const preMatch = pl.match(/(?:file|path|create|update)?[:\s*#`]*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]{1,8})[`*:]*/i);
-                    if (preMatch && preMatch[1] && !preMatch[1].startsWith('http') && !preMatch[1].startsWith('www')) {
-                        const cand = preMatch[1].trim();
-                        if ((cand.includes('/') || cand.includes('\\') || cand.includes('.')) && !cand.endsWith('.com') && !cand.endsWith('.org')) {
-                            detectedFile = cand;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            const isShellBlock = /^(bash|sh|zsh|shell|cmd|powershell)$/i.test(headerTag) ||
-                /^\s*(npm|pnpm|yarn|npx|pip|python|django-admin|git|cd)\b/m.test(codeContent.trim());
-
-            if (isShellBlock && !detectedFile) {
-                const cmdLines = codeContent.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-                for (const cl of cmdLines) {
-                    if (cl.length > 2 && cl.length < 200) {
-                        commands.add(cl.replace(/^[\$#>]\s*/, ''));
-                    }
-                }
-            } else if (detectedFile) {
-                const cleanPath = detectedFile.replace(/[`"'()\[\]]/g, '').trim();
-                if (cleanPath && !cleanPath.endsWith('.md') && !cleanPath.endsWith('.png') && !cleanPath.endsWith('.jpg')) {
-                    files.add(cleanPath);
-                }
-            }
-        }
-
-        return {
-            files: Array.from(files),
-            commands: Array.from(commands)
-        };
-    }
-
-    private static formatWebBrainGuidance(rawAnswer: string): string {
-        const extracted = ToolDispatcher.extractWebBrainActionItems(rawAnswer);
-        if (extracted.files.length === 0 && extracted.commands.length === 0) {
-            return rawAnswer;
-        }
-
-        const fileList = extracted.files.length > 0
-            ? extracted.files.map((f, i) => `  ${i + 1}. \`write_file\` -> "${f}"`).join('\n')
-            : '  (No new code files detected)';
-
-        const cmdList = extracted.commands.length > 0
-            ? extracted.commands.slice(0, 8).map((c, i) => `  ${i + 1}. \`execute_terminal_command\` -> "${c}"`).join('\n')
-            : '  (No terminal commands detected)';
-
-        const banner = `[WEB BRAIN ACTION CHECKLIST - MANDATORY EXECUTION PROTOCOL]
-================================================================================
-⚠️ CRITICAL INSTRUCTION FOR AUTONOMOUS AGENT:
-Web Brain has provided the complete code and instructions below.
-You are strictly FORBIDDEN from stopping, calling finish prematurely, or re-querying Web Brain until EVERY file listed below is written to disk!
-
-📋 REQUIRED FILES TO CREATE / UPDATE:
-${fileList}
-
-💻 REQUIRED COMMANDS TO EXECUTE:
-${cmdList}
-
-⚡ EXECUTION RULES:
-1. Call 'write_file' for each file above sequentially. Copy the FULL implementation from the response below.
-2. DO NOT skip any file. DO NOT insert placeholder comments like '// ... rest of code'.
-3. DO NOT call 'consult_web_brain' again until all files above are created and all commands run.
-================================================================================
-
-`;
-
-        return banner + rawAnswer;
     }
 }

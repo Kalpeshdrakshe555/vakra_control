@@ -283,7 +283,7 @@ Real-time, voice-driven coding assistant with conversational interruption (barge
 
 ---
 
-### 3.5 Web Search Token Optimization & Dual-Layer Citations Engine
+### 3.10. Web Search Token Optimization & Dual-Layer Citations Engine
 1. **Deep Context Extraction (7,000+ Characters per Source):**
    - Extracts comprehensive page content capped at ~7,500 characters per authoritative website.
    - 3 verified sources provide over 22,000 characters of rich technical context, documentation, API signatures, and release details, ensuring maximum accuracy and precision without loss of nuances.
@@ -298,6 +298,129 @@ Real-time, voice-driven coding assistant with conversational interruption (barge
    - **Max 2 Authoritative Sources:** Discards redundant noise from shallow blogs; focuses exclusively on official GitHub repositories and primary documentation portals.
    - **Unbounded Disk Storage:** Complete, unabridged technical manuals (up to 35,000+ characters) are stored permanently in `.ultra-light-ai/findings/<topic>_research.md` with zero artificial truncation.
    - **Approach 1 Offset Pagination:** Delivers 7,000 to 10,000 characters of high-signal API signatures and working code to the active context. The model can seamlessly read subsequent sections by invoking `research_web_docs(query, offset=...)`, streaming directly from the disk cache with 0ms network latency.
+
+---
+
+### 3.11. Web Brain Bridge: Live Browser AI Pair-Programming (`src/bridge/webBrainBridge.ts`)
+
+#### Architectural Goal:
+Empower local 3B–7B models with frontier-level reasoning by connecting directly to live Gemini or ChatGPT Web sessions running in Google Chrome via Chrome DevTools Protocol (CDP).
+
+#### Key Mechanics:
+1. **Zero-API-Key Browser Automation:** Attaches to user's existing Chrome instance via CDP (`http://127.0.0.1:9222`). Re-uses active login sessions and subscription tiers without external API token costs.
+2. **TrustedHTML & Quill Safe Input:** Interacts with rich-text web editors (Gemini Quill / ProseMirror) via `document.execCommand('insertText')` and safe DOM node synthesis, completely bypassing strict TrustedHTML CSP restrictions.
+3. **Targeted DOM Extraction (Zero `Ctrl+A` Contamination):**
+   - Avoids full-page selection or clipboard sniffing.
+   - Directly indexes and queries the newly spawned assistant response container (`document.querySelectorAll('message-content')[targetIndex]`).
+4. **Dynamic 2-Second Generation Settling Engine:**
+   - Eliminates premature exit bugs by enforcing text growth tracking.
+   - Continuously monitors visible Stop button state (`isStopVisible`) and Send button readiness (`isSendReady`).
+   - Automatically completes extraction as soon as the text settles for **2,000ms** with no active Stop button (with a 4-second safety failsafe), delivering instantaneous response turnaround without 4-minute hangs.
+5. **Duplicate Call Guard:** `ToolDispatcher` tracks `lastWebBrainPrompt` and consecutive calls. If a local model attempts to re-query Web Brain without executing provided code or commands, the bridge intercepts the duplicate loop and forces file creation.
+
+---
+
+### 3.12. Master-Worker Orchestration & Micro-Step Execution Discipline
+
+#### Philosophy:
+- **Gemini Web = The Mastermind (Architect):** High-level decomposition, end-to-end planning, full-stack architectural contracts, and complex error diagnostics.
+- **Local 4B Model = The Hands (Executor):** Focuses strictly on mechanical actions (writing one file, running one command, verifying one route).
+
+#### Micro-Step Protocol:
+1. **The Anti-Hallucination Barrier:** Small 4B models consistently collapse when given 5–10 file blocks at once.
+2. **One-Action-Per-Step Rule:**
+   - [src/webview/tools/toolDispatcher.ts](src/webview/tools/toolDispatcher.ts) automatically wraps outbound queries with a strict micro-step directive:
+     ```
+     [ENVIRONMENT & EXECUTION PROTOCOL FOR GEMINI]:
+     - Operating System: Windows (PowerShell)
+     - Working Directory: Workspace Root
+     - Protocol: Provide strictly ONE micro-step at a time (max 1 file or 1 command).
+     ```
+   - Gemini outputs only the code for the active step.
+   - The local model writes that single file, tests it, and then requests the next step.
+3. **Mandatory Action Checklist Synthesizer:**
+   When Web Brain returns code, `ToolDispatcher.formatWebBrainGuidance` scans for code blocks and prepends an un-ignorable banner:
+   ```markdown
+   [WEB BRAIN ACTION CHECKLIST - MANDATORY EXECUTION PROTOCOL]
+   REQUIRED FILES TO CREATE / UPDATE:
+     1. `write_file` -> "src/components/WatchCard.tsx"
+   REQUIRED COMMANDS:
+     1. `execute_terminal_command` -> "npm install ..."
+   ```
+
+---
+
+### 3.13. Active Plan Grounding (`PLAN.md`) & Priority 15 Injection (`src/webview/sidebarProvider.ts`)
+
+#### Problem:
+Local models frequently lose track of multi-step execution plans across turns, declaring tasks "done" after writing only the first step.
+
+#### Implementation Logic:
+1. **Automatic Plan Discovery:** `sidebarProvider.buildPrompt` checks for `PLAN.md` or `.ultra-light-ai/PLAN.md` on every single turn.
+2. **Priority 15 Injection:**
+   The plan is injected at **Priority 15 (Highest Priority)**, ensuring it is never pruned by token budget allocators:
+   ```
+   [CURRENT WORKSPACE PLAN (PLAN.md)]
+   - [x] Step 1: Scaffolding (Done)
+   - [ ] Step 2: Database Models & Migrations
+   - [ ] Step 3: API Routes
+
+   [MANDATORY EXECUTION DIRECTIVE]:
+   1. Find the FIRST unchecked step (- [ ]) in this plan.
+   2. Execute ONLY that step right now.
+   3. After completing it, mark it (- [x]) in PLAN.md using edit_file.
+   ```
+3. The local model always knows its exact step and progress without needing to re-read files.
+
+---
+
+### 3.14. Windows PowerShell Sanitization & Terminal Auto-Routing (`src/tools/terminalCapture.ts`)
+
+1. **PowerShell Statement Sanitization:**
+   - In Windows PowerShell (5.1 & 7), chaining commands with `&&` causes fatal parse errors (`The token '&&' is not a valid statement separator`).
+   - `terminalCapture.ts` intercepts all commands on `win32` and seamlessly transforms `&&` into `; `, ensuring reliable sequential execution.
+2. **Extended Timeout for Scaffolding:**
+   - Command timeout elevated from 30s to 60s to accommodate heavy package bootstrapping (`npm create vite`, `pip install`, `django-admin`).
+3. **Smart Nested CWD Routing:**
+   - Detects nested `manage.py` and `package.json` configurations in subfolders and automatically re-routes terminal execution without failing on workspace root.
+
+---
+
+### 3.15. Ollama 32K Native Allocation (`num_ctx: 32768`) & Scaled Step Limits
+
+1. **Ollama Silent Context Truncation Fix (`src/router/realClients.ts`):**
+   - By default, Ollama initializes requests with a restrictive **2048-token context** unless explicitly overridden.
+   - `realClients.ts` now explicitly injects `options: { num_ctx: 32768 }` into all `/api/chat` requests, unlocking the full 32k window for local 4B/7B models.
+2. **Max Autonomous Steps Scaled to 500:**
+   - Lifted hardcoded step caps from 100 to **500 autonomous tool steps** across `settingsHandler.ts`, `config.ts`, and `ui.html`, accommodating massive end-to-end full-stack workflows.
+
+---
+
+### 3.16. Web Brain Phase 1 & Phase 2: Deterministic Protocol Parser & Extension Direct Execution
+
+#### Problem:
+When delegating complex multi-file full-stack tasks to frontier web models (Gemini / ChatGPT) via the CDP bridge, small local models (4B) suffered from:
+1. **Multi-File Collapse:** Small models dropped secondary files when output in bulky Markdown code blocks.
+2. **Terminal Chaining & CWD Drift:** PowerShell syntax errors and lost working directories across `cd` sub-processes.
+3. **Lazy Placeholders:** Small models writing `// ... existing code ...` or accidentally wiping files.
+4. **Daemon Freezes:** Commands like `npm run dev` or `manage.py runserver` freezing the autonomous agent loop.
+
+#### Implementation Architecture:
+1. **Strict Line-Anchored Protocol (`src/brain/protocolParser.ts`):**
+   - Outbound prompts enforce deterministic markers: `TYPE: FIX`, `MANIFEST`, `===FILE: path===`, `===EDIT: path===`, `===COMMANDS===`, `===VERIFY===`.
+   - The parser strips markdown wrapping, validates completion, and extracts atomic files and search/replace blocks.
+2. **Deterministic Task Executor (`src/brain/taskExecutor.ts`):**
+   - In `extension` write mode, the extension directly applies files, patches edits with multi-strategy search/replace, and executes terminal commands.
+   - Eliminates small-model code retyping hallucinations while ensuring 100% of files reach disk.
+3. **Safety & Guard Middleware (`src/guards/toolGuards.ts`):**
+   - Blocks persistent dev servers (`SERVER_BLOCKED`) and instructs non-blocking validation.
+   - Blocks shell redirection writes (`FILE_WRITE_VIA_SHELL`), placeholders (`OVERWRITE_SHRINK`), and path escapes (`PATH_ESCAPE`).
+   - Automatically redacts API keys and secrets (`src/security/secretsFilter.ts`) before transmitting outbound prompts to Chrome.
+4. **Post-Write In-Memory Syntax Validation (`src/validators/postWriteValidators.ts`):**
+   - Validates written files via zero-dependency Python `ast.parse` (stdin) and `JSON.parse`.
+   - Immediate feedback prevents cascading syntax errors.
+5. **Zero Impact on Normal Flow:**
+   - All Phase 1 & 2 guard and execution middleware is gated strictly by `config?.webBrainBridge?.enabled`. When the Web Brain toggle is OFF, the standard 4B local model operates 100% untouched.
 
 ---
 
@@ -320,15 +443,21 @@ Real-time, voice-driven coding assistant with conversational interruption (barge
 
 | File Path | Primary Responsibility |
 |---|---|
+| [src/bridge/webBrainBridge.ts](src/bridge/webBrainBridge.ts) | Chrome CDP browser automation, Gemini/ChatGPT Web integration, 2s settled detection |
+| [src/brain/protocolParser.ts](src/brain/protocolParser.ts) | Line-anchored protocol parser for `===FILE===` and `===EDIT===` grammar |
+| [src/brain/taskExecutor.ts](src/brain/taskExecutor.ts) | Extension direct execution of files, edits, and terminal commands |
+| [src/brain/editApplier.ts](src/brain/editApplier.ts) | Multi-strategy search/replace fuzzy patch engine |
+| [src/guards/toolGuards.ts](src/guards/toolGuards.ts) | Safety invariants blocking server freezes, file shrinks, placeholders, and path escapes |
+| [src/security/secretsFilter.ts](src/security/secretsFilter.ts) | Outbound prompt redaction for API keys, tokens, JWTs, and private keys |
+| [src/platform/commandSequence.ts](src/platform/commandSequence.ts) | Sequential command runner with in-process `cd` tracking and output bounds |
+| [src/validators/postWriteValidators.ts](src/validators/postWriteValidators.ts) | In-memory syntax validation (Python AST via stdin, JSON parse, CSS balance) |
 | [src/features/skillsManager.ts](src/features/skillsManager.ts) | Skill discovery, trigger matching, conflict resolution, built-in suppression |
 | [src/state/sessionMemory.ts](src/state/sessionMemory.ts) | Anti-reread cache, symbol extraction, session footprint management |
 | [src/state/conversationHistory.ts](src/state/conversationHistory.ts) | Message persistence, sliding window pruning, turn execution records |
-| [src/tools/terminalCapture.ts](src/tools/terminalCapture.ts) | Command execution, framework CWD auto-routing, ANSI cleaning |
-| [src/utils/astSkeletonizer.ts](src/utils/astSkeletonizer.ts) | Code compression, signature extraction, AST token saving |
-| [src/webview/promptBuilder.ts](src/webview/promptBuilder.ts) | Final prompt synthesis combining rules, memory, skills, and history |
-| [src/webview/sidebarProvider.ts](src/webview/sidebarProvider.ts) | Webview bridge, streaming orchestration, autonomous step loop |
-| [src/webview/tools/toolDispatcher.ts](src/webview/tools/toolDispatcher.ts) | Normalization and execution of file, shell, search, and research tools |
-| [src/webview/ui.html](src/webview/ui.html) | Glassmorphic UI, live stream renderer, skill badges, settings panel |
+| [src/tools/terminalCapture.ts](src/tools/terminalCapture.ts) | Command execution, PowerShell `&&` sanitization, framework CWD routing |
+| [src/webview/sidebarProvider.ts](src/webview/sidebarProvider.ts) | Webview bridge, PLAN.md Priority 15 auto-injection, autonomous step loop |
+| [src/webview/tools/toolDispatcher.ts](src/webview/tools/toolDispatcher.ts) | Tool dispatching, Web Brain protocol synthesis and direct execution wiring |
+| [src/webview/ui.html](src/webview/ui.html) | Glassmorphic UI, Web Brain quick toggle, full-duplex voice HUD, 500-step settings |
 
 ---
 

@@ -243,8 +243,5 @@
   },
   "allowScripts": {
     "esbuild@0.20.2": true
-  },
-  "dependencies": {
-    "puppeteer-core": "^25.12.0"
   }
 }

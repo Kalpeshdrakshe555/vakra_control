@@ -1,8 +1,32 @@
 export class PromptClassifier {
     /**
+     * Checks if a user prompt is merely a greeting, casual chat, or polite closing.
+     */
+    public static isGreetingOrChat(text: string): boolean {
+        const clean = text.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+        if (!clean) return true;
+        const greetings = new Set([
+            'hi', 'hello', 'hey', 'hola', 'namaste', 'kem cho', 'sup', 'yo',
+            'good morning', 'good afternoon', 'good evening', 'good night',
+            'who are you', 'what can you do', 'what are you', 'help me',
+            'thanks', 'thank you', 'ok', 'okay', 'bye', 'kaise ho', 'kya haal hai'
+        ]);
+        if (greetings.has(clean)) return true;
+        const words = clean.split(/\s+/);
+        if (words.length <= 3 && ['hi', 'hello', 'hey', 'namaste', 'kemcho'].includes(words[0])) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Classifies a user prompt into a specific category to determine tool relevance.
      */
-    public static classifyPrompt(text: string): 'ui' | 'backend' | 'info' | 'general' {
+    public static classifyPrompt(text: string): 'ui' | 'backend' | 'info' | 'chat' | 'general' {
+        if (PromptClassifier.isGreetingOrChat(text)) {
+            return 'chat';
+        }
+
         const textLower = text.toLowerCase();
         
         // Full project / application tasks MUST get general classification with all tools enabled
@@ -31,18 +55,21 @@ export class PromptClassifier {
     }
 
     /**
-     * Filters out irrelevant tools based on the prompt category to save tokens.
-     * Core tools like plan_set and plan_done are NEVER filtered.
+     * Filters out irrelevant tools based on the prompt category to save tokens and prevent tool misuse.
      */
-    public static filterTools(category: 'ui' | 'backend' | 'info' | 'general', tools: any[]): any[] {
+    public static filterTools(category: 'ui' | 'backend' | 'info' | 'chat' | 'general', tools: any[]): any[] {
         if (!tools || tools.length === 0 || !tools[0].functionDeclarations) return tools;
         
+        // For conversational greetings, NO tools should be invoked!
+        if (category === 'chat') {
+            return [];
+        }
+
         // In general mode, give all tools
         if (category === 'general') return tools;
 
         const allFuncs = tools[0].functionDeclarations;
-        // Core editing and planner tools are ALWAYS essential for autonomous multi-step reasoning
-        const ALWAYS_ALLOWED = ['plan_set', 'plan_done', 'plan_update', 'list_directory_tree', 'read_multiple_files', 'write_file', 'edit_file', 'replace_symbol', 'consult_web_brain'];
+        const ALWAYS_ALLOWED = ['plan_set', 'plan_done', 'plan_update', 'set_task_plan', 'expand_plan_step', 'complete_plan_step', 'read_state_ledger', 'list_directory_tree', 'read_multiple_files', 'write_file', 'edit_file', 'replace_symbol'];
 
         let categoryAllowed: string[] = [];
         

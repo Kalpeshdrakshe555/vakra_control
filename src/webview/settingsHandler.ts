@@ -35,6 +35,8 @@ export class SettingsHandler {
                 // Model Config
                 mainBrain: message.config.mainBrain,
 
+                temperature: Number(message.config.temperature ?? 0.4),
+
                 maxAutonomousToolSteps: Math.min(500, Math.max(5, Number(message.config.maxAutonomousToolSteps) || 30)),
 
                 contextLimits: {
@@ -52,12 +54,6 @@ export class SettingsHandler {
                     ttsProvider: 'browser',
                     ttsEndpoint: 'http://127.0.0.1:8002/v1/audio/speech',
                     wsGatewayUrl: ''
-                },
-                webBrainBridge: message.config.webBrainBridge || {
-                    enabled: false,
-                    provider: 'chatgpt',
-                    cdpPort: 9222,
-                    autoEscalateOnError: true
                 }
             };
 

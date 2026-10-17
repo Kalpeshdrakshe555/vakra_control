@@ -247,14 +247,6 @@ export interface VoiceConfig {
     wsGatewayUrl?: string;
 }
 
-export interface WebBrainBridgeConfig {
-    enabled?: boolean;
-    provider?: 'chatgpt' | 'gemini';
-    cdpPort?: number;
-    activeSessionId?: string;
-    autoEscalateOnError?: boolean;
-}
-
 export interface AgentConfig {
     // Legacy fields for backward compatibility
     providers?: {
@@ -277,7 +269,6 @@ export interface AgentConfig {
     };
     systemInstructions: string;
     voice?: VoiceConfig;
-    webBrainBridge?: WebBrainBridgeConfig;
 }
 
 /**

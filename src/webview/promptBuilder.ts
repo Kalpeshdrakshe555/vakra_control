@@ -17,10 +17,11 @@ import { TerminalCapture } from '../tools/terminalCapture';
 import { FrameworkConventions } from '../utils/frameworkConventions';
 import { ToolRegistry } from '../tools/toolRegistry';
 import { SessionMemory } from '../state/sessionMemory';
+import { StateLedger } from '../state/stateLedger';
 import { LivingIndex } from '../indexer/livingIndex';
 import { SkillsManager } from '../features/skillsManager';
 
-export type TaskCategory = 'ui' | 'backend' | 'info' | 'general';
+export type TaskCategory = 'ui' | 'backend' | 'info' | 'general' | 'chat';
 
 /** Decided ONCE at task start and stored. Never recompute per turn (a scaffolded NEW project would flip to EXISTING). */
 export type WorkspaceMode = 'new' | 'existing';
@@ -56,6 +57,7 @@ export interface PrefixOptions {
     structuralRepoMap?: string;   // compute ONCE at task start and freeze; a changing map busts the cache
     thinkingBudget?: string;
     userText?: string;
+    isLocal?: boolean;
 }
 
 /** Volatile per-turn context. Feeds the tail block, NEVER the system prompt. */
@@ -79,8 +81,13 @@ RULES:
 1. Every reply MUST be exactly ONE tool call. Never output source code, file blocks, or commands as plain chat text.
 2. STRICT SINGLE ACTION PER STEP: Execute EXACTLY ONE skill checklist step or command per turn. NEVER chain multiple terminal commands (e.g. no '&&' or ';'). Run one command, inspect the result, and only then proceed.
 3. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, powershell redirection) to write code.
-4. Inspect before editing: call \`read_multiple_files\` first. Never guess paths or symbols. If a file was already read or edited in recent turns and is recorded in [PREVIOUS TURN EXECUTION RECORD] or working memory, you already know its state—do NOT repeatedly re-read unchanged files.
-5. If a command or check fails: analyze the error, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
+4. INSPECT BEFORE EDITING (NO CONTEXT = NO EDIT):
+   - AT TASK START OR NEW CHAT: Read \`PLAN.md\` first. Always ensure \`PLAN.md\` remains the synchronized single source of truth for all milestone progress, touched files, and architectural decisions.
+   - You are STRICTLY FORBIDDEN from editing or writing code without reading the target file or inspecting context first via \`read_multiple_files\`. Never guess paths, existing functions, or symbols. If execution stops or errors occur, consult \`PLAN.md\` to know exactly where you were and continue seamlessly.
+5. ERROR HANDLING & WEB RESEARCH PROTOCOL:
+   - If a terminal command, verification check, or test fails: analyze the bottom lines of the traceback.
+   - If the error is unfamiliar, involves framework behavior (e.g. Django, React, database migrations), or if your previous edit failed to resolve it, you MUST call \`search_web(query="<framework> <exact error>")\` to inspect official solutions and documentation before modifying code!
+   - Never guess solutions blindly. Once verified through web search or file context, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
 6. ANTI-PREMATURE FINISH: You are STRICTLY FORBIDDEN from calling \`finish\` if:
    - A terminal command just failed or produced an error.
    - Verification checks (e.g. \`python manage.py check\`, compiler build, or test run) have not yet been executed and passed.
@@ -92,17 +99,29 @@ RULES:
    - When scaffolding Django in a new workspace, ALWAYS run \`django-admin startproject <project_name> .\` (with trailing dot \`.\`) so that \`manage.py\` is created directly at the workspace root! NEVER create nested duplicate projects or duplicate apps.
    - If \`manage.py\` is in a subfolder (e.g. \`backend/manage.py\`), ALWAYS execute commands referencing that relative path (e.g. \`python backend/manage.py makemigrations\`).
    - For React/Vite/Frontend in new projects: initialize into the current directory with \`./\` (e.g. \`npm create vite@latest ./ -- --template react-ts\`).
+10. HIERARCHICAL TASK PLANNING & STEP BOUNDARY PROTOCOL:
+   - PHASE 1 (MACRO ROADMAP & USER APPROVAL): When receiving a new or multi-step task, call \`set_task_plan(user_requirements, steps[])\` to establish user requirements and sequential macro steps in \`PLAN.md\`. You MUST STOP immediately and ask the user for approval: "Maine aapki requirement ke according yeh plan banaya hai. Kya yeh sahi hai ya isme koi changes chahiye?". DO NOT edit code before user approval!
+   - PHASE 2 (EXPAND ONLY ACTIVE STEP): When user approves, expand ONLY the active Step (e.g. Step 1) into micro sub-steps using \`expand_plan_step(step_id, sub_steps[])\`. Never overwrite or wipe other macro steps.
+   - PHASE 3 (ATOMIC SUB-STEP EXECUTION & MANDATORY UPDATE): For each sub-step:
+     * Inspect file context first via \`read_multiple_files\`. NO BLIND EDITS.
+     * Output a concise 2-3 line [BLUEPRINT] (file & symbols, logic, verification check).
+     * Edit code surgically and run verification.
+     * MANDATORY STEP RECORDING: Call \`complete_plan_step(sub_step_id, summary, modified_files?, logic_summary?)\` to mark the sub-step done in \`PLAN.md\` and record the exact files modified and core code logic. \`PLAN.md\` is the single source of truth for both roadmap and architecture!
+   - PHASE 4 (MACRO STEP BOUNDARY STOP): When all sub-steps of a macro step finish, \`complete_plan_step\` will notify you that the macro step is complete. You MUST STOP execution and ask the user for confirmation before starting the next macro step: "Step 1 complete ho gaya hai. Kya Step 2 start karein?". DO NOT autonomously jump to the next macro step without user permission.
 
 TOOLS:
 - list_directory_tree(path, depth)
 - search_codebase(query)
 - read_multiple_files(paths[], start_line?, end_line?)
 - read_skill(skill_name)
+- read_state_ledger() - Read the project plan and architectural memory (PLAN.md).
+- set_task_plan(user_requirements, steps[]) - Define the macro roadmap with user requirements and sequential macro steps.
+- expand_plan_step(step_id, sub_steps[]) - Expand an active macro step into small, atomic sub-steps without wiping remaining macro steps.
+- complete_plan_step(step_id, summary, modified_files?, logic_summary?) - Mark current sub-step or macro step as done in PLAN.md, recording touched files and core code logic.
 - write_file(filepath, content)
 - edit_file(filepath, old_text, new_text)
 - execute_terminal_command(command)
 - search_web(query, offset?, urls?) - Continuous 5k-chunk web extraction from top 2 sites. Use offset to stream deeper slices (e.g. 5000, 10000).
-- consult_web_brain(prompt) - Consults Gemini/ChatGPT Web in the browser like a human pair programmer for code, steps, and troubleshooting.
 - finish(summary)`;
 
     static buildHead(): string {
@@ -183,19 +202,9 @@ You are operating as a Senior Systems Architect:
             }
 
             if (taskCategory === 'ui') parts.push(PromptBuilder.DESIGN_MODULE);
-
-            if (config?.webBrainBridge?.enabled) {
-                const providerName = config.webBrainBridge.provider?.toUpperCase() || 'GEMINI';
-                parts.push(`[BROWSER AI EXPERT: ${providerName} WEB PAIR-PROGRAMMER]
-You have access to the 'consult_web_brain(prompt)' tool connected to ${providerName} Web in Chrome.
-CRITICAL RULES FOR CONSULTING WEB BRAIN:
-1. STRICT ONE-SHOT CONSULTATION PER STEP: Never send duplicate or repeated prompts to 'consult_web_brain'. Once Web Brain gives you code or steps, DO NOT query it again until you have fully applied everything it provided.
-2. COMPLETE IMPLEMENTATION OF ALL FILES (MANDATORY): When Web Brain provides code for multiple files, you MUST sequentially call 'write_file' for EVERY SINGLE file provided!
-   - Write the FULL, complete code provided by Web Brain. Never omit code, functions, or use placeholder comments.
-   - Do NOT stop after writing only 1 or 2 files. Keep calling 'write_file' turn-by-turn until ALL files in Web Brain's response are written to disk.
-3. EXECUTE COMMANDS: Run setup and package install commands with 'execute_terminal_command'.
-4. FOLLOW-UP: Only call 'consult_web_brain' again after all current files and commands are completed, or if a terminal verification command produces an error you need Web Brain to diagnose.
-5. FINISH: When all components/files are written and verified, call 'finish'.`);
+            if (taskCategory === 'chat') {
+                parts.push(`[CONVERSATIONAL GREETING & CHAT MODE]
+The user message is a greeting or general inquiry. DO NOT call any tools. Respond politely and concisely in text, welcoming the user and asking what coding task they want to tackle.`);
             }
 
             basePrefix = parts.length ? '\n\n' + parts.join('\n\n') : '';
@@ -214,11 +223,12 @@ CRITICAL RULES FOR CONSULTING WEB BRAIN:
         const formatDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         const formatIso = (d: Date) => d.toISOString().slice(0, 10);
 
-        const calendarBlock = `[REAL-TIME CALENDAR ANCHOR & TEMPORAL TRUTH]
+        const calendarBlock = opts.isLocal
+            ? `[DATE: ${formatDate(now)}]`
+            : `[REAL-TIME CALENDAR ANCHOR & TEMPORAL TRUTH]
 - TODAY: ${formatDate(now)} (ISO: ${formatIso(now)})
 - YESTERDAY: ${formatDate(yesterday)} (ISO: ${formatIso(yesterday)})
 - TOMORROW: ${formatDate(tomorrow)} (ISO: ${formatIso(tomorrow)})
-- Current Local Time: ${now.toLocaleTimeString()}
 
 TEMPORAL RESOLUTION RULES:
 1. Always anchor your answers to this exact current real-world date (${formatDate(now)}). You ALWAYS know today's exact date and year.
@@ -233,23 +243,20 @@ TEMPORAL RESOLUTION RULES:
         dynamicParts.push(calendarBlock);
 
         if (workspaceRoot) {
-            // 1. Living Architecture Blueprint injection (4-Tier MRU & Dependency Graph)
+            // 1. Living Architecture Blueprint injection (Clamped to 1000 for local SLMs, 4000 for cloud)
             try {
-                const bp = LivingIndex.buildBlueprintText(workspaceRoot, 4000);
+                const maxBpChars = opts.isLocal ? 1000 : 4000;
+                const bp = LivingIndex.buildBlueprintText(workspaceRoot, maxBpChars);
                 if (bp) dynamicParts.push(`[ACTIVE LIVING ARCHITECTURE BLUEPRINT]\n${bp}`);
-            } catch {}
-
-            // 2. Materialized Working Memory & Living State
-            try {
-                const mem = SessionMemory.getInstance(workspaceRoot).renderWorkingMemory(3500);
-                if (mem) dynamicParts.push(mem);
             } catch {}
 
             // 3. Available Skills Catalog & Matching Specialized Skill (P0 Execution Guidance)
             try {
-                const skillsCatalog = SkillsManager.getAvailableSkillsSummary(workspaceRoot);
-                if (skillsCatalog) {
-                    dynamicParts.push(skillsCatalog);
+                if (!opts.isLocal) {
+                    const skillsCatalog = SkillsManager.getAvailableSkillsSummary(workspaceRoot);
+                    if (skillsCatalog) {
+                        dynamicParts.push(skillsCatalog);
+                    }
                 }
                 const activeSkill = SkillsManager.getMatchingSkillInstructions(userText, workspaceRoot);
                 if (activeSkill) {
@@ -285,10 +292,11 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         taskCategory: TaskCategory = 'general',
         structuralRepoMap?: string,
         thinkingBudget?: string,
-        userText?: string
+        userText?: string,
+        isLocal: boolean = false
     ): string {
         return PromptBuilder.buildHead() +
-            PromptBuilder.buildSessionPrefix({ config, workspaceRoot, isAgentMode, isArchitectMode, taskCategory, structuralRepoMap, thinkingBudget, userText });
+            PromptBuilder.buildSessionPrefix({ config, workspaceRoot, isAgentMode, isArchitectMode, taskCategory, structuralRepoMap, thinkingBudget, userText, isLocal });
     }
 
     /* ================================================================== */
@@ -354,7 +362,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
     /* ================================================================== */
     /* 5. TOOL GATING: fewer tools per turn = fewer wrong choices           */
     /* ================================================================== */
-    private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files', 'get_code_diagnostics', 'get_symbol_outline', 'read_skill'];
+    private static readonly READ = ['list_directory_tree', 'search_codebase', 'read_multiple_files', 'get_code_diagnostics', 'get_symbol_outline', 'read_skill', 'read_state_ledger'];
     private static readonly WRITE = ['create_skill', 'write_file', 'edit_file'];
 
     /**
@@ -365,20 +373,23 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         const W = PromptBuilder.WRITE;
         switch (task.phase) {
             case 'audit':
-                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web', 'consult_web_brain'];
+                // In audit phase: allow READ tools, search, terminal checks, and plan creation. Block write/edit so model inspects first!
+                return [...R, 'execute_terminal_command', 'set_task_plan', 'expand_plan_step', 'complete_plan_step', 'finish', 'research_web_docs', 'search_web'];
             case 'plan':
-                return [...R, ...W, 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web', 'consult_web_brain'];
+                return [...R, 'set_task_plan', 'expand_plan_step', 'complete_plan_step', 'execute_terminal_command', 'finish', 'research_web_docs', 'search_web', ...W];
             case 'execute':
                 return [
                     ...R, ...W,
+                    'set_task_plan', 'expand_plan_step', 'complete_plan_step',
                     'execute_terminal_command',
-                    'finish', 'research_web_docs', 'search_web', 'consult_web_brain',
+                    'finish', 'research_web_docs', 'search_web',
                     ...(hasUiTask ? ['generate_ui_blueprint'] : [])
                 ];
             case 'verify':
                 return [
                     ...R, 'execute_terminal_command',
-                    ...W, 'finish', 'research_web_docs', 'search_web', 'consult_web_brain'
+                    ...W, 'set_task_plan', 'expand_plan_step', 'complete_plan_step',
+                    'finish', 'research_web_docs', 'search_web'
                 ];
             case 'done':
                 return ['finish'];
@@ -394,8 +405,11 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         if (term) v.terminalTail = clip(term.split('\n').slice(-15).join('\n'), 1200);
         if (workspaceRoot) {
             try {
-                const notes = SessionMemory.getInstance(workspaceRoot).renderWorkingMemory(800);
-                if (notes) v.sessionNotes = clip(notes.trim(), 800);
+                // Injected ONLY at tail [STATE] block (9500 chars limit) so prefix stays 100% static & cache hit
+                const notes = SessionMemory.getInstance(workspaceRoot).renderWorkingMemory(2000);
+                const ledger = StateLedger.getCompactPromptSlice(workspaceRoot, 1500);
+                const combined = [ledger, notes].filter(Boolean).join('\n\n');
+                if (combined) v.sessionNotes = clip(combined.trim(), 9500);
             } catch {}
         }
         return v;
@@ -409,7 +423,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
     /** One line per phase, repeated every turn. Recency is what small models actually obey. */
     private static readonly PHASE_LINE: Record<Phase, string> = {
         audit: 'AUDIT (read-only): inspect tree, manifest + entry points before modifying files.',
-        plan: 'PLAN: follow active skill checklist in exact order.',
+        plan: 'PLAN: follow active skill checklist or set_task_plan in exact order.',
         execute: 'EXECUTE: perform surgical changes. New file: write_file. Existing file: edit_file.',
         verify: 'VERIFY: execute tests or verification commands. On failure read the failing file before fixing.',
         done: 'DONE: call finish with summary of changes.'
@@ -439,10 +453,11 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
             const doneCount = live.filter(s => s.done).length;
             if (idx >= 0) {
                 const cur = live[idx];
-                L.push(`STEP ${doneCount + 1}/${live.length}: ${cur.title}${cur.verify ? `  | verify: ${cur.verify}` : ''}`);
-                if (live[idx + 1]) L.push(`NEXT: ${live[idx + 1].title}`);
+                L.push(`>>> ACTIVE STEP [STEP ${doneCount + 1}/${live.length}]: ${cur.title}${cur.verify ? `  | verify: ${cur.verify}` : ''} <<<`);
+                L.push(`INSTRUCTION FOR CURRENT STEP: Focus ONLY on completing STEP ${doneCount + 1} right now. Do not jump ahead or perform future steps prematurely.`);
+                if (live[idx + 1]) L.push(`UPCOMING STEP ${doneCount + 2}: ${live[idx + 1].title}`);
             } else {
-                L.push(`STEP: all ${live.length} steps done. Run a final check, then finish.`);
+                L.push(`STEP: all ${live.length} steps done. Run a final verification check, then finish.`);
             }
         }
 

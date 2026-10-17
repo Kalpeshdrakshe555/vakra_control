@@ -8,6 +8,7 @@ import { TerminalCapture } from '../../tools/terminalCapture';
 import { SessionMemory } from '../../state/sessionMemory';
 import { getAgentConfig } from '../../config';
 import { transcribeAudio, synthesizeSpeech } from '../../voice/voiceEngine';
+import { PromptBuilder } from '../promptBuilder';
 
 export interface DispatchContext {
     workspaceRoot: string;
@@ -49,7 +50,6 @@ export class MessageDispatcher {
                         maxAutonomousToolSteps: config?.maxAutonomousToolSteps || 30,
                         enableInlineCompletions: vsConfig.get('enableInlineCompletions', false),
                         enableHoverExplanations: vsConfig.get('enableHoverExplanations', false),
-                        webBrainBridge: config?.webBrainBridge,
                         voice: config?.voice
                     }
                 });
@@ -124,7 +124,11 @@ export class MessageDispatcher {
             case 'requestRollbackPreview': {
                 if (!message.timestamp) break;
                 const messages = conversationHistory.getAllMessages();
-                const targetIdx = messages.findIndex((m: any) => m.timestamp === message.timestamp);
+                const targetIdx = messages.findIndex((m: any) => 
+                    m.timestamp === message.timestamp || 
+                    String(m.timestamp) === String(message.timestamp) || 
+                    Number(m.timestamp) === Number(message.timestamp)
+                );
                 if (targetIdx === -1) {
                     vscode.window.showWarningMessage('Checkpoint not found for rollback.');
                     break;
@@ -228,7 +232,11 @@ export class MessageDispatcher {
             case 'rollbackChat': {
                 if (message.timestamp) {
                     const messages = conversationHistory.getAllMessages();
-                    const targetIdx = messages.findIndex((m: any) => m.timestamp === message.timestamp);
+                    const targetIdx = messages.findIndex((m: any) => 
+                        m.timestamp === message.timestamp || 
+                        String(m.timestamp) === String(message.timestamp) || 
+                        Number(m.timestamp) === Number(message.timestamp)
+                    );
                     let revertedCount = 0;
                     let deletedCount = 0;
 
@@ -428,50 +436,6 @@ export class MessageDispatcher {
                 break;
             }
 
-            case 'testWebBrainBridge': {
-                try {
-                    const { WebBrainBridgeClient } = require('../../bridge/webBrainBridge');
-                    const port = Number(message.port) || 9222;
-                    const result = await WebBrainBridgeClient.testConnection(port);
-                    postMessage({
-                        command: 'webBrainBridgeTestResult',
-                        result
-                    });
-                } catch (e: any) {
-                    postMessage({
-                        command: 'webBrainBridgeTestResult',
-                        result: {
-                            success: false,
-                            message: `Error testing connection: ${e?.message || e}`,
-                            tabs: []
-                        }
-                    });
-                }
-                break;
-            }
-
-            case 'launchWebBrainBrowser': {
-                try {
-                    const { WebBrainBridgeClient } = require('../../bridge/webBrainBridge');
-                    const port = Number(message.port) || 9222;
-                    const provider = message.provider === 'gemini' ? 'gemini' : 'chatgpt';
-                    const result = await WebBrainBridgeClient.launchBrowser(port, provider);
-                    postMessage({
-                        command: 'webBrainBridgeTestResult',
-                        result
-                    });
-                } catch (e: any) {
-                    postMessage({
-                        command: 'webBrainBridgeTestResult',
-                        result: {
-                            success: false,
-                            message: `Error launching browser: ${e?.message || e}`,
-                            tabs: []
-                        }
-                    });
-                }
-                break;
-            }
 
             case 'getSessions': {
                 postMessage({
@@ -549,7 +513,7 @@ export class MessageDispatcher {
                     if (!fs.existsSync(aiDir)) fs.mkdirSync(aiDir, { recursive: true });
                     const pluginFile = path.join(aiDir, 'plugins.js');
                     if (!fs.existsSync(pluginFile)) {
-                        const template = `// Ultra Light AI - Custom Workspace Plugins\n// Export an array of custom tool objects to extend the agent's capabilities.\nmodule.exports = [\n  {\n    name: 'workspace_health',\n    description: 'Checks custom health rules for this workspace',\n    parameters: '{\"verbose\": boolean}',\n    async execute(argsStr, workspaceRoot) {\n      return 'All workspace systems healthy.';\n    }\n  }\n];\n`;
+                        const template = `/**\n * .ultra-light-ai/plugins.js\n * Production-ready runtime guardrails and filters for Vakra AI (4B Engine)\n */\nconst { execSync } = require('child_process');\nconst fs = require('fs');\nconst path = require('path');\n\nmodule.exports = {\n  /**\n   * Hook 1: beforePromptBuild\n   * Prepend dynamic context, route maps, or pinned facts right before prompt assembly.\n   */\n  async beforePromptBuild({ workspaceRoot, lastUserMessage, activeContext }) {\n    return { prependContext: '' };\n  },\n\n  /**\n   * Hook 2: afterToolExecute\n   * Filter noise (e.g. node_modules/site-packages) and truncate oversized logs.\n   */\n  async afterToolExecute({ toolName, rawOutput, workspaceRoot }) {\n    return rawOutput;\n  },\n\n  /**\n   * Hook 3: afterFileWrite\n   * Executes after write_file/edit_file. Return success: false, revertRequested: true to auto-revert broken syntax.\n   */\n  async afterFileWrite({ filePath, fileContent, oldContent, workspaceRoot }) {\n    return { success: true };\n  }\n};\n`;
                         fs.writeFileSync(pluginFile, template, 'utf8');
                     }
                     const doc = await vscode.workspace.openTextDocument(pluginFile);
@@ -557,6 +521,18 @@ export class MessageDispatcher {
                 } else {
                     vscode.window.showWarningMessage('Please open a workspace folder to configure plugins.');
                 }
+                break;
+            }
+
+            case 'clearCache': {
+                PromptBuilder.invalidatePrefixCache();
+                if (workspaceRoot) {
+                    const cacheDir = path.join(workspaceRoot, '.ultra-light-ai', 'cache');
+                    if (fs.existsSync(cacheDir)) {
+                        try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (e) {}
+                    }
+                }
+                vscode.window.showInformationMessage('🧹 AI prompt & metadata cache cleared successfully!');
                 break;
             }
 

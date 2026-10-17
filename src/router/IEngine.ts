@@ -10,6 +10,7 @@ export interface CompletionResult {
 export interface StreamChunk {
     text: string;
     done: boolean;
+    isThinking?: boolean;
     usage?: {
         promptTokens: number;
         completionTokens: number;

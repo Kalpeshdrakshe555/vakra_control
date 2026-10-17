@@ -273,41 +273,40 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const customEndpoint = mainBrain?.endpoint?.trim();
             const keyStr = mainBrain?.apiKey?.trim() || keys[0]?.trim() || '';
 
-            let mainBrainClient;
+            const configuredTemp = typeof config?.temperature === 'number' ? config.temperature : (typeof mainBrain?.temperature === 'number' ? mainBrain.temperature : 0.2);
+
+            let mainBrainClient: any;
             if (providerType === 'apinex') {
                 const ep = customEndpoint || 'https://api.apinex.bond/v1';
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', ep, keyStr);
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', ep, keyStr, configuredTemp);
             } else if (providerType === 'openai') {
                 const ep = customEndpoint || 'https://api.openai.com/v1';
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'gpt-4o', ep, keyStr);
-            } else if (customEndpoint && customEndpoint !== 'http://127.0.0.1:11434' && customEndpoint !== 'http://localhost:11434') {
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || model || 'deepseek-chat', customEndpoint, keyStr);
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'gpt-4o', ep, keyStr, configuredTemp);
             } else if (providerType === 'local') {
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'llama3', mainBrain?.endpoint || 'http://127.0.0.1:11434', keyStr);
+                const ep = customEndpoint || 'http://127.0.0.1:11434';
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'llama3', ep, keyStr, configuredTemp);
+            } else if (customEndpoint && customEndpoint !== 'http://127.0.0.1:11434' && customEndpoint !== 'http://localhost:11434') {
+                mainBrainClient = new LocalOllamaClient(mainBrain?.model || model || 'deepseek-chat', customEndpoint, keyStr, configuredTemp);
             } else {
-                if (keyStr.startsWith('sk-apx')) mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', 'https://api.apinex.bond/v1', keyStr);
-                else if (keyStr.startsWith('gsk_')) mainBrainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
-                else if (keyStr.startsWith('sk-or-')) mainBrainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
-                else if (keyStr.startsWith('sk-')) mainBrainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
+                if (keyStr.startsWith('sk-apx')) mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', 'https://api.apinex.bond/v1', keyStr, configuredTemp);
+                else if (keyStr.startsWith('gsk_')) mainBrainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr, configuredTemp);
+                else if (keyStr.startsWith('sk-or-')) mainBrainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr, configuredTemp);
+                else if (keyStr.startsWith('sk-')) mainBrainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr, configuredTemp);
                 else mainBrainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
             }
 
             // 2. Main Brain is ALWAYS the primary orchestrating model (No middle layers/interception!)
             const mainClient = mainBrainClient;
-            if (config?.webBrainBridge?.enabled) {
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: `🌐 Web Brain Tool Ready: ${config.webBrainBridge.provider?.toUpperCase() || 'GEMINI'} Web available via consult_web_brain`
-                });
-            }
 
             if (mainClient) {
                 mainClient.maxToolIterations = maxToolSteps;
             }
 
+            const isLocal = providerType === 'local' || (!!customEndpoint && (customEndpoint.includes('127.0.0.1') || customEndpoint.includes('localhost')));
+
             const promptCategory = PromptClassifier.classifyPrompt(message.text);
             const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
-            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget, message.text);
+            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget, message.text, isLocal);
 
             if (workspaceRoot) {
                 try {
@@ -344,8 +343,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const turnUserTimestamp = message.timestamp || Date.now();
             this.conversationHistory.addMessage('user', message.text, undefined, turnUserTimestamp);
 
-            const historyLimit = config?.contextLimits?.historyLength || 10;
-            const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
+            const historyLimit = config?.contextLimits?.historyLength || (isLocal ? 4 : 10);
+            const historyTokenLimit = isLocal ? 2500 : Math.min(12000, maxContextTokens * 0.4);
             const history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
             const historyWithoutLast = history.slice(0, -1);
 
@@ -353,7 +352,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 this.currentAbortController = new AbortController();
             }
 
-            const tools = [
+            const tools: any[] = [
                 {
                     functionDeclarations: [
                         {
@@ -430,6 +429,67 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             }
                         },
                         {
+                            name: "set_task_plan",
+                            description: "Establishes a high-level roadmap with user requirements in PLAN.md before modifying any code. Must await user approval.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    user_requirements: {
+                                        type: "string",
+                                        description: "Detailed summary of user requirements and criteria"
+                                    },
+                                    steps: {
+                                        type: "array",
+                                        items: { type: "string" },
+                                        description: "Array of sequential high-level macro steps (e.g. ['Step 1: Setup Models', 'Step 2: Create Views', 'Step 3: Map URLs'])"
+                                    }
+                                },
+                                required: ["steps"]
+                            }
+                        },
+                        {
+                            name: "expand_plan_step",
+                            description: "Expands an approved high-level step into detailed, executable micro sub-steps in PLAN.md (e.g. Step 1 -> 1.1, 1.2, 1.3).",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    step_id: {
+                                        type: "number",
+                                        description: "The 1-based step ID to expand (e.g. 1)"
+                                    },
+                                    sub_steps: {
+                                        type: "array",
+                                        items: { type: "string" },
+                                        description: "Detailed atomic micro-steps to execute for this parent step"
+                                    }
+                                },
+                                required: ["step_id", "sub_steps"]
+                            }
+                        },
+                        {
+                            name: "complete_plan_step",
+                            description: "Marks a sub-step or parent step as done in PLAN.md, recording touched files and core logic summary directly in the plan. Automatically triggers user handoff when a parent step completes.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    sub_step_id: { type: "string", description: "Optional sub-step ID (e.g. '1.1') or step number" },
+                                    summary: { type: "string", description: "Brief summary of what was completed and verified" },
+                                    modified_files: { type: "array", items: { type: "string" }, description: "File paths modified during this step" },
+                                    logic_summary: { type: "string", description: "Brief explanation of key logic, functions, or exports added" }
+                                },
+                                required: ["summary"]
+                            }
+                        },
+                        {
+                            name: "read_state_ledger",
+                            description: "Reads the centralized project state ledger (.ultra-light-ai/STATE_LEDGER.md) containing verified architecture, modified files, routes, and milestone progress from previous steps.",
+                            parameters: {
+                                type: "object",
+                                properties: {},
+                                required: []
+                            }
+                        },
+                        {
                             name: "write_file",
                             description: "Writes full file content to disk. Used to create files.",
                             parameters: { type: "object", properties: { filepath: { type: "string" }, content: { type: "string" } }, required: ["filepath", "content"] }
@@ -466,21 +526,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
             ];
 
-            if (config?.webBrainBridge?.enabled) {
-                const bridgeProvider = config.webBrainBridge.provider?.toUpperCase() || 'GEMINI';
-                tools[0].functionDeclarations.push({
-                    name: "consult_web_brain",
-                    description: `Consults ${bridgeProvider} Web in your running Chrome browser. Ask it for step-by-step guidance, code, architecture, terminal commands, or error debugging. The browser tab maintains the conversation context turn-by-turn just like a human chatting with ${bridgeProvider}. Use its response to execute terminal commands and write files.`,
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            prompt: { type: "string", description: "The exact prompt, instruction, or follow-up question to send to the browser AI" }
-                        },
-                        required: ["prompt"]
-                    }
-                });
-            }
-
             const turnExecutedToolCards: Array<{ tool: string; title: string; data: any }> = [];
 
             let isInsideThink = false;
@@ -506,8 +551,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     toolStatus = `🌐 Searching web: "${toolArgs.query || ''}"`;
                 } else if (functionCall.name === 'run_in_terminal') {
                     toolStatus = `💻 Running: ${toolArgs.command || ''}`;
-                } else if (functionCall.name === 'consult_web_brain') {
-                    toolStatus = `🌐 Consulting ${config?.webBrainBridge?.provider?.toUpperCase() || 'GEMINI'} Web...`;
                 }
                 this.postMessageToWebview({
                     command: 'statusUpdate',
@@ -536,11 +579,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     taskPlanner: this.taskPlanner,
                     currentTaskState: this.currentTaskState,
                     ragEngine: this.ragEngine,
+                    userPrompt: message.text,
                     recordFileBackup: (filepath: string, oldContent: string | null) => {
                         this.conversationHistory.addFileBackup(turnUserTimestamp, filepath, oldContent);
                     }
                 });
             };
+
+            const effectiveTools = PromptClassifier.filterTools(promptCategory, tools);
 
             const result = await mainClient.completeWithHistory({
                 prompt: finalPrompt,
@@ -582,7 +628,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         detectedToolCalls.push(...chunk.tool_calls);
                     }
                 },
-                tools,
+                tools: effectiveTools && effectiveTools.length > 0 ? effectiveTools : undefined,
                 onToolCall
             });
 

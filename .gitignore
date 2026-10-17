@@ -24,12 +24,34 @@ build/
 **/.chat-history.json
 **/.ai_state.json
 
-# Logs
+# Vakra AI Local Runtime Artifacts & Scratch
+.ultra-light-ai/scratch/
+.ultra-light-ai/*.json
+problems.txt
+test*.html
+test*.js
+
+# Logs & Debugging
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 eslint-debug.log*
 *.log
+
+# Audio & Voice Assistant Cache
+*.wav
+*.mp3
+temp_audio*
+
+# Python & Platform Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Coverage & Profiling
+coverage/
+.nyc_output/
 
 # OS Metadata
 .DS_Store
@@ -38,5 +60,5 @@ Thumbs.db
 # TypeScript Build Cache
 *.tsbuildinfo
 
-# Project Notes
+# Local Notes & Temporary Dumps
 features.md

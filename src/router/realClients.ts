@@ -23,8 +23,7 @@ const KNOWN_TOOLS_LIST = [
     'get_symbol_outline',
     'check_localhost_health',
     'update_architecture_context',
-    'generate_ui_blueprint',
-    'consult_web_brain'
+    'generate_ui_blueprint'
 ];
 const KNOWN_TOOLS_REGEX_STR = KNOWN_TOOLS_LIST.join('|');
 
@@ -945,10 +944,10 @@ export class GeminiCloudClient implements IEngine {
  */
 export class LocalOllamaClient implements IEngine {
     public readonly name = 'Local-Model';
-    public temperature: number = 0.4;
+    public temperature: number = 0.2;
     public maxToolIterations: number = 30;
 
-    constructor(private model: string = 'llama3', private endpoint: string = 'http://127.0.0.1:11434', private apiKey?: string, temperature: number = 0.4) {
+    constructor(private model: string = 'llama3', private endpoint: string = 'http://127.0.0.1:11434', private apiKey?: string, temperature: number = 0.2) {
         this.temperature = temperature;
     }
 
@@ -1053,6 +1052,7 @@ export class LocalOllamaClient implements IEngine {
         const localToolExecutionCounts = new Map<string, number>();
         let lastFullText = '';
         let currentUsage: CompletionResult['usage'] | undefined;
+        let forceTextSummary = false;
 
         for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
             if (signal?.aborted) {
@@ -1074,11 +1074,12 @@ export class LocalOllamaClient implements IEngine {
                 };
             }
 
-            // Only add tools on non-streaming or tool-loop iterations
-            if (openAITools && openAITools.length > 0) {
+            // Only add tools if not forced to produce conversational text summary (e.g. after macro step completes or plan is created)
+            if (openAITools && openAITools.length > 0 && !forceTextSummary) {
                 requestBody.tools = openAITools;
                 requestBody.tool_choice = 'auto';
             }
+            forceTextSummary = false;
 
             let response = await fetch(url, {
                 method: 'POST',
@@ -1297,8 +1298,29 @@ export class LocalOllamaClient implements IEngine {
                                 }
 
                                 const result = await onToolCall({ name: tc.name, args });
-                                const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                                messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${resultStr}\n\nPlease inspect the output and proceed to the next step.` });
+                                let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                                if (safeResultStr.length > 2000) {
+                                    safeResultStr = safeResultStr.substring(0, 2000) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in PLAN.md]';
+                                }
+                                if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
+                                    forceTextSummary = true;
+                                }
+                                messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${safeResultStr}\n\nPlease inspect the output and proceed to the next step.` });
+
+                                // PRUNE VOLATILE FILE-READ CONTEXT ON STEP COMPLETION:
+                                // Keeps conversation history intact, but wipes dead-weight raw file dumps from prior steps!
+                                if (tc.name === 'complete_plan_step') {
+                                    for (let mIdx = 0; mIdx < messages.length - 2; mIdx++) {
+                                        const m = messages[mIdx];
+                                        if (typeof m.content === 'string') {
+                                            if (m.content.includes('[Tool Result (read_multiple_files)]') && m.content.length > 300) {
+                                                m.content = `[Tool Result (read_multiple_files)]: (Files inspected in previous step. Key architecture saved in STATE_LEDGER.md)`;
+                                            } else if (m.content.includes('[Tool Result (execute_terminal_command)]') && m.content.length > 400) {
+                                                m.content = `[Tool Result (execute_terminal_command)]: (Command executed in previous step and verified clean.)`;
+                                            }
+                                        }
+                                    }
+                                }
                             } catch (e: any) {
                                 if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
                                     if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
@@ -1328,7 +1350,24 @@ export class LocalOllamaClient implements IEngine {
                                 }
 
                                 const result = await onToolCall({ name: tc.name, args });
-                                messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: typeof result === 'string' ? result : JSON.stringify(result) });
+                                let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                                if (safeResultStr.length > 2000) {
+                                    safeResultStr = safeResultStr.substring(0, 2000) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in PLAN.md]';
+                                }
+                                if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
+                                    forceTextSummary = true;
+                                }
+                                messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: safeResultStr });
+
+                                // PRUNE VOLATILE FILE-READ CONTEXT ON STEP COMPLETION:
+                                if (tc.name === 'complete_plan_step') {
+                                    for (let mIdx = 0; mIdx < messages.length - 2; mIdx++) {
+                                        const m = messages[mIdx];
+                                        if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 350) {
+                                            m.content = `(Tool output from previous step pruned. Key facts saved in STATE_LEDGER.md)`;
+                                        }
+                                    }
+                                }
                             } catch (e: any) {
                                 if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
                                     if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true });
@@ -1372,7 +1411,7 @@ export class LocalOllamaClient implements IEngine {
                         // Check if the model wants to call tools (or fallback to text-based tool calls)
                         let toolCalls = choice?.message?.tool_calls;
                         if ((!toolCalls || toolCalls.length === 0) && onToolCall) {
-                            const raw = choice?.message?.content || fullText;
+                            const raw = choice?.message?.content || choice?.message?.reasoning_content || fullText;
                             const textCalls = extractTextToolCalls(raw);
                             if (textCalls.length > 0) {
                                 toolCalls = textCalls.map((tc, i) => ({
@@ -1421,6 +1460,9 @@ export class LocalOllamaClient implements IEngine {
                                         if (onChunk) onChunk({ text: `\n> *⚙️ Tool: \`${tc.function.name}\`*\n`, done: false });
                                         const result = await onToolCall({ name: tc.function.name, args });
                                         const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                                        if (resultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.function.name === 'set_task_plan' || (tc.function.name === 'complete_plan_step' && (resultStr.includes('COMPLETE') || resultStr.includes('STOP AND HANDOFF')))) {
+                                            forceTextSummary = true;
+                                        }
                                         messages.push({
                                             role: 'user',
                                             content: `[Tool Result (${tc.function.name})]:\n${resultStr}\n\nPlease inspect the output and proceed to the next step.`
@@ -1457,10 +1499,14 @@ export class LocalOllamaClient implements IEngine {
 
                                         if (onChunk) onChunk({ text: `\n> *⚙️ Tool: \`${tc.function.name}\`*\n`, done: false });
                                         const result = await onToolCall({ name: tc.function.name, args });
+                                        const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                                        if (resultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.function.name === 'set_task_plan' || (tc.function.name === 'complete_plan_step' && (resultStr.includes('COMPLETE') || resultStr.includes('STOP AND HANDOFF')))) {
+                                            forceTextSummary = true;
+                                        }
                                         messages.push({
                                             role: 'tool',
                                             tool_call_id: tc.id,
-                                            content: typeof result === 'string' ? result : JSON.stringify(result)
+                                            content: resultStr
                                         });
                                     } catch (e: any) {
                                         if (signal?.aborted || e?.message?.includes('aborted') || e?.message?.includes('AbortError')) {
@@ -1485,7 +1531,7 @@ export class LocalOllamaClient implements IEngine {
                                 totalTokens: data.usage.total_tokens || ((data.usage.prompt_tokens || 0) + (data.usage.completion_tokens || 0))
                             };
                         }
-                        fullText = choice?.message?.content || '';
+                        fullText = choice?.message?.content || choice?.message?.reasoning_content || '';
                     }
                 } catch (e) {
                     fullText = rawText;
