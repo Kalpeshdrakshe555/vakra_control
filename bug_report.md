@@ -14,3 +14,8 @@
 
 ## Conclusion
 The repository is in good shape. The main issue found was a bug in the code replacement safety validator which prevented the AI from performing code deletions. This issue has been successfully resolved and all tests are passing.
+## 3. Other Identified Issues (from problems.txt)
+1. **Terminal Command Execution**: The AI currently executes terminal commands blindly, which prevents the user from seeing or editing them before they run. This can lead to unexpected consequences and immediate errors sent back to the prompt box.
+2. **Context Management and RAG**: Some projects fail because the AI doesn't have sufficient background context. RAG (Retrieval-Augmented Generation) and token management need to be correctly set up so the system understands the entire project without making mistakes.
+3. **Token Warning Setting**: The token setting in the configuration only displays a warning and is not functioning as intended to manage tokens effectively.
+4. **Data Saving Location**: The system currently saves user documents and settings JSON files directly in the user's working directory. This should be moved to a specific, hidden folder (like `.ultra-light-ai/`) using a "smart save" mechanism to avoid cluttering the workspace.
