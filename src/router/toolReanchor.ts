@@ -56,7 +56,7 @@ export function buildTailBlock(tools: ToolSpec[], ledger: AgentLedger): string {
     lines.push('');
     lines.push('[TOOLS: respond with exactly ONE tool call as JSON: {"name": "...", "args": {...}}]');
     lines.push(buildToolCard(tools));
-    lines.push('When the goal is fully done, reply {"name":"final_answer","args":{"summary":"..."}}.');
+    lines.push('When the goal is fully done, reply {"name":"finish","args":{"summary":"..."}}.');
     if (strict) {
         lines.push(
             `WARNING: your last ${ledger.consecutiveNoToolTurns} reply(ies) had no tool call. ` +
@@ -153,8 +153,9 @@ export function repairToolCall(raw: string, tools: ToolSpec[]): ParsedToolCall |
     let args = fn.args ?? fn.arguments ?? fn.parameters ?? fn.input;
     if (typeof args === 'string') args = safeParse(args);
 
-    if (typeof name === 'string' && names.has(name)) {
-        return { name, args: (args && typeof args === 'object') ? args : {} };
+    const mappedName = name === 'final_answer' ? 'finish' : name;
+    if (typeof mappedName === 'string' && names.has(mappedName)) {
+        return { name: mappedName, args: (args && typeof args === 'object') ? args : {} };
     }
     // Naked JSON
     const match = matchToolByArgs(obj, tools);

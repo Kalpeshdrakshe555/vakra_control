@@ -15,11 +15,12 @@ import { UnifiedWebSearch } from '../../tools/unifiedWebSearch';
 import { SkillsManager } from '../../features/skillsManager';
 import { guardTool } from '../../guards';
 import { validateFile, formatValidationReport } from '../../validators';
-import { redact } from '../../security/secretsFilter';
-import { buildWrapper, parseReply, splitReplyIntoTasks, TaskExecutor } from '../../brain';
+import { redact, isSecretPath } from '../../security/secretsFilter';
 import { getModelProfile } from '../../config/modelProfile';
 import { RuntimePlugins } from '../../plugins/runtimePlugins';
 import { StateLedger } from '../../state/stateLedger';
+import { AgentRoleType } from '../../agents/types';
+import { validateRoleToolCall } from '../../agents/permissions';
 
 export interface ToolExecutionContext {
     workspaceRoot: string;
@@ -35,6 +36,7 @@ export interface ToolExecutionContext {
     recordFileBackup?: (filepath: string, oldContent: string | null) => void;
     config?: any;
     userPrompt?: string;
+    activeRole?: AgentRoleType;
 }
 
 export class ToolDispatcher {
@@ -42,6 +44,25 @@ export class ToolDispatcher {
     private static lastReadFiles: Set<string> = new Set<string>();
     private static lastFailedCommand: string | null = null;
     private static filesModifiedSinceLastCommand: boolean = false;
+
+    public static getLastFailedCommand(): string | null {
+        return this.lastFailedCommand;
+    }
+
+    public static setLastFailedCommand(cmd: string | null): void {
+        this.lastFailedCommand = cmd;
+    }
+
+    public static clearFailedCommand(): void {
+        this.lastFailedCommand = null;
+    }
+
+    public static resetSessionState(): void {
+        this.consecutiveReadCount = 0;
+        this.lastReadFiles.clear();
+        this.lastFailedCommand = null;
+        this.filesModifiedSinceLastCommand = false;
+    }
 
     public static async dispatch(functionCall: any, ctx: ToolExecutionContext): Promise<any> {
         const rawResult = await this.internalDispatch(functionCall, ctx);
@@ -54,16 +75,43 @@ export class ToolDispatcher {
 
     private static async internalDispatch(functionCall: any, ctx: ToolExecutionContext): Promise<any> {
         if (ctx.signal?.aborted) {
-            throw new Error('Operation aborted by user.');
+            return 'Operation cancelled by user.';
         }
 
         const { workspaceRoot, postMessage } = ctx;
-        const name = functionCall.name;
-        const args = functionCall.args || {};
+        const name = functionCall?.name || functionCall?.function?.name;
+        let args = functionCall?.args ?? functionCall?.arguments ?? functionCall?.function?.arguments ?? {};
+        if (typeof args === 'string') {
+            try {
+                args = JSON.parse(args);
+            } catch {}
+        }
+
+        // Dual-Layer Role Permission Gate
+        if (ctx.activeRole) {
+            const roleValidation = validateRoleToolCall(ctx.activeRole, name, args);
+            if (!roleValidation.allowed) {
+                return `Error: ${roleValidation.error || `Permission denied: Tool '${name}' is not permitted for role '${ctx.activeRole}'.`}`;
+            }
+        }
 
         if (name === 'finish') {
             if (this.lastFailedCommand) {
                 return `REJECTED: Cannot finish task because command '${this.lastFailedCommand}' failed. You must diagnose the error, fix the relevant file using edit_file/write_file, and verify the fix before calling finish.`;
+            }
+            if (ctx.taskPlanner && typeof ctx.taskPlanner.getSteps === 'function') {
+                const steps = ctx.taskPlanner.getSteps() || [];
+                const incomplete = steps.filter((s: any) => {
+                    if (s.status !== 'done') return true;
+                    if (s.subSteps && s.subSteps.length > 0) {
+                        return s.subSteps.some((sub: any) => sub.status !== 'done');
+                    }
+                    return false;
+                });
+                if (incomplete.length > 0) {
+                    const stepSummary = incomplete.map((s: any) => `Step ${s.id}: ${s.title} [${s.status}]`).join(', ');
+                    return `REJECTED: Cannot finish task because the following plan steps are incomplete: ${stepSummary}. All planned steps must be executed and marked done before calling finish.`;
+                }
             }
             const summary = args.summary || 'Task completed successfully.';
             if (workspaceRoot) {
@@ -138,7 +186,7 @@ export class ToolDispatcher {
 
             const planMarkdown = `# 🎯 User Requirements\n${userRequirements}\n--------------------------------------------------\n` + planSteps.map(p => `[ ] Step ${p.id}: ${p.title}`).join('\n');
 
-            return `[PLAN.MD ESTABLISHED IN WORKSPACE]:\n\n${planMarkdown}\n\n🛑 STOP AND SHOW PLAN TO USER NOW:\nPresent this plan clearly to the user in your response and ask:\n"Maine aapki requirement ke according yeh plan banaya hai. Kya yeh sahi hai ya isme koi changes chahiye?"\n\n⚠️ CRITICAL DIRECTIVE: DO NOT execute any code, file edits, or terminal commands until the user responds and approves this plan! Once the user approves, you will call 'expand_plan_step' to expand Step 1 into detailed micro sub-steps.`;
+            return `[PLAN.MD ESTABLISHED IN WORKSPACE]:\n\n${planMarkdown}\n\n🛑 STOP AND SHOW PLAN TO USER NOW:\nPresent this plan clearly to the user in your response and ask:\n"I have prepared this implementation plan based on your requirements. Please review and confirm if this looks good to proceed or if you would like any changes."\n\n⚠️ CRITICAL DIRECTIVE: DO NOT execute any code, file edits, or terminal commands until the user responds and approves this plan! Once the user approves, you will call 'expand_plan_step' to expand Step 1 into detailed micro sub-steps.`;
         }
 
         if (name === 'expand_plan_step') {
@@ -232,7 +280,7 @@ export class ToolDispatcher {
                 const finishedId = completionResult.parentStepId || 1;
                 const nextStepId = finishedId + 1;
 
-                return `🎉 ALL SUB-STEPS FOR STEP ${finishedId} ARE COMPLETE!\n[x] Step ${finishedId} is now verified and marked complete in PLAN.md.\n\n🛑 STOP AND HANDOFF TO USER:\nOutput a clean, concise summary of what was completed and verified in Step ${finishedId}.\nThen ask the user:\n"Step ${finishedId} successfully complete ho gaya hai aur PLAN.md update ho chuki hai. Kya ab hum Step ${nextStepId} start karein?"\n\n⚠️ DO NOT EXECUTE OR START STEP ${nextStepId} UNTIL THE USER RESPONDS!`;
+                return `🎉 ALL SUB-STEPS FOR STEP ${finishedId} ARE COMPLETE!\n[x] Step ${finishedId} is now verified and marked complete in PLAN.md.\n\n🛑 STOP AND HANDOFF TO USER:\nOutput a clean, concise summary of what was completed and verified in Step ${finishedId}.\nThen ask the user:\n"Step ${finishedId} has been successfully completed and PLAN.md is updated. Shall we proceed to Step ${nextStepId}?"\n\n⚠️ DO NOT EXECUTE OR START STEP ${nextStepId} UNTIL THE USER RESPONDS!`;
             }
 
             // Otherwise, advance to the next active sub-step within the same parent step
@@ -309,13 +357,41 @@ export class ToolDispatcher {
                     continue;
                 }
                 const fullPath = safeCheck.resolvedPath;
+
+                // Priority 1: Check sensitive/secret file access
+                const relPath = path.relative(workspaceRoot, fullPath);
+                let isSecret = isSecretPath(fp, workspaceRoot) || isSecretPath(relPath, workspaceRoot);
+                if (!isSecret && fs.existsSync(fullPath)) {
+                    try {
+                        const realPath = fs.realpathSync(fullPath);
+                        if (isSecretPath(realPath, workspaceRoot)) {
+                            isSecret = true;
+                        }
+                    } catch (_) {}
+                }
+
+                if (isSecret) {
+                    combinedResult += `\n--- File: ${fp} (ACCESS DENIED: Sensitive credential or secret file restricted by security policy) ---\n`;
+                    continue;
+                }
+
                 if (!fs.existsSync(fullPath)) {
                     combinedResult += `\n--- File: ${fp} (Not Found) ---\n`;
                     continue;
                 }
 
+                try {
+                    const st = fs.statSync(fullPath);
+                    if (st.isDirectory()) {
+                        combinedResult += `\n--- File: ${fp} (Is a Directory. Use list_directory_tree to view directory contents) ---\n`;
+                        continue;
+                    }
+                } catch (_) {}
+
                 const rawContent = fs.readFileSync(fullPath, 'utf8');
-                const allLines = rawContent.split(/\r?\n/);
+                // Defense-in-depth: redact accidental credentials from outbound content
+                const safeContent = redact(rawContent).text;
+                const allLines = safeContent.split(/\r?\n/);
                 const totalLines = allLines.length;
 
                 // Case A: Specific line range requested
@@ -328,7 +404,7 @@ export class ToolDispatcher {
                 }
 
                 // Case B: Large file (> 350 lines or > 2000 tokens) without explicit range
-                const estimatedTok = estimateTokens(rawContent);
+                const estimatedTok = estimateTokens(safeContent);
                 if (totalLines > 350 || estimatedTok > 2000) {
                     const previewLines = allLines.slice(0, 80).map((line, idx) => `${idx + 1} | ${line}`).join('\n');
                     
@@ -364,6 +440,9 @@ export class ToolDispatcher {
             this.lastReadFiles.clear();
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
+            if (!filepath || typeof filepath !== 'string' || !filepath.trim()) {
+                return "Error: filepath is required.";
+            }
 
             postMessage({
                 command: 'statusUpdate',
@@ -374,7 +453,14 @@ export class ToolDispatcher {
 
             const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
             if (!safeCheck.safe) return `Invalid path: ${filepath}`;
+            if (isSecretPath(filepath, workspaceRoot)) {
+                return `ACCESS DENIED: Modifying sensitive credential file '${filepath}' is restricted by security policy.`;
+            }
             const fullPath = safeCheck.resolvedPath;
+
+            if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+                return `Error: Path '${filepath}' is a directory, not a file.`;
+            }
 
             const fileAlreadyExists = fs.existsSync(fullPath);
             const oldContent = fileAlreadyExists ? fs.readFileSync(fullPath, 'utf8') : '';
@@ -453,10 +539,23 @@ export class ToolDispatcher {
             });
 
             return await new Promise<string>((resolve) => {
+                let abortHandler: (() => void) | null = null;
                 if (ctx.signal) {
-                    ctx.signal.addEventListener('abort', () => resolve('Operation cancelled by user.'));
+                    if (ctx.signal.aborted) {
+                        ctx.pendingEditResolvers?.delete(callId);
+                        resolve('Operation cancelled by user.');
+                        return;
+                    }
+                    abortHandler = () => {
+                        ctx.pendingEditResolvers?.delete(callId);
+                        resolve('Operation cancelled by user.');
+                    };
+                    ctx.signal.addEventListener('abort', abortHandler, { once: true });
                 }
                 ctx.pendingEditResolvers?.set(callId, async (approved, autoApproveSession) => {
+                    if (abortHandler && ctx.signal) {
+                        ctx.signal.removeEventListener('abort', abortHandler);
+                    }
                     if (autoApproveSession) ctx.isEditSessionAutoApproved = true;
                     if (!approved) {
                         resolve(`User rejected write operation for ${filepath}.`);
@@ -478,6 +577,9 @@ export class ToolDispatcher {
             this.lastReadFiles.clear();
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
+            if (!filepath || typeof filepath !== 'string' || !filepath.trim()) {
+                return "Error: filepath is required.";
+            }
 
             postMessage({
                 command: 'statusUpdate',
@@ -492,7 +594,14 @@ export class ToolDispatcher {
 
             const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
             if (!safeCheck.safe) return `Invalid path: ${filepath}`;
+            if (isSecretPath(filepath, workspaceRoot)) {
+                return `ACCESS DENIED: Modifying sensitive credential file '${filepath}' is restricted by security policy.`;
+            }
             const fullPath = safeCheck.resolvedPath;
+
+            if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+                return `Error: Path '${filepath}' is a directory, not a file.`;
+            }
 
             if (!fs.existsSync(fullPath)) return `Error: File not found: ${filepath}`;
 
@@ -547,51 +656,38 @@ export class ToolDispatcher {
             }
 
             const newContent = fileContent.replace(matchedOldText, newText);
-
-            FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
-            if (ctx.recordFileBackup) {
-                ctx.recordFileBackup(fullPath, fileContent);
-            }
-            fs.writeFileSync(fullPath, newContent, 'utf8');
-
-            try {
-                const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
-                if (openDoc && openDoc.isDirty) {
-                    await openDoc.save();
-                }
-            } catch {}
-
-            // Execute Runtime Plugin afterFileWrite syntax guard
-            const pluginCheck = await RuntimePlugins.afterFileWrite({
-                filePath: fullPath,
-                fileContent: newContent,
-                oldContent: fileContent,
-                workspaceRoot
-            });
-            if (!pluginCheck.success && pluginCheck.revertRequested) {
-                return pluginCheck.feedback || 'File syntax error detected. Reverted.';
-            }
-
-            SessionMemory.getInstance(workspaceRoot).recordToolResult('edit_file', args, 'File patch applied successfully', true);
-            this.filesModifiedSinceLastCommand = true;
-            LivingIndex.refreshBlueprint(workspaceRoot).catch(() => {});
-
             const callId = 'edit_' + Date.now();
-            postMessage({
-                command: 'toolCallEvent',
-                tool: 'edit_file',
-                title: 'Edited File',
-                data: {
-                    callId,
-                    filepath,
-                    oldText,
-                    newText,
-                    content: newContent,
-                    oldContent: fileContent,
-                    hasDiff: true,
-                    isAutoApproved: true
+
+            const applyEditToDisk = async (): Promise<string | null> => {
+                FileVersioning.saveSnapshot(workspaceRoot, fullPath, fileContent);
+                if (ctx.recordFileBackup) {
+                    ctx.recordFileBackup(fullPath, fileContent);
                 }
-            });
+                fs.writeFileSync(fullPath, newContent, 'utf8');
+
+                try {
+                    const openDoc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === fullPath);
+                    if (openDoc && openDoc.isDirty) {
+                        await openDoc.save();
+                    }
+                } catch {}
+
+                // Execute Runtime Plugin afterFileWrite syntax guard
+                const pluginCheck = await RuntimePlugins.afterFileWrite({
+                    filePath: fullPath,
+                    fileContent: newContent,
+                    oldContent: fileContent,
+                    workspaceRoot
+                });
+                if (!pluginCheck.success && pluginCheck.revertRequested) {
+                    return pluginCheck.feedback || 'File syntax error detected. Reverted.';
+                }
+
+                SessionMemory.getInstance(workspaceRoot).recordToolResult('edit_file', args, 'File patch applied successfully', true);
+                this.filesModifiedSinceLastCommand = true;
+                LivingIndex.refreshBlueprint(workspaceRoot).catch(() => {});
+                return null;
+            };
 
             let blastRadiusMsg = '';
             try {
@@ -602,13 +698,86 @@ export class ToolDispatcher {
                 }
             } catch {}
 
-            let valSuffix = '';
-            if (workspaceRoot) {
-                const valResults = await validateFile(fullPath, { workspaceRoot });
-                valSuffix = formatValidationReport(fullPath, valResults);
+            const getValidationSuffix = async (): Promise<string> => {
+                if (workspaceRoot) {
+                    const valResults = await validateFile(fullPath, { workspaceRoot });
+                    return formatValidationReport(fullPath, valResults);
+                }
+                return '';
+            };
+
+            // If session is already auto-approved, apply edit immediately
+            if (ctx.isEditSessionAutoApproved) {
+                const editErr = await applyEditToDisk();
+                if (editErr) return editErr;
+                postMessage({
+                    command: 'toolCallEvent',
+                    tool: 'edit_file',
+                    title: 'Edited File',
+                    data: {
+                        callId,
+                        filepath,
+                        oldText,
+                        newText,
+                        content: newContent,
+                        oldContent: fileContent,
+                        hasDiff: true,
+                        isAutoApproved: true
+                    }
+                });
+                const valSuffix = await getValidationSuffix();
+                return `Successfully edited file: ${filepath}.${blastRadiusMsg}${valSuffix}`;
             }
 
-            return `Successfully edited file: ${filepath}.${blastRadiusMsg}${valSuffix}`;
+            // Otherwise, pause and wait for user card approval in the trusted execution layer
+            postMessage({
+                command: 'toolCallEvent',
+                tool: 'edit_file',
+                title: 'Edit File Request',
+                data: {
+                    callId,
+                    filepath,
+                    oldText,
+                    newText,
+                    content: newContent,
+                    oldContent: fileContent,
+                    hasDiff: true,
+                    isAutoApproved: false
+                }
+            });
+
+            return await new Promise<string>((resolve) => {
+                let abortHandler: (() => void) | null = null;
+                if (ctx.signal) {
+                    if (ctx.signal.aborted) {
+                        ctx.pendingEditResolvers?.delete(callId);
+                        resolve('Operation cancelled by user.');
+                        return;
+                    }
+                    abortHandler = () => {
+                        ctx.pendingEditResolvers?.delete(callId);
+                        resolve('Operation cancelled by user.');
+                    };
+                    ctx.signal.addEventListener('abort', abortHandler, { once: true });
+                }
+                ctx.pendingEditResolvers?.set(callId, async (approved, autoApproveSession) => {
+                    if (abortHandler && ctx.signal) {
+                        ctx.signal.removeEventListener('abort', abortHandler);
+                    }
+                    if (autoApproveSession) ctx.isEditSessionAutoApproved = true;
+                    if (!approved) {
+                        resolve(`User rejected edit operation for ${filepath}.`);
+                        return;
+                    }
+                    const editErr = await applyEditToDisk();
+                    if (editErr) {
+                        resolve(editErr);
+                        return;
+                    }
+                    const valSuffix = await getValidationSuffix();
+                    resolve(`Successfully edited file: ${filepath}.${blastRadiusMsg}${valSuffix}`);
+                });
+            });
         }
 
         if (name === 'execute_terminal_command') {
@@ -618,8 +787,8 @@ export class ToolDispatcher {
             if (!command) return "Error: command is required.";
 
             const trimmed = command.trim();
-            if (/\bpython\b.*manage\.py\s+runserver\b/i.test(trimmed)) {
-                return "BLOCKED: 'python manage.py runserver' is a blocking continuous process and will freeze the agent loop. Use non-blocking verification instead: run 'python manage.py check' to validate models/settings/routes, or execute a verification test script in '.ultra-light-ai/scratch/'.";
+            if (TerminalCapture.isDaemonCommand(trimmed)) {
+                return `BLOCKED: '${trimmed}' is a continuous/daemon process and cannot run synchronously in tool execution. Use non-blocking verification instead (e.g. build, lint, check, or test scripts).`;
             }
 
             if (/^(?:from\s+[A-Za-z0-9_.]+\s+import|import\s+[A-Za-z0-9_.]+)/.test(trimmed) || /^(?:class|def)\s+[A-Za-z0-9_]+/.test(trimmed) || /^(?:python|python3|py)\s*$/i.test(trimmed) || /^(?:python|python3|py)\s+-i\b/i.test(trimmed)) {
@@ -637,7 +806,7 @@ export class ToolDispatcher {
                     title: 'Terminal Command (Session Auto-Approved)',
                     data: { command: cmd, explanation, callId: autoCallId, isAutoApproved: true }
                 });
-                const res = await TerminalCapture.runAndCapture(cmd, workspaceRoot);
+                const res = await TerminalCapture.runAndCapture(cmd, workspaceRoot, { signal: ctx.signal });
                 const isSuccess = res.exitCode === 0 && !res.error;
                 if (isSuccess) {
                     this.lastFailedCommand = null;
@@ -653,8 +822,7 @@ export class ToolDispatcher {
                     output: res.output,
                     commandText: cmd
                 });
-                const failureHint = res.error ? '\n\n💡 TIP: If this error is unfamiliar or involves framework/dependency issues, call search_web(query="<framework> <exact error>") to inspect documentation before guessing code edits.' : '';
-                return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}${failureHint}`;
+                return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}`;
             }
 
             const callId = 'cmd_' + Date.now();
@@ -666,16 +834,26 @@ export class ToolDispatcher {
             });
 
             return await new Promise<string>((resolve) => {
+                let abortListener: (() => void) | null = null;
+                if (ctx.signal) {
+                    abortListener = () => {
+                        TerminalCapture.cancelActive();
+                        resolve('Operation cancelled by user.');
+                    };
+                    ctx.signal.addEventListener('abort', abortListener, { once: true });
+                }
                 ctx.pendingTerminalResolvers.set(callId, (resText) => {
-                    const isSuccess = !resText.includes('FAILED');
+                    if (abortListener && ctx.signal) {
+                        ctx.signal.removeEventListener('abort', abortListener);
+                    }
+                    const isSuccess = !resText.includes('FAILED') && !resText.includes('SKIPPED');
                     if (isSuccess) {
                         this.lastFailedCommand = null;
                     } else {
                         this.lastFailedCommand = cmd;
                     }
                     SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', args, resText, isSuccess);
-                    const failureHint = !isSuccess ? '\n\n💡 TIP: If this error is unfamiliar or involves framework/dependency issues, call search_web(query="<framework> <exact error>") to inspect documentation before guessing code edits.' : '';
-                    resolve(resText + failureHint);
+                    resolve(resText);
                 });
             });
         }
@@ -759,8 +937,18 @@ export class ToolDispatcher {
             });
 
             try {
-                // Use LivingIndex / ToolRegistry to execute codebase search
-                const results = await ToolRegistry.executeTool('search_codebase', JSON.stringify({ query }), workspaceRoot);
+                let results: string | null = null;
+                if (ctx.ragEngine && typeof ctx.ragEngine.searchWithSnippets === 'function') {
+                    const snippets = ctx.ragEngine.searchWithSnippets(query, 5);
+                    if (snippets && snippets.length > 0) {
+                        results = snippets.map((s: any) => s.snippet).join('\n\n---\n\n');
+                    }
+                }
+
+                if (!results) {
+                    results = await ToolRegistry.executeTool('search_codebase', JSON.stringify({ query }), workspaceRoot);
+                }
+
                 SessionMemory.getInstance(workspaceRoot).recordToolResult('search_codebase', args, 'Codebase searched', true);
                 return results || `No matches found for query: "${query}" in workspace.`;
             } catch (err: any) {
@@ -933,6 +1121,15 @@ ${searchRes.text}
             }
         }
 
-        return `Tool '${name}' executed via fallback.`;
+        if (ToolRegistry.hasTool(name)) {
+            try {
+                const rawArgs = typeof args === 'string' ? args : JSON.stringify(args || {});
+                return await ToolRegistry.executeTool(name, rawArgs, workspaceRoot);
+            } catch (err: any) {
+                return `Error executing tool '${name}': ${err?.message || err}`;
+            }
+        }
+
+        return `Error: Unknown or unsupported tool '${name}'.`;
     }
 }

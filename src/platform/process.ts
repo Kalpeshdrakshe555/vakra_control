@@ -9,6 +9,7 @@ export interface RunProcessOptions {
     timeoutMs?: number;
     maxOutputBytes?: number;
     stdinText?: string;
+    signal?: AbortSignal;
 }
 
 export interface ProcessResult {
@@ -18,6 +19,7 @@ export interface ProcessResult {
     stderr: string;
     combined: string;
     timedOut: boolean;
+    cancelled?: boolean;
     durationMs: number;
     error?: string;
 }
@@ -77,10 +79,26 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
         }
     }
 
+    if (options.signal?.aborted) {
+        return {
+            ok: false,
+            exitCode: -1,
+            stdout: '',
+            stderr: 'Process cancelled by abort signal',
+            combined: 'Process cancelled by abort signal',
+            timedOut: false,
+            cancelled: true,
+            durationMs: 0,
+            error: 'Process cancelled by abort signal'
+        };
+    }
+
     return new Promise<ProcessResult>((resolve) => {
         let child: ChildProcess;
         let timedOut = false;
+        let cancelled = false;
         let timer: NodeJS.Timeout | null = null;
+        let abortHandler: (() => void) | null = null;
 
         let stdoutBuf = '';
         let stderrBuf = '';
@@ -93,6 +111,30 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
                 if (isErr) stderrBuf += str;
                 else stdoutBuf += str;
             }
+        };
+
+        const finish = (code: number | null, err?: any) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (abortHandler && options.signal) {
+                options.signal.removeEventListener('abort', abortHandler);
+            }
+
+            const durationMs = Date.now() - startTime;
+            const ok = code === 0 && !timedOut && !cancelled;
+
+            resolve({
+                ok,
+                exitCode: code,
+                stdout: stdoutBuf,
+                stderr: stderrBuf,
+                combined: combinedBuf,
+                timedOut,
+                cancelled,
+                durationMs,
+                error: err?.message || (timedOut ? `Process timed out after ${timeoutMs}ms` : (cancelled ? 'Process cancelled by abort signal' : undefined))
+            });
         };
 
         try {
@@ -112,9 +154,21 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
                 stderr: err?.message || String(err),
                 combined: err?.message || String(err),
                 timedOut: false,
+                cancelled: false,
                 durationMs: Date.now() - startTime,
                 error: err?.message || String(err)
             });
+        }
+
+        if (options.signal) {
+            abortHandler = async () => {
+                cancelled = true;
+                if (child.pid) {
+                    await killTree(child.pid);
+                }
+                finish(-1, new Error('Process cancelled by abort signal'));
+            };
+            options.signal.addEventListener('abort', abortHandler, { once: true });
         }
 
         if (options.stdinText && child.stdin) {
@@ -140,26 +194,6 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
         child.stderr?.on('data', (chunk) => {
             appendOutput(chunk.toString('utf8'), true);
         });
-
-        const finish = (code: number | null, err?: any) => {
-            if (settled) return;
-            settled = true;
-            if (timer) clearTimeout(timer);
-
-            const durationMs = Date.now() - startTime;
-            const ok = code === 0 && !timedOut;
-
-            resolve({
-                ok,
-                exitCode: code,
-                stdout: stdoutBuf,
-                stderr: stderrBuf,
-                combined: combinedBuf,
-                timedOut,
-                durationMs,
-                error: err?.message || (timedOut ? `Process timed out after ${timeoutMs}ms` : undefined)
-            });
-        };
 
         child.on('close', (code) => finish(code));
         child.on('error', (err) => finish(-1, err));

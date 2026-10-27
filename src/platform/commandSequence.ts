@@ -27,6 +27,7 @@ export interface CommandSequenceOptions {
     maxOutputBytes?: number;
     env?: NodeJS.ProcessEnv;
     onSegmentStart?: (segment: string, cwd: string) => void;
+    signal?: AbortSignal;
 }
 
 /**
@@ -127,6 +128,16 @@ export async function runCommandSequence(
     const workspaceRoot = options?.workspaceRoot || initialCwd;
 
     for (const segment of segments) {
+        if (options?.signal?.aborted) {
+            return {
+                ok: false,
+                results,
+                failingSegment: segment,
+                finalCwd: currentCwd,
+                combinedOutput: cleanOutput(results.map(r => r.output).join('\n') + '\nProcess cancelled by abort signal')
+            };
+        }
+
         options?.onSegmentStart?.(segment, currentCwd);
 
         // 1. In-process 'cd' handler
@@ -231,7 +242,8 @@ async function executeSingleSegment(
         cwd,
         env: options?.env,
         timeoutMs: options?.timeoutMs ?? 60000,
-        maxOutputBytes: options?.maxOutputBytes ?? 1024 * 1024
+        maxOutputBytes: options?.maxOutputBytes ?? 1024 * 1024,
+        signal: options?.signal
     });
 
     const rawOutput = (res.stdout || '') + (res.stderr ? '\n' + res.stderr : '');

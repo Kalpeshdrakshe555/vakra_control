@@ -26,39 +26,11 @@ export interface DistillationResult {
 function getDistillerClient(workspaceRoot: string): { client: any; brainName: string } | null {
     try {
         const config = getAgentConfig(workspaceRoot);
-        const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
+        const { createConfiguredClient } = require('../router/realClients');
 
         const main = config?.mainBrain;
-        if (main && main.model) {
-            if (main.providerType === 'local') {
-                return {
-                    client: new LocalOllamaClient(main.model, main.endpoint || 'http://127.0.0.1:11434', main.apiKey),
-                    brainName: `AI (${main.model})`
-                };
-            } else {
-                const keyStr = main.apiKey?.trim() || '';
-                if (keyStr.startsWith('gsk_')) {
-                    return {
-                        client: new LocalOllamaClient(main.model, 'https://api.groq.com/openai', keyStr),
-                        brainName: `AI (${main.model} - Groq)`
-                    };
-                } else if (keyStr.startsWith('sk-or-')) {
-                    return {
-                        client: new LocalOllamaClient(main.model, 'https://openrouter.ai/api', keyStr),
-                        brainName: `AI (${main.model} - OpenRouter)`
-                    };
-                } else if (keyStr.startsWith('sk-')) {
-                    return {
-                        client: new LocalOllamaClient(main.model, 'https://api.openai.com', keyStr),
-                        brainName: `AI (${main.model} - OpenAI)`
-                    };
-                } else {
-                    return {
-                        client: new GeminiCloudClient([keyStr], main.model || 'gemini-1.5-pro', 60),
-                        brainName: `AI (${main.model})`
-                    };
-                }
-            }
+        if (main && (main.model || main.apiKey)) {
+            return createConfiguredClient(config, { timeoutSeconds: 60 });
         }
 
         return null;

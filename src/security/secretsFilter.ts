@@ -14,28 +14,45 @@ const SECRET_PATH_PATTERNS: RegExp[] = [
     /^\.env(\..+)?$/i,
     /\.(pem|key|p12|pfx|sqlite3|db)$/i,
     /^id_(rsa|ed25519|ecdsa|dsa)(\..+)?$/i,
-    /credentials.*\.json$/i,
-    /.*secret.*/i
+    /^credentials(\..+)?$/i,
+    /.*secret.*/i,
+    /^\.(netrc|npmrc|dockercfg)$/i,
+    /^authorized_keys$/i,
+    /^known_hosts$/i
 ];
 
 const SECRET_DIR_PATTERNS: RegExp[] = [
     /^\.git([\\\/].*)?$/i,
     /^node_modules([\\\/].*)?$/i,
     /^(venv|\.venv|env)([\\\/].*)?$/i,
-    /^__pycache__([\\\/].*)?$/i
+    /^__pycache__([\\\/].*)?$/i,
+    /^\.aws([\\\/].*)?$/i,
+    /^\.ssh([\\\/].*)?$/i,
+    /^\.gnupg([\\\/].*)?$/i
 ];
 
 /**
  * Checks whether a relative or absolute path points to a sensitive file or directory.
  */
-export function isSecretPath(relPath: string): boolean {
-    if (!relPath) return false;
+export function isSecretPath(targetPath: string, workspaceRoot?: string): boolean {
+    if (!targetPath) return false;
+    let relPath = targetPath;
+    if (workspaceRoot) {
+        try {
+            const root = path.resolve(workspaceRoot);
+            const resolved = path.isAbsolute(targetPath) ? path.resolve(targetPath) : path.resolve(root, targetPath);
+            relPath = path.relative(root, resolved);
+        } catch {
+            relPath = targetPath;
+        }
+    }
     const normalized = relPath.replace(/\\/g, '/').replace(/^\.\//, '');
     const baseName = path.basename(normalized);
 
     // Check directory components
     const parts = normalized.split('/');
     for (const part of parts) {
+        if (!part || part === '.') continue;
         for (const dirPat of SECRET_DIR_PATTERNS) {
             if (dirPat.test(part)) return true;
         }
@@ -113,7 +130,8 @@ export function redact(text: string): RedactResult {
 
     // 8. Generic assignment secrets (e.g. SECRET_KEY = '...', password: '...', api_key = "...")
     const genericSecretRegex = /\b(api[_-]?key|secret(?:_key)?|token|password|passwd|pwd)\s*([:=])\s*(['"]?)([^\s'"\r\n]{6,})\3/gi;
-    result = result.replace(genericSecretRegex, (_match, keyName, sep, quote) => {
+    result = result.replace(genericSecretRegex, (match, keyName, sep, quote, val) => {
+        if (typeof val === 'string' && val.startsWith('[REDACTED:')) return match;
         record('credential-kv');
         return `${keyName} ${sep} ${quote}[REDACTED:SECRET]${quote}`;
     });

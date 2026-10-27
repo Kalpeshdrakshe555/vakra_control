@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { StateMachine } from './state/stateMachine';
-import { EngineRouter } from './router/engineRouter';
 import { GeminiCloudClient } from './router/realClients';
 import { SidebarProvider } from './webview/sidebarProvider';
 import { IEngine } from './router/IEngine';
@@ -41,9 +40,6 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Instantiate Real API Client
     const geminiClient = new GeminiCloudClient(keys, model, timeout);
-
-    // Instantiate default fallback engine router
-    const defaultRouter = new EngineRouter([geminiClient], stateMachine);
 
     // Function to set up RAG Engine and file watcher for a given workspace root
     let activeWatcherDisposable: vscode.Disposable | null = null;

@@ -44,6 +44,33 @@ export class ToolRegistry {
             }
         });
 
+        // Codebase Semantic/BM25 Search Tool
+        this.registerTool({
+            name: 'search_codebase',
+            description: 'Performs semantic/textual BM25 search across the workspace codebase to find symbols, classes, functions, or keywords.',
+            parameters: '{"query": "string"}',
+            execute: async (argsStr: string, workspaceRoot: string) => {
+                try {
+                    const parsed = JSON.parse(argsStr || '{}');
+                    const query = (parsed.query || parsed.term || '').trim();
+                    if (!query) return "Error: 'query' parameter is required for search_codebase.";
+                    const { RagEngine } = require('../rag/ragEngine');
+                    const ragEngine = new RagEngine(workspaceRoot);
+                    let results = ragEngine.searchWithSnippets(query, 5);
+                    if ((!results || results.length === 0) && typeof ragEngine.buildIndex === 'function') {
+                        await ragEngine.buildIndex();
+                        results = ragEngine.searchWithSnippets(query, 5);
+                    }
+                    if (!results || results.length === 0) {
+                        return `No matches found for query: "${query}" in workspace.`;
+                    }
+                    return results.map((r: any) => r.snippet).join('\n\n---\n\n');
+                } catch (e: any) {
+                    return `Codebase search error: ${e?.message || e}`;
+                }
+            }
+        });
+
         // =========================================================================
         // [VERSION 1 - LEGACY TOOL: research_web_docs - PRESERVED FOR ROLLBACK]
         // =========================================================================
@@ -212,7 +239,18 @@ export class ToolRegistry {
         return prompt;
     }
 
+    public static hasTool(name: string): boolean {
+        if (!name) return false;
+        if (this.tools.size === 0) {
+            this.registerEssentialTools();
+        }
+        return this.tools.has(name.toLowerCase());
+    }
+
     public static async executeTool(name: string, args: string, workspaceRoot: string): Promise<string> {
+        if (this.tools.size === 0) {
+            this.registerEssentialTools();
+        }
         const tool = this.tools.get(name.toLowerCase());
         if (!tool) throw new Error(`Tool ${name} not found`);
         return await tool.execute(args, workspaceRoot);

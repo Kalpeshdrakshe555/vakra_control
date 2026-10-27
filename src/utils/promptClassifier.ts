@@ -39,6 +39,12 @@ export class PromptClassifier {
             return 'general';
         }
 
+        const isExplanationQuery = /^(?:explain|describe|what\s+is|what\s+are|what\s+does|how\s+does|how\s+do|why\s+is|why\s+does|walk\s+me\s+through)\b/i.test(text.trim());
+        const hasModificationIntent = /\b(?:fix|error|bug|issue|create|build|implement|edit|change|modify|refactor|update|delete|remove|add)\b/i.test(textLower);
+        if (isExplanationQuery && !hasModificationIntent) {
+            return 'info';
+        }
+
         const uiKeywords = ['design', 'button', 'css', 'layout', 'color', 'ui', 'frontend', 'tailwind', 'component', 'view', 'styles', 'svg', 'logo'];
         const backendKeywords = ['fix', 'error', 'bug', 'api', 'database', 'function', 'class', 'backend', 'logic', 'model', 'controller', 'service', 'repository', 'exception'];
         const infoKeywords = ['explain', 'what', 'how', 'why', 'who', 'where', 'when'];
@@ -49,6 +55,7 @@ export class PromptClassifier {
         
         if (uiScore > backendScore && uiScore > infoScore) return 'ui';
         if (backendScore > uiScore && backendScore > infoScore) return 'backend';
+        if (infoScore > uiScore && infoScore > backendScore) return 'info';
         if (infoScore > 0 && uiScore === 0 && backendScore === 0) return 'info';
         
         return 'general';
@@ -69,22 +76,27 @@ export class PromptClassifier {
         if (category === 'general') return tools;
 
         const allFuncs = tools[0].functionDeclarations;
-        const ALWAYS_ALLOWED = ['plan_set', 'plan_done', 'plan_update', 'set_task_plan', 'expand_plan_step', 'complete_plan_step', 'read_state_ledger', 'list_directory_tree', 'read_multiple_files', 'write_file', 'edit_file', 'replace_symbol'];
+        const ALWAYS_ALLOWED = [
+            'plan_set', 'plan_done', 'plan_update', 
+            'set_task_plan', 'expand_plan_step', 'complete_plan_step', 
+            'read_state_ledger', 'list_directory_tree', 'read_multiple_files', 
+            'write_file', 'edit_file', 'replace_symbol', 
+            'finish', 'create_skill', 'read_skill'
+        ];
 
         let categoryAllowed: string[] = [];
         
         switch (category) {
             case 'ui':
                 categoryAllowed = [
-                    'generate_ui_blueprint', 'capture_localhost_preview', 'search_web', 
-                    'research_web_docs', 'execute_terminal_command', 'check_localhost_health'
+                    'search_web', 'research_web_docs', 'execute_terminal_command'
                 ];
                 break;
             case 'backend':
                 categoryAllowed = [
                     'search_codebase', 'find_references', 
-                    'update_architecture_context', 'search_web', 'execute_terminal_command',
-                    'research_web_docs', 'get_code_diagnostics', 'get_symbol_outline', 'check_localhost_health'
+                    'search_web', 'execute_terminal_command',
+                    'research_web_docs', 'get_code_diagnostics', 'get_symbol_outline'
                 ];
                 break;
             case 'info':

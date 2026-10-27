@@ -34,28 +34,18 @@ export class SkeletonExpander {
                 const model = getGeminiModel(workspaceRoot);
                 const timeout = getGeminiTimeout(workspaceRoot);
 
-                const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
+                const { createConfiguredClient } = require('../router/realClients');
                 
-                let client;
-                const mainBrain = config?.mainBrain;
-                if (mainBrain) {
-                    if (mainBrain.providerType === 'local') {
-                        client = new LocalOllamaClient(mainBrain.model || 'llama3', mainBrain.endpoint || 'http://127.0.0.1:11434', mainBrain.apiKey);
-                    } else {
-                        const keyStr = mainBrain.apiKey?.trim() || '';
-                        if (keyStr.startsWith('gsk_')) client = new LocalOllamaClient(mainBrain.model, 'https://api.groq.com/openai', keyStr);
-                        else if (keyStr.startsWith('sk-or-')) client = new LocalOllamaClient(mainBrain.model, 'https://openrouter.ai/api', keyStr);
-                        else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) client = new LocalOllamaClient(mainBrain.model, 'https://api.openai.com', keyStr);
-                        else client = new GeminiCloudClient([keyStr], mainBrain.model || 'gemini-1.5-pro', timeout);
-                    }
-                } else if (config?.activeProvider === 'local') {
-                    client = new LocalOllamaClient(config.providers?.local?.model || 'llama3', config.providers?.local?.endpoint || 'http://127.0.0.1:11434', keys[0]?.trim());
-                } else {
-                    const keyStr = keys[0]?.trim() || '';
-                    if (keyStr.startsWith('gsk_')) client = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr);
-                    else if (keyStr.startsWith('sk-or-')) client = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr);
-                    else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) client = new LocalOllamaClient(model, 'https://api.openai.com', keyStr);
-                    else client = new GeminiCloudClient(keys, model, timeout);
+                let client: any;
+                try {
+                    const clientResult = createConfiguredClient(config, {
+                        model,
+                        timeoutSeconds: timeout,
+                        keys
+                    });
+                    client = clientResult.client;
+                } catch {
+                    client = null;
                 }
 
                 if (!client) {

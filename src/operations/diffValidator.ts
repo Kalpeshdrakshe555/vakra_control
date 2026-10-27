@@ -23,10 +23,11 @@ export class DiffValidator {
     public static validateReplacementContent(content: string, options?: { allowEmpty?: boolean }): { valid: boolean; reason?: string } {
         const trimmed = content.trim();
 
+        const isIntentionalDeletion = options?.allowEmpty === true || 
+            /\b(delete|deletion|remove|removed|clear|empty|intentional)\b/i.test(content);
+
         // 1. Check for completely empty replacement blocks
         if (trimmed.length === 0) {
-            const isIntentionalDeletion = options?.allowEmpty === true || 
-                /\b(delete|deletion|remove|removed|clear|empty|intentional)\b/i.test(content);
             if (!isIntentionalDeletion) {
                 return {
                     valid: false,
@@ -50,7 +51,7 @@ export class DiffValidator {
         const allComments = lines.length > 0 && lines.every(l =>
             l.startsWith('#') || l.startsWith('//') || l.startsWith('/*') || l.startsWith('*') || l.startsWith('<!--')
         );
-        if (allComments && (lines.length < 5 || /reading|inspecting|checking|verifying/i.test(trimmed))) {
+        if (!isIntentionalDeletion && allComments && (lines.length < 5 || /reading|inspecting|checking|verifying/i.test(trimmed))) {
             return {
                 valid: false,
                 reason: "Replacement block appears to be an explanatory comment or monologue rather than executable code."

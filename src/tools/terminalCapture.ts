@@ -10,6 +10,11 @@ export interface TerminalExecutionResult {
     error: boolean;
 }
 
+export interface TerminalExecutionOptions {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+}
+
 export class TerminalCapture {
     private static _outputChannel: vscode.OutputChannel | null = null;
     private static get outputChannel(): vscode.OutputChannel {
@@ -19,14 +24,41 @@ export class TerminalCapture {
         return this._outputChannel;
     }
     private static lastOutput: string = '';
+    private static activeAbortControllers: Set<AbortController> = new Set();
 
     public static isDaemonCommand(command: string): boolean {
-        return /\b(runserver|vite|npm\s+run\s+dev|npm\s+start|yarn\s+dev|yarn\s+start|pnpm\s+dev|watch|serve|flask\s+run)\b/i.test(command.trim());
+        const trimmed = (command || '').replace(/^[\$#>]\s*/, '').trim();
+        return /\b(runserver|vite(?!\s+build\b)|npm\s+(?:run\s+)?(?:dev|start|serve|watch)|yarn\s+(?:run\s+)?(?:dev|start|serve|watch)|pnpm\s+(?:run\s+)?(?:dev|start|serve|watch)|flask\s+run|uvicorn\b|gunicorn\b|next\s+dev|nuxt\s+dev|ng\s+serve|nodemon\b|live-server\b|http-server\b|cargo\s+watch|tsc\s+.*(?:-w|--watch))\b/i.test(trimmed);
     }
 
-    public static async runAndCapture(command: string, workspaceRoot: string): Promise<TerminalExecutionResult> {
+    public static cancelActive(): void {
+        for (const ctrl of this.activeAbortControllers) {
+            try {
+                ctrl.abort();
+            } catch { /* ignore */ }
+        }
+        this.activeAbortControllers.clear();
+    }
+
+    public static async runAndCapture(
+        command: string,
+        workspaceRoot: string,
+        options?: TerminalExecutionOptions
+    ): Promise<TerminalExecutionResult> {
         this.outputChannel.show(true);
         this.outputChannel.appendLine(`\n> ${command}`);
+
+        // Prevent long-running continuous/daemon servers from hanging execution
+        if (this.isDaemonCommand(command)) {
+            const msg = `[BLOCKED]: '${command}' is a long-running continuous process and cannot be run synchronously. Use non-blocking verification commands instead.`;
+            this.outputChannel.appendLine(msg);
+            this.lastOutput = msg;
+            return {
+                output: msg,
+                exitCode: 1,
+                error: true
+            };
+        }
         
         const safeCwd = (workspaceRoot && workspaceRoot.trim().length > 0)
             ? workspaceRoot
@@ -53,10 +85,35 @@ export class TerminalCapture {
             }
         }
 
+        const abortCtrl = new AbortController();
+        let removeSignalListener: (() => void) | null = null;
+        if (options?.signal) {
+            if (options.signal.aborted) {
+                abortCtrl.abort();
+            } else {
+                const onAbort = () => abortCtrl.abort();
+                options.signal.addEventListener('abort', onAbort, { once: true });
+                removeSignalListener = () => options.signal?.removeEventListener('abort', onAbort);
+            }
+        }
+        this.activeAbortControllers.add(abortCtrl);
+
         try {
+            if (abortCtrl.signal.aborted) {
+                const msg = 'Operation cancelled by user.';
+                this.outputChannel.appendLine(msg);
+                this.lastOutput = msg;
+                return {
+                    output: msg,
+                    exitCode: -1,
+                    error: true
+                };
+            }
+
             const seqResult = await runCommandSequence(command, effectiveCwd, {
                 workspaceRoot: safeCwd,
-                timeoutMs: 60000,
+                timeoutMs: options?.timeoutMs ?? 60000,
+                signal: abortCtrl.signal,
                 onSegmentStart: (seg, curCwd) => {
                     this.outputChannel.appendLine(`[Running]: ${seg} in ${curCwd}`);
                 }
@@ -65,6 +122,16 @@ export class TerminalCapture {
             const combinedOutput = seqResult.combinedOutput;
             if (combinedOutput) {
                 this.outputChannel.appendLine(combinedOutput);
+            }
+
+            if (abortCtrl.signal.aborted) {
+                const msg = 'Operation cancelled by user.';
+                this.lastOutput = msg;
+                return {
+                    output: msg,
+                    exitCode: -1,
+                    error: true
+                };
             }
 
             const failing = seqResult.results.find(r => !r.ok);
@@ -92,6 +159,11 @@ export class TerminalCapture {
                 exitCode: 1,
                 error: true
             };
+        } finally {
+            this.activeAbortControllers.delete(abortCtrl);
+            if (removeSignalListener) {
+                removeSignalListener();
+            }
         }
     }
 

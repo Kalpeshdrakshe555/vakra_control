@@ -18,6 +18,9 @@ export interface SubStep {
     note?: string;
     modifiedFiles?: string[];
     logicSummary?: string;
+    acceptanceCriteria?: string[];
+    attempts?: number;
+    verificationResult?: any;
 }
 
 export interface PlanStep {
@@ -32,6 +35,9 @@ export interface PlanStep {
     note?: string;
     modifiedFiles?: string[];
     logicSummary?: string;
+    acceptanceCriteria?: string[];
+    attempts?: number;
+    verificationResult?: any;
 }
 
 export interface ToolEvent {

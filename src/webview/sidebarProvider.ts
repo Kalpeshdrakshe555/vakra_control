@@ -7,7 +7,6 @@ import { ConversationHistory } from '../state/conversationHistory';
 import { allocateBudget, ContextSource, estimateTokens, truncateToTokens, TokenAccountant } from '../utils/tokenBudget';
 import { skeletonizeFile, generateStructuralRepoMap } from '../utils/astSkeletonizer';
 import { generateCacheKey, checkCache, saveCache } from '../utils/queryCache';
-import { ContextSelector } from '../utils/contextSelector';
 import { PromptBuilder, TaskState } from './promptBuilder';
 import { PromptClassifier } from '../utils/promptClassifier';
 import { InMemoryTaskPlanner } from '../state/inMemoryTaskPlanner';
@@ -17,6 +16,8 @@ import { SessionMemory } from '../state/sessionMemory';
 import { SkillsManager } from '../features/skillsManager';
 import { ToolDispatcher } from './tools/toolDispatcher';
 import { MessageDispatcher, DispatchContext } from './handlers/messageDispatcher';
+import { AgentOrchestrator } from '../agents/agentOrchestrator';
+import { AgentRoleType } from '../agents/types';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'ultraLightAi.sidebar';
@@ -166,6 +167,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         this.currentAbortController.abort();
                         this.currentAbortController = null;
                     }
+                    TerminalCapture.cancelActive();
                     // UI locally resets cleanly; do not emit redundant error chunks
                     return;
                 }
@@ -266,47 +268,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const maxContextTokens = config?.contextLimits?.maxContextTokens || 40000;
             const maxToolSteps = config?.maxAutonomousToolSteps || 40;
 
-            const { LocalOllamaClient, GeminiCloudClient } = require('../router/realClients');
-            // 1. Initialize Main Brain Model (Local Ollama, Groq, Apinex, OpenAI, or Gemini Cloud)
-            const mainBrain = config?.mainBrain;
-            const providerType = mainBrain?.providerType || 'cloud';
-            const customEndpoint = mainBrain?.endpoint?.trim();
-            const keyStr = mainBrain?.apiKey?.trim() || keys[0]?.trim() || '';
-
-            const configuredTemp = typeof config?.temperature === 'number' ? config.temperature : (typeof mainBrain?.temperature === 'number' ? mainBrain.temperature : 0.2);
-
-            let mainBrainClient: any;
-            if (providerType === 'apinex') {
-                const ep = customEndpoint || 'https://api.apinex.bond/v1';
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', ep, keyStr, configuredTemp);
-            } else if (providerType === 'openai') {
-                const ep = customEndpoint || 'https://api.openai.com/v1';
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'gpt-4o', ep, keyStr, configuredTemp);
-            } else if (providerType === 'local') {
-                const ep = customEndpoint || 'http://127.0.0.1:11434';
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'llama3', ep, keyStr, configuredTemp);
-            } else if (customEndpoint && customEndpoint !== 'http://127.0.0.1:11434' && customEndpoint !== 'http://localhost:11434') {
-                mainBrainClient = new LocalOllamaClient(mainBrain?.model || model || 'deepseek-chat', customEndpoint, keyStr, configuredTemp);
-            } else {
-                if (keyStr.startsWith('sk-apx')) mainBrainClient = new LocalOllamaClient(mainBrain?.model || 'free/gpt-5.6-luna', 'https://api.apinex.bond/v1', keyStr, configuredTemp);
-                else if (keyStr.startsWith('gsk_')) mainBrainClient = new LocalOllamaClient(model, 'https://api.groq.com/openai', keyStr, configuredTemp);
-                else if (keyStr.startsWith('sk-or-')) mainBrainClient = new LocalOllamaClient(model, 'https://openrouter.ai/api', keyStr, configuredTemp);
-                else if (keyStr.startsWith('sk-')) mainBrainClient = new LocalOllamaClient(model, 'https://api.openai.com', keyStr, configuredTemp);
-                else mainBrainClient = new GeminiCloudClient(keys, model, timeout, maxOutputTokens);
-            }
-
-            // 2. Main Brain is ALWAYS the primary orchestrating model (No middle layers/interception!)
-            const mainClient = mainBrainClient;
+            const { createConfiguredClient } = require('../router/realClients');
+            const configuredTemp = typeof config?.temperature === 'number' ? config.temperature : (typeof config?.mainBrain?.temperature === 'number' ? config.mainBrain.temperature : 0.2);
+            const clientResult = createConfiguredClient(config, {
+                model,
+                temperature: configuredTemp,
+                timeoutSeconds: timeout,
+                maxOutputTokens,
+                keys
+            });
+            const mainClient = clientResult.client as any;
 
             if (mainClient) {
                 mainClient.maxToolIterations = maxToolSteps;
             }
 
-            const isLocal = providerType === 'local' || (!!customEndpoint && (customEndpoint.includes('127.0.0.1') || customEndpoint.includes('localhost')));
-
             const promptCategory = PromptClassifier.classifyPrompt(message.text);
             const repoMap = workspaceRoot ? await generateStructuralRepoMap(workspaceRoot, 25) : '';
-            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget, message.text, isLocal);
+            let systemInstruction = PromptBuilder.buildSystemInstruction(config, workspaceRoot, false, !!message.architectMode, promptCategory, repoMap, message.thinkingBudget, message.text);
 
             if (workspaceRoot) {
                 try {
@@ -343,8 +322,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const turnUserTimestamp = message.timestamp || Date.now();
             this.conversationHistory.addMessage('user', message.text, undefined, turnUserTimestamp);
 
-            const historyLimit = config?.contextLimits?.historyLength || (isLocal ? 4 : 10);
-            const historyTokenLimit = isLocal ? 2500 : Math.min(12000, maxContextTokens * 0.4);
+            const historyLimit = config?.contextLimits?.historyLength || 10;
+            const historyTokenLimit = Math.min(12000, maxContextTokens * 0.4);
             const history = this.conversationHistory.getHistoryForLLM(historyLimit, historyTokenLimit);
             const historyWithoutLast = history.slice(0, -1);
 
@@ -525,187 +504,72 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     ]
                 }
             ];
-
-            const turnExecutedToolCards: Array<{ tool: string; title: string; data: any }> = [];
-
-            let isInsideThink = false;
-            let currentTurnBuffer = '';
-            const detectedToolCalls: any[] = [];
-
-            const onToolCall = async (functionCall: any) => {
-                detectedToolCalls.push(functionCall);
-
-                // Immediate live status update for the activity bar
-                let toolStatus = `⚡ Running: ${functionCall.name}...`;
-                const toolArgs = functionCall.args || functionCall.arguments || {};
-                if (functionCall.name === 'read_multiple_files') {
-                    const files = toolArgs.filepaths || [];
-                    toolStatus = `📖 Reading: ${Array.isArray(files) ? files.map((f: string) => path.basename(f)).join(', ') : files}`;
-                } else if (functionCall.name === 'write_file') {
-                    toolStatus = `✏️ Writing: ${path.basename(toolArgs.filepath || 'file')}`;
-                } else if (functionCall.name === 'edit_file') {
-                    toolStatus = `⚡ Editing: ${path.basename(toolArgs.filepath || 'file')}`;
-                } else if (functionCall.name === 'search_codebase') {
-                    toolStatus = `🔍 Searching: "${toolArgs.query || ''}"`;
-                } else if (functionCall.name === 'search_web' || functionCall.name === 'research_web_docs') {
-                    toolStatus = `🌐 Searching web: "${toolArgs.query || ''}"`;
-                } else if (functionCall.name === 'run_in_terminal') {
-                    toolStatus = `💻 Running: ${toolArgs.command || ''}`;
-                }
-                this.postMessageToWebview({
-                    command: 'statusUpdate',
-                    text: toolStatus
-                });
-
-                return await ToolDispatcher.dispatch(functionCall, {
-                    workspaceRoot: workspaceRoot || '',
-                    config: config,
-                    postMessage: (msg) => {
-                        if (msg.command === 'toolCallEvent') {
-                            this.currentTurnToolCalls.push({
-                                tool: msg.tool,
-                                title: msg.title || '',
-                                data: msg.data || {}
-                            });
-                            turnExecutedToolCards.push({ tool: msg.tool, title: msg.title, data: msg.data });
-                        }
-                        this.postMessageToWebview(msg);
-                    },
-                    signal: this.currentAbortController?.signal,
-                    isEditSessionAutoApproved: this.isEditSessionAutoApproved,
-                    isTerminalSessionAutoApproved: this.isTerminalSessionAutoApproved,
-                    pendingTerminalResolvers: this.pendingTerminalResolvers,
-                    pendingEditResolvers: this.pendingEditResolvers,
-                    taskPlanner: this.taskPlanner,
-                    currentTaskState: this.currentTaskState,
-                    ragEngine: this.ragEngine,
-                    userPrompt: message.text,
-                    recordFileBackup: (filepath: string, oldContent: string | null) => {
-                        this.conversationHistory.addFileBackup(turnUserTimestamp, filepath, oldContent);
+            const orchestrator = new AgentOrchestrator({
+                workspaceRoot: workspaceRoot || '',
+                config: config,
+                client: mainClient,
+                tools: tools,
+                taskPlanner: this.taskPlanner,
+                postMessage: (msg) => {
+                    if (msg.command === 'toolCallEvent') {
+                        this.currentTurnToolCalls.push({
+                            tool: msg.tool,
+                            title: msg.title || '',
+                            data: msg.data || {}
+                        });
                     }
-                });
-            };
-
-            const effectiveTools = PromptClassifier.filterTools(promptCategory, tools);
-
-            const result = await mainClient.completeWithHistory({
-                prompt: finalPrompt,
-                images: message.images || [],
-                signal: this.currentAbortController?.signal,
-                history: historyWithoutLast,
-                systemInstruction: systemInstruction,
-                stream: true,
-                onChunk: (chunk: any) => {
-                    if (this.currentAbortController?.signal?.aborted) return;
-
-                    if (chunk.text) {
-                        currentTurnBuffer += chunk.text;
-                        const text = chunk.text;
-                        if (text.includes('<think>')) isInsideThink = true;
-
-                        if (isInsideThink) {
-                            this.postMessageToWebview({
-                                command: 'thinkingChunk',
-                                text: text.replace(/<\/?think>/g, '')
-                            });
-                            if (text.includes('</think>')) isInsideThink = false;
-                        } else {
-                            if (chunk.isThinking) {
-                                this.postMessageToWebview({
-                                    command: 'thinkingChunk',
-                                    text: text
-                                });
-                            } else {
-                                this.postMessageToWebview({
-                                    command: 'streamChunk',
-                                    text: text,
-                                    done: false
+                    this.postMessageToWebview(msg);
+                },
+                dispatchTool: async (call: any, activeRole: AgentRoleType) => {
+                    return await ToolDispatcher.dispatch(call, {
+                        workspaceRoot: workspaceRoot || '',
+                        config: config,
+                        postMessage: (msg) => {
+                            if (msg.command === 'toolCallEvent') {
+                                this.currentTurnToolCalls.push({
+                                    tool: msg.tool,
+                                    title: msg.title || '',
+                                    data: msg.data || {}
                                 });
                             }
+                            this.postMessageToWebview(msg);
+                        },
+                        signal: this.currentAbortController?.signal,
+                        isEditSessionAutoApproved: this.isEditSessionAutoApproved,
+                        isTerminalSessionAutoApproved: this.isTerminalSessionAutoApproved,
+                        pendingTerminalResolvers: this.pendingTerminalResolvers,
+                        pendingEditResolvers: this.pendingEditResolvers,
+                        taskPlanner: this.taskPlanner,
+                        currentTaskState: this.currentTaskState,
+                        ragEngine: this.ragEngine,
+                        userPrompt: message.text,
+                        activeRole: activeRole,
+                        recordFileBackup: (filepath: string, oldContent: string | null) => {
+                            this.conversationHistory.addFileBackup(turnUserTimestamp, filepath, oldContent);
                         }
-                    }
-                    if (chunk.tool_calls && chunk.tool_calls.length > 0) {
-                        detectedToolCalls.push(...chunk.tool_calls);
-                    }
+                    });
                 },
-                tools: effectiveTools && effectiveTools.length > 0 ? effectiveTools : undefined,
-                onToolCall
+                signal: this.currentAbortController?.signal,
+                userPrompt: message.text,
+                images: message.images || [],
+                architectMode: !!message.architectMode,
+                thinkingBudget: message.thinkingBudget,
+                repoMap: repoMap
             });
+
+            const execResult = await orchestrator.execute();
 
             if (this.isTurnAbortedByUser) {
                 this.currentAbortController = null;
                 return;
             }
 
-            this.currentAbortController = null;
-
-            // TurnGate Resolution
-            if (detectedToolCalls.length === 0) {
-                // Fallback: check if tool call is wrapped inside markdown/json text
-                const jsonMatch = currentTurnBuffer.match(/```json\s*([\s\S]*?)\s*```/) || currentTurnBuffer.match(/(\{[\s\S]*"name"\s*:\s*".*?"[\s\S]*\})/);
-                if (jsonMatch) {
-                    try {
-                        const parsed = JSON.parse(jsonMatch[1]);
-                        if (parsed.name) detectedToolCalls.push(parsed);
-                    } catch {}
-                }
-            }
-
-            // If finish tool called or pure conversational response
-            const finishCall = detectedToolCalls.find(t => t.name === 'finish');
-            if (finishCall) {
-                const summary = finishCall.args?.summary || finishCall.arguments?.summary || 'Task completed successfully.';
-                // Sanitize any remaining code fences from summary
-                const cleanSummary = summary.replace(/```[\s\S]*?(```|$)/g, '[Code changes applied to workspace files]');
-                this.postMessageToWebview({
-                    command: 'streamChunk',
-                    text: cleanSummary,
-                    done: true,
-                    usage: result?.usage
-                });
-                const summaryWithRecap = this.formatTurnExecutionRecap(cleanSummary, this.currentTurnToolCalls);
-                this.conversationHistory.addMessage(
-                    'model',
-                    summaryWithRecap,
-                    result?.usage,
-                    [...this.currentTurnToolCalls]
-                );
-                this.currentTurnToolCalls = [];
-                this.currentAbortController = null;
-                return;
-            }
-
-            // TurnGate Resolution: Always ensure stream terminates cleanly
-            const totalToolCallsInTurn = this.currentTurnToolCalls.length + detectedToolCalls.length;
-            const rawContent = (result?.text || currentTurnBuffer || '');
-            let clean = rawContent
-                .replace(/<think>[\s\S]*?<\/think>/gi, '')
-                .replace(/<think>[\s\S]*$/i, '')
-                .replace(/<\/think>/gi, '')
-                .trim();
-            if (!clean && rawContent) {
-                clean = rawContent.replace(/<[^>]+>/g, '').trim();
-            }
-
-            this.postMessageToWebview({
-                command: 'streamChunk',
-                text: clean || (totalToolCallsInTurn > 0 ? '' : 'Done.'),
-                done: true,
-                usage: result?.usage
-            });
-
-            if (result?.usage) {
-                this.postMessageToWebview({
-                    command: 'tokenUsage',
-                    usage: result.usage
-                });
-            }
-
-            const messageWithRecap = this.formatTurnExecutionRecap(clean || 'Done.', this.currentTurnToolCalls);
+            const cleanText = execResult.text || '';
+            const messageWithRecap = this.formatTurnExecutionRecap(cleanText || 'Done.', this.currentTurnToolCalls);
             this.conversationHistory.addMessage(
                 'model',
                 messageWithRecap,
-                result?.usage,
+                undefined,
                 [...this.currentTurnToolCalls]
             );
             this.currentTurnToolCalls = [];
@@ -802,6 +666,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     public clearChat(): void {
         this.conversationHistory.clear();
         this.taskPlanner.clear();
+        ToolDispatcher.resetSessionState();
         this.postMessageToWebview({ command: 'chatCleared' });
     }
 

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { resolvePython } from '../platform/python';
+import { runProcess } from '../platform/process';
 
 export interface FileWriteContext {
     filePath: string;
@@ -82,20 +83,32 @@ export class RuntimePlugins {
         // Python Syntax Guard
         if (ext === '.py') {
             try {
-                execSync(`python -m py_compile "${filePath}"`, {
+                const pyRes = await resolvePython(workspaceRoot);
+                if (!pyRes.ok) {
+                    console.warn(`[RuntimePlugins] Python interpreter unavailable: ${pyRes.hint}. Python syntax check skipped.`);
+                    return { success: true };
+                }
+
+                const compileRes = await runProcess({
+                    exe: pyRes.exe,
+                    args: [...pyRes.preArgs, '-m', 'py_compile', filePath],
                     cwd: workspaceRoot,
-                    timeout: 3000,
-                    stdio: 'pipe'
+                    timeoutMs: 5000
                 });
+
+                if (!compileRes.ok) {
+                    const compileErr = (compileRes.stderr || compileRes.stdout || compileRes.error || 'Syntax compilation error').trim();
+                    // Revert file to avoid compounding syntax errors
+                    this.rollbackFile(filePath, oldContent);
+                    return {
+                        success: false,
+                        revertRequested: true,
+                        feedback: `🚨 [SYNTAX GUARD INTERCEPTED BROKEN CODE]:\n${compileErr}\n\n⚠️ ACTION TAKEN: The file has been automatically REVERTED to its last clean state to prevent corrupting the codebase. Fix the syntax error (check colons, indentation, brackets, or unclosed quotes) and re-apply cleanly.`
+                    };
+                }
             } catch (err: any) {
-                const compileErr = err.stderr ? err.stderr.toString() : err.message;
-                // Revert file to avoid compounding syntax errors
-                this.rollbackFile(filePath, oldContent);
-                return {
-                    success: false,
-                    revertRequested: true,
-                    feedback: `🚨 [SYNTAX GUARD INTERCEPTED BROKEN CODE]:\n${compileErr}\n\n⚠️ ACTION TAKEN: The file has been automatically REVERTED to its last clean state to prevent corrupting the codebase. Fix the syntax error (check colons, indentation, brackets, or unclosed quotes) and re-apply cleanly.`
-                };
+                console.warn('[RuntimePlugins] Error during Python syntax check execution:', err);
+                return { success: true };
             }
         }
 

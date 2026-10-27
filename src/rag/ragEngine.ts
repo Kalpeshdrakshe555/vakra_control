@@ -4,6 +4,7 @@ import * as path from 'path';
 import { BM25 } from './bm25';
 import { chunkCodeFile, chunkCodeFileAsync, CodeChunk } from './codeIndexer';
 import { ProjectScanner } from '../indexer/projectScanner';
+import { isSecretPath } from '../security/secretsFilter';
 
 // Bug 7 Fix: Synonym map for common code terms
 const CODE_SYNONYMS: Record<string, string[]> = {
@@ -123,6 +124,7 @@ export class RagEngine {
                     if (content.length > 100000) continue;
 
                     const relativePath = path.relative(this.workspaceRoot, file.fsPath);
+                    if (isSecretPath(relativePath, this.workspaceRoot)) continue;
                     const fileChunks = await chunkCodeFileAsync(relativePath, content, file);
                     
                     const isEntryPoint = profile?.entryPoints.includes(relativePath.replace(/\\/g, '/')) || false;

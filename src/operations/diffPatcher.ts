@@ -117,6 +117,13 @@ export function resolveSafeWorkspacePath(
     }
 
     const normalizedRoot = path.resolve(workspaceRoot);
+    if (!targetPath || !targetPath.trim()) {
+        return {
+            safe: false,
+            resolvedPath: normalizedRoot,
+            error: "Security / Guard violation: Target path cannot be empty."
+        };
+    }
     const resolved = path.isAbsolute(targetPath) 
         ? path.resolve(targetPath)
         : path.resolve(normalizedRoot, targetPath);
@@ -125,12 +132,31 @@ export function resolveSafeWorkspacePath(
     const rootCmp = isWindows ? normalizedRoot.toLowerCase() : normalizedRoot;
     const resolvedCmp = isWindows ? resolved.toLowerCase() : resolved;
 
-    if (!resolvedCmp.startsWith(rootCmp)) {
+    const rel = path.relative(rootCmp, resolvedCmp);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
         return {
             safe: false,
             resolvedPath: resolved,
             error: `Security / Guard violation: Path '${targetPath}' resolves outside workspace boundary '${workspaceRoot}'.`
         };
+    }
+
+    // Symlink resolution check if the file or target exists
+    if (fs.existsSync(resolved)) {
+        try {
+            const realPath = fs.realpathSync(resolved);
+            const realRoot = fs.realpathSync(normalizedRoot);
+            const realPathCmp = isWindows ? realPath.toLowerCase() : realPath;
+            const realRootCmp = isWindows ? realRoot.toLowerCase() : realRoot;
+            const realRel = path.relative(realRootCmp, realPathCmp);
+            if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+                return {
+                    safe: false,
+                    resolvedPath: resolved,
+                    error: `Security / Guard violation: Symlink target '${realPath}' resolves outside workspace boundary '${workspaceRoot}'.`
+                };
+            }
+        } catch (_) {}
     }
 
     if (createDirsIfMissing) {

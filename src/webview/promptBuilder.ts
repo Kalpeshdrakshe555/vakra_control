@@ -57,7 +57,6 @@ export interface PrefixOptions {
     structuralRepoMap?: string;   // compute ONCE at task start and freeze; a changing map busts the cache
     thinkingBudget?: string;
     userText?: string;
-    isLocal?: boolean;
 }
 
 /** Volatile per-turn context. Feeds the tail block, NEVER the system prompt. */
@@ -82,12 +81,9 @@ RULES:
 2. STRICT SINGLE ACTION PER STEP: Execute EXACTLY ONE skill checklist step or command per turn. NEVER chain multiple terminal commands (e.g. no '&&' or ';'). Run one command, inspect the result, and only then proceed.
 3. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, powershell redirection) to write code.
 4. INSPECT BEFORE EDITING (NO CONTEXT = NO EDIT):
-   - AT TASK START OR NEW CHAT: Read \`PLAN.md\` first. Always ensure \`PLAN.md\` remains the synchronized single source of truth for all milestone progress, touched files, and architectural decisions.
-   - You are STRICTLY FORBIDDEN from editing or writing code without reading the target file or inspecting context first via \`read_multiple_files\`. Never guess paths, existing functions, or symbols. If execution stops or errors occur, consult \`PLAN.md\` to know exactly where you were and continue seamlessly.
-5. ERROR HANDLING & WEB RESEARCH PROTOCOL:
-   - If a terminal command, verification check, or test fails: analyze the bottom lines of the traceback.
-   - If the error is unfamiliar, involves framework behavior (e.g. Django, React, database migrations), or if your previous edit failed to resolve it, you MUST call \`search_web(query="<framework> <exact error>")\` to inspect official solutions and documentation before modifying code!
-   - Never guess solutions blindly. Once verified through web search or file context, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
+   - AT TASK START OR NEW CHAT: Inspect \`PLAN.md\` first, then inspect \`STATE_LEDGER.md\` (\`read_state_ledger()\`). If previous progress is recorded or \`PLAN.md\` is out of sync, update and synchronize \`PLAN.md\` with the ledger before taking new actions.
+   - You are STRICTLY FORBIDDEN from editing or writing code without reading the target file or inspecting context first via \`read_multiple_files\`. Never guess paths, existing functions, or symbols. If execution stops or errors occur, consult \`PLAN.md\` and \`STATE_LEDGER.md\` to know exactly where you were and continue seamlessly.
+5. If a command or check fails: analyze the error, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
 6. ANTI-PREMATURE FINISH: You are STRICTLY FORBIDDEN from calling \`finish\` if:
    - A terminal command just failed or produced an error.
    - Verification checks (e.g. \`python manage.py check\`, compiler build, or test run) have not yet been executed and passed.
@@ -100,14 +96,14 @@ RULES:
    - If \`manage.py\` is in a subfolder (e.g. \`backend/manage.py\`), ALWAYS execute commands referencing that relative path (e.g. \`python backend/manage.py makemigrations\`).
    - For React/Vite/Frontend in new projects: initialize into the current directory with \`./\` (e.g. \`npm create vite@latest ./ -- --template react-ts\`).
 10. HIERARCHICAL TASK PLANNING & STEP BOUNDARY PROTOCOL:
-   - PHASE 1 (MACRO ROADMAP & USER APPROVAL): When receiving a new or multi-step task, call \`set_task_plan(user_requirements, steps[])\` to establish user requirements and sequential macro steps in \`PLAN.md\`. You MUST STOP immediately and ask the user for approval: "Maine aapki requirement ke according yeh plan banaya hai. Kya yeh sahi hai ya isme koi changes chahiye?". DO NOT edit code before user approval!
+   - PHASE 1 (MACRO ROADMAP & USER APPROVAL): When receiving a new or multi-step task, call \`set_task_plan(user_requirements, steps[])\` to establish user requirements and sequential macro steps in \`PLAN.md\`. Stop and request user approval for the proposed plan before modifying any code. DO NOT edit code before user approval!
    - PHASE 2 (EXPAND ONLY ACTIVE STEP): When user approves, expand ONLY the active Step (e.g. Step 1) into micro sub-steps using \`expand_plan_step(step_id, sub_steps[])\`. Never overwrite or wipe other macro steps.
    - PHASE 3 (ATOMIC SUB-STEP EXECUTION & MANDATORY UPDATE): For each sub-step:
      * Inspect file context first via \`read_multiple_files\`. NO BLIND EDITS.
      * Output a concise 2-3 line [BLUEPRINT] (file & symbols, logic, verification check).
      * Edit code surgically and run verification.
      * MANDATORY STEP RECORDING: Call \`complete_plan_step(sub_step_id, summary, modified_files?, logic_summary?)\` to mark the sub-step done in \`PLAN.md\` and record the exact files modified and core code logic. \`PLAN.md\` is the single source of truth for both roadmap and architecture!
-   - PHASE 4 (MACRO STEP BOUNDARY STOP): When all sub-steps of a macro step finish, \`complete_plan_step\` will notify you that the macro step is complete. You MUST STOP execution and ask the user for confirmation before starting the next macro step: "Step 1 complete ho gaya hai. Kya Step 2 start karein?". DO NOT autonomously jump to the next macro step without user permission.
+   - PHASE 4 (MACRO STEP BOUNDARY STOP): When all sub-steps of a macro step finish, \`complete_plan_step\` will notify you that the macro step is complete. Stop execution and obtain user confirmation before starting the next macro step. DO NOT autonomously jump to the next macro step without user permission.
 
 TOOLS:
 - list_directory_tree(path, depth)
@@ -223,9 +219,7 @@ The user message is a greeting or general inquiry. DO NOT call any tools. Respon
         const formatDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         const formatIso = (d: Date) => d.toISOString().slice(0, 10);
 
-        const calendarBlock = opts.isLocal
-            ? `[DATE: ${formatDate(now)}]`
-            : `[REAL-TIME CALENDAR ANCHOR & TEMPORAL TRUTH]
+        const calendarBlock = `[REAL-TIME CALENDAR ANCHOR & TEMPORAL TRUTH]
 - TODAY: ${formatDate(now)} (ISO: ${formatIso(now)})
 - YESTERDAY: ${formatDate(yesterday)} (ISO: ${formatIso(yesterday)})
 - TOMORROW: ${formatDate(tomorrow)} (ISO: ${formatIso(tomorrow)})
@@ -243,20 +237,17 @@ TEMPORAL RESOLUTION RULES:
         dynamicParts.push(calendarBlock);
 
         if (workspaceRoot) {
-            // 1. Living Architecture Blueprint injection (Clamped to 1000 for local SLMs, 4000 for cloud)
+            // 1. Living Architecture Blueprint injection (4-Tier MRU & Dependency Graph)
             try {
-                const maxBpChars = opts.isLocal ? 1000 : 4000;
-                const bp = LivingIndex.buildBlueprintText(workspaceRoot, maxBpChars);
+                const bp = LivingIndex.buildBlueprintText(workspaceRoot, 4000);
                 if (bp) dynamicParts.push(`[ACTIVE LIVING ARCHITECTURE BLUEPRINT]\n${bp}`);
             } catch {}
 
             // 3. Available Skills Catalog & Matching Specialized Skill (P0 Execution Guidance)
             try {
-                if (!opts.isLocal) {
-                    const skillsCatalog = SkillsManager.getAvailableSkillsSummary(workspaceRoot);
-                    if (skillsCatalog) {
-                        dynamicParts.push(skillsCatalog);
-                    }
+                const skillsCatalog = SkillsManager.getAvailableSkillsSummary(workspaceRoot);
+                if (skillsCatalog) {
+                    dynamicParts.push(skillsCatalog);
                 }
                 const activeSkill = SkillsManager.getMatchingSkillInstructions(userText, workspaceRoot);
                 if (activeSkill) {
@@ -270,7 +261,7 @@ TEMPORAL RESOLUTION RULES:
     }
 
     private static readonly DESIGN_MODULE = `[DESIGN]
-For frontend work: call generate_ui_blueprint before writing UI code and persist the chosen theme in .agentrules.
+For frontend work: follow aesthetic guidelines before writing UI code and persist the chosen theme in .agentrules.
 Checklist: no plain white/black page (gradient, dark surface or glass); hover + transition on every button, card and link; Google Fonts declared; no empty <img> (use https://picsum.photos/WxH, avatars https://i.pravatar.cc/150); logo as inline SVG; at least one @keyframes animation; clear H1 > H2 > body hierarchy; readable contrast.`;
 
     private static findRulesFile(root: string): string | undefined {
@@ -292,11 +283,10 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
         taskCategory: TaskCategory = 'general',
         structuralRepoMap?: string,
         thinkingBudget?: string,
-        userText?: string,
-        isLocal: boolean = false
+        userText?: string
     ): string {
         return PromptBuilder.buildHead() +
-            PromptBuilder.buildSessionPrefix({ config, workspaceRoot, isAgentMode, isArchitectMode, taskCategory, structuralRepoMap, thinkingBudget, userText, isLocal });
+            PromptBuilder.buildSessionPrefix({ config, workspaceRoot, isAgentMode, isArchitectMode, taskCategory, structuralRepoMap, thinkingBudget, userText });
     }
 
     /* ================================================================== */
@@ -382,8 +372,7 @@ Checklist: no plain white/black page (gradient, dark surface or glass); hover + 
                     ...R, ...W,
                     'set_task_plan', 'expand_plan_step', 'complete_plan_step',
                     'execute_terminal_command',
-                    'finish', 'research_web_docs', 'search_web',
-                    ...(hasUiTask ? ['generate_ui_blueprint'] : [])
+                    'finish', 'research_web_docs', 'search_web'
                 ];
             case 'verify':
                 return [

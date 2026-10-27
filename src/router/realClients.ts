@@ -14,16 +14,24 @@ function getToolSpecsFromTools(tools?: any[]): ToolSpec[] {
  * Fallback parser for models that emit tool calls in plain text syntax (e.g. search_web(query="..."), <tool_call>...).
  */
 const KNOWN_TOOLS_LIST = [
+    'search_codebase',
+    'edit_file',
+    'write_file',
     'search_web',
     'research_web_docs',
     'execute_terminal_command',
     'list_directory_tree',
     'read_multiple_files',
+    'finish',
+    'set_task_plan',
+    'expand_plan_step',
+    'complete_plan_step',
+    'read_state_ledger',
+    'create_skill',
+    'read_skill',
     'get_code_diagnostics',
     'get_symbol_outline',
-    'check_localhost_health',
-    'update_architecture_context',
-    'generate_ui_blueprint'
+    'replace_symbol'
 ];
 const KNOWN_TOOLS_REGEX_STR = KNOWN_TOOLS_LIST.join('|');
 
@@ -53,21 +61,140 @@ function tryParseJsonRelaxed(raw: string): any {
     }
 }
 
+function isValidToolCall(name: string, args: any): boolean {
+    if (!name || (!KNOWN_TOOLS_LIST.includes(name) && name !== 'final_answer')) return false;
+    if (!args || typeof args !== 'object') return false;
+
+    switch (name) {
+        case 'read_multiple_files': {
+            const paths = args.filepaths || args.paths;
+            return Array.isArray(paths) ? paths.length > 0 : typeof paths === 'string' && paths.trim().length > 0;
+        }
+        case 'write_file': {
+            return typeof args.filepath === 'string' && args.filepath.trim().length > 0 && typeof args.content === 'string';
+        }
+        case 'edit_file': {
+            const oldT = args.old_text ?? args.oldText ?? args.search;
+            const newT = args.new_text ?? args.newText ?? args.replace;
+            return typeof args.filepath === 'string' && args.filepath.trim().length > 0 && typeof oldT === 'string' && typeof newT === 'string';
+        }
+        case 'execute_terminal_command': {
+            const cmd = args.command ?? args.cmd;
+            return typeof cmd === 'string' && cmd.trim().length > 0;
+        }
+        case 'search_codebase': {
+            const q = args.query ?? args.term;
+            return typeof q === 'string' && q.trim().length > 0;
+        }
+        case 'search_web':
+        case 'research_web_docs': {
+            const q = args.query ?? args.prompt;
+            const urls = args.urls;
+            return (typeof q === 'string' && q.trim().length > 0) || (Array.isArray(urls) && urls.length > 0);
+        }
+        case 'set_task_plan': {
+            const steps = args.steps || args.plan;
+            return Array.isArray(steps) && steps.length > 0;
+        }
+        case 'expand_plan_step': {
+            const subSteps = args.sub_steps || args.steps;
+            const stepId = args.step_id ?? args.stepId;
+            return stepId !== undefined && Array.isArray(subSteps) && subSteps.length > 0;
+        }
+        case 'complete_plan_step': {
+            return typeof (args.summary || args.title) === 'string';
+        }
+        case 'read_skill': {
+            const s = args.skill_name || args.name;
+            return typeof s === 'string' && s.trim().length > 0;
+        }
+        case 'create_skill': {
+            return typeof (args.name || args.skill_name) === 'string' && typeof args.instructions === 'string';
+        }
+        case 'read_state_ledger': {
+            return true;
+        }
+        case 'finish':
+        case 'final_answer': {
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
 function inferToolFromObject(obj: any): { name: string; args: any } | null {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
 
+    let toolName = obj.name || obj.tool;
+    if (toolName === 'final_answer') toolName = 'finish';
+
     // Explicit name or tool property
-    if (obj.name && KNOWN_TOOLS_LIST.includes(obj.name)) {
+    if (toolName && KNOWN_TOOLS_LIST.includes(toolName)) {
         const clean = { ...(obj.arguments || obj.args || obj.parameters || obj) };
         delete clean.name;
         delete clean.tool;
-        return { name: obj.name, args: clean };
+        return { name: toolName, args: clean };
     }
-    if (obj.tool && KNOWN_TOOLS_LIST.includes(obj.tool)) {
-        const clean = { ...(obj.arguments || obj.args || obj.parameters || obj) };
-        delete clean.name;
-        delete clean.tool;
-        return { name: obj.tool, args: clean };
+
+    // 0. finish signature
+    if (obj.summary && !obj.filepath && !obj.command && !obj.query && !obj.steps && !obj.sub_steps && !obj.subSteps && !obj.sub_step_id && !obj.subStepId) {
+        return { name: 'finish', args: { summary: String(obj.summary) } };
+    }
+
+    // 0b. set_task_plan signature
+    if (obj.steps && Array.isArray(obj.steps) && obj.steps.length > 0 && !obj.step_id && !obj.stepId) {
+        return {
+            name: 'set_task_plan',
+            args: {
+                user_requirements: obj.user_requirements || obj.requirements || '',
+                steps: obj.steps
+            }
+        };
+    }
+
+    // 0c. expand_plan_step signature
+    if ((obj.step_id !== undefined || obj.stepId !== undefined) && (obj.sub_steps || obj.subSteps)) {
+        const rawSteps = obj.sub_steps || obj.subSteps;
+        const subSteps = Array.isArray(rawSteps) ? rawSteps : [rawSteps];
+        return {
+            name: 'expand_plan_step',
+            args: {
+                step_id: Number(obj.step_id ?? obj.stepId),
+                sub_steps: subSteps
+            }
+        };
+    }
+
+    // 0d. complete_plan_step signature
+    if ((obj.sub_step_id !== undefined || obj.subStepId !== undefined || obj.step_id !== undefined || obj.stepId !== undefined) && (obj.summary || obj.title) && !obj.steps && !obj.sub_steps && !obj.subSteps) {
+        return {
+            name: 'complete_plan_step',
+            args: {
+                sub_step_id: String(obj.sub_step_id ?? obj.subStepId ?? obj.step_id ?? obj.stepId),
+                summary: String(obj.summary || obj.title),
+                ...(obj.modified_files ? { modified_files: obj.modified_files } : {}),
+                ...(obj.logic_summary ? { logic_summary: obj.logic_summary } : {})
+            }
+        };
+    }
+
+    // 0e. read_state_ledger signature
+    if (obj.read_state_ledger || obj.ledger || obj.state_ledger) {
+        return { name: 'read_state_ledger', args: {} };
+    }
+
+    // 0f. create_skill signature
+    if (obj.instructions && (obj.skill_name || obj.name)) {
+        return {
+            name: 'create_skill',
+            args: {
+                name: String(obj.skill_name || obj.name),
+                description: obj.description || '',
+                trigger_rules: Array.isArray(obj.trigger_rules) ? obj.trigger_rules : [],
+                instructions: String(obj.instructions)
+            }
+        };
     }
 
     // 1. read_multiple_files signature
@@ -120,6 +247,14 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         };
     }
 
+    // 4b. search_codebase signature
+    if ((obj.query || obj.code_query) && (obj.codebase || obj.search_codebase || obj.scope === 'code' || obj.scope === 'workspace')) {
+        return {
+            name: 'search_codebase',
+            args: { query: String(obj.query || obj.code_query) }
+        };
+    }
+
     // 5. search_web signature
     if (obj.query || obj.search_query || obj.search) {
         const q = obj.query || obj.search_query || obj.search;
@@ -140,14 +275,6 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         return {
             name: 'read_skill',
             args: { skill_name: String(obj.skill_name || obj.name) }
-        };
-    }
-
-    // 6. check_localhost_health signature
-    if (obj.port !== undefined && (obj.port === 3000 || obj.port === 8000 || obj.port === 5173 || obj.port === 8080 || typeof obj.port === 'number')) {
-        return {
-            name: 'check_localhost_health',
-            args: { port: Number(obj.port) }
         };
     }
 
@@ -172,14 +299,6 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         return {
             name: 'get_code_diagnostics',
             args: { filepath: obj.filepath || '' }
-        };
-    }
-
-    // 10. update_architecture_context signature
-    if (obj.architecture || obj.arch_content) {
-        return {
-            name: 'update_architecture_context',
-            args: { content: obj.architecture || obj.arch_content }
         };
     }
 
@@ -216,8 +335,10 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     if (!text || typeof text !== 'string') return results;
 
     const pushUnique = (name: string, args: any, raw: string) => {
-        if (!results.some(r => r.name === name && JSON.stringify(r.args) === JSON.stringify(args))) {
-            results.push({ name, args, raw });
+        let toolName = name === 'final_answer' ? 'finish' : name;
+        if (!isValidToolCall(toolName, args)) return;
+        if (!results.some(r => r.name === toolName && JSON.stringify(r.args) === JSON.stringify(args))) {
+            results.push({ name: toolName, args, raw });
         }
     };
 
@@ -267,17 +388,20 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
 
         // Case B: keyword arguments: query="foo", command="bar"
         if (Object.keys(parsedArgs).length === 0 && rawArgs.length > 0) {
-            const kwRegex = /([a-zA-Z_0-9]+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\d+)|(\[[^\]]*\]))/g;
+            const kwRegex = /([a-zA-Z_0-9]+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(true|false)|(\d+)|(\[[^\]]*\]))/gi;
             let kwMatch;
             let foundKw = false;
             while ((kwMatch = kwRegex.exec(rawArgs)) !== null) {
                 foundKw = true;
                 const paramName = kwMatch[1];
                 const strVal = kwMatch[2] !== undefined ? kwMatch[2] : kwMatch[3];
-                const numVal = kwMatch[4];
-                const arrVal = kwMatch[5];
+                const boolVal = kwMatch[4];
+                const numVal = kwMatch[5];
+                const arrVal = kwMatch[6];
                 if (strVal !== undefined) {
                     parsedArgs[paramName] = strVal.replace(/\\"/g, '"').replace(/\\'/g, "'");
+                } else if (boolVal !== undefined) {
+                    parsedArgs[paramName] = boolVal.toLowerCase() === 'true';
                 } else if (numVal !== undefined) {
                     parsedArgs[paramName] = Number(numVal);
                 } else if (arrVal !== undefined) {
@@ -291,12 +415,22 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
                     if (toolName === 'search_web' || toolName === 'research_web_docs') parsedArgs = { query: singleStrMatch[1] };
                     else if (toolName === 'execute_terminal_command') parsedArgs = { command: singleStrMatch[1] };
                     else if (toolName === 'list_directory_tree') parsedArgs = { dir: singleStrMatch[1] };
+                    else if (toolName === 'search_codebase') parsedArgs = { query: singleStrMatch[1] };
+                    else if (toolName === 'finish') parsedArgs = { summary: singleStrMatch[1] };
+                    else if (toolName === 'read_skill') parsedArgs = { skill_name: singleStrMatch[1] };
                     else if (toolName === 'get_code_diagnostics' || toolName === 'get_symbol_outline') parsedArgs = { filepath: singleStrMatch[1] };
                 }
             }
         }
 
-        if (toolName && Object.keys(parsedArgs).length > 0) {
+        // Case D: Zero-argument tools like read_state_ledger() and finish()
+        if (toolName === 'read_state_ledger') {
+            parsedArgs = {};
+        } else if (toolName === 'finish' && Object.keys(parsedArgs).length === 0) {
+            parsedArgs = { summary: 'Task completed successfully.' };
+        }
+
+        if (toolName && (Object.keys(parsedArgs).length > 0 || toolName === 'read_state_ledger' || toolName === 'finish')) {
             pushUnique(toolName, parsedArgs, match[0]);
         }
     }
@@ -388,18 +522,14 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     }
 
     // Pattern 8: Auto-detect conversational file reading intent (prevents hallucination and fetches real context)
-    // e.g. "I am reading the project's main urls.py", "Reading urls.py to verify...", "Let me inspect catalog/views.py"
+    // Only matches recognized file extensions to avoid confusing regular prose (e.g. "checking whether...")
     if (results.length === 0) {
-        const readIntentRegex = /(?:#|\/\/)?\s*(?:I am reading|Reading|Let me read|Let me inspect|I will inspect|Let's check|Checking)\s+(?:the\s+)?(?:project'?s?\s+main\s+)?`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)`?/i;
+        const readIntentRegex = /(?:#|\/\/)?\s*(?:I am reading|Reading|Let me read|Let me inspect|I will inspect|Let's check|Checking)\s+(?:the\s+)?(?:project'?s?\s+main\s+)?`?([a-zA-Z0-9_\-\.\/\\]+\.(?:ts|js|py|json|html|css|tsx|jsx|txt|yaml|yml|toml|sql|sh|java|go|rs|cpp|c|h))`?/i;
         const readMatch = readIntentRegex.exec(text);
         if (readMatch && readMatch[1]) {
             const rawPath = readMatch[1].trim();
-            if (!rawPath.endsWith('.md') && !rawPath.includes(' ') && rawPath.includes('.')) {
-                results.push({
-                    name: 'read_multiple_files',
-                    args: { filepaths: [rawPath] },
-                    raw: readMatch[0]
-                });
+            if (!rawPath.endsWith('.md') && !rawPath.includes(' ')) {
+                pushUnique('read_multiple_files', { filepaths: [rawPath] }, readMatch[0]);
             }
         }
     }
@@ -1299,8 +1429,8 @@ export class LocalOllamaClient implements IEngine {
 
                                 const result = await onToolCall({ name: tc.name, args });
                                 let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                                if (safeResultStr.length > 2000) {
-                                    safeResultStr = safeResultStr.substring(0, 2000) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in PLAN.md]';
+                                if (safeResultStr.length > 3500) {
+                                    safeResultStr = safeResultStr.substring(0, 3500) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in STATE_LEDGER.md]';
                                 }
                                 if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
                                     forceTextSummary = true;
@@ -1351,8 +1481,8 @@ export class LocalOllamaClient implements IEngine {
 
                                 const result = await onToolCall({ name: tc.name, args });
                                 let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                                if (safeResultStr.length > 2000) {
-                                    safeResultStr = safeResultStr.substring(0, 2000) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in PLAN.md]';
+                                if (safeResultStr.length > 3500) {
+                                    safeResultStr = safeResultStr.substring(0, 3500) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in STATE_LEDGER.md]';
                                 }
                                 if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
                                     forceTextSummary = true;
@@ -1561,3 +1691,97 @@ export class LocalOllamaClient implements IEngine {
         return { text: lastFullText || 'Completed autonomous tool executions for this turn. Proceeding with next planned steps.' };
     }
 }
+
+export interface ClientFactoryOptions {
+    model?: string;
+    temperature?: number;
+    timeoutSeconds?: number;
+    maxOutputTokens?: number;
+    keys?: string[];
+}
+
+export interface ConfiguredClientResult {
+    client: IEngine;
+    brainName: string;
+}
+
+/**
+ * Shared provider factory for creating configured LLM client instances
+ * across SidebarProvider, ResearchDistiller, and SkeletonExpander.
+ */
+export function createConfiguredClient(
+    config: any,
+    options?: ClientFactoryOptions
+): ConfiguredClientResult {
+    const mainBrain = config?.mainBrain;
+    const providerType = mainBrain?.providerType || 'cloud';
+    const customEndpoint = mainBrain?.endpoint?.trim();
+    const keyStr = mainBrain?.apiKey?.trim() || options?.keys?.[0]?.trim() || '';
+    const configuredTemp = typeof options?.temperature === 'number'
+        ? options.temperature
+        : (typeof config?.temperature === 'number' ? config.temperature : (typeof mainBrain?.temperature === 'number' ? mainBrain.temperature : 0.2));
+    const model = options?.model || mainBrain?.model;
+
+    if (providerType === 'apinex') {
+        const ep = customEndpoint || 'https://api.apinex.bond/v1';
+        const m = model || 'free/gpt-5.6-luna';
+        return {
+            client: new LocalOllamaClient(m, ep, keyStr, configuredTemp),
+            brainName: `AI (${m} - Apinex)`
+        };
+    } else if (providerType === 'openai') {
+        const ep = customEndpoint || 'https://api.openai.com/v1';
+        const m = model || 'gpt-4o';
+        return {
+            client: new LocalOllamaClient(m, ep, keyStr, configuredTemp),
+            brainName: `AI (${m} - OpenAI)`
+        };
+    } else if (providerType === 'local') {
+        const ep = customEndpoint || 'http://127.0.0.1:11434';
+        const m = model || 'llama3';
+        return {
+            client: new LocalOllamaClient(m, ep, keyStr, configuredTemp),
+            brainName: `AI (${m} - Local)`
+        };
+    } else if (customEndpoint && customEndpoint !== 'http://127.0.0.1:11434' && customEndpoint !== 'http://localhost:11434') {
+        const m = model || 'deepseek-chat';
+        return {
+            client: new LocalOllamaClient(m, customEndpoint, keyStr, configuredTemp),
+            brainName: `AI (${m})`
+        };
+    } else {
+        if (keyStr.startsWith('sk-apx')) {
+            const m = model || 'free/gpt-5.6-luna';
+            return {
+                client: new LocalOllamaClient(m, 'https://api.apinex.bond/v1', keyStr, configuredTemp),
+                brainName: `AI (${m} - Apinex)`
+            };
+        } else if (keyStr.startsWith('gsk_')) {
+            const m = model || 'llama-3.3-70b-versatile';
+            return {
+                client: new LocalOllamaClient(m, 'https://api.groq.com/openai', keyStr, configuredTemp),
+                brainName: `AI (${m} - Groq)`
+            };
+        } else if (keyStr.startsWith('sk-or-')) {
+            const m = model || 'deepseek/deepseek-chat';
+            return {
+                client: new LocalOllamaClient(m, 'https://openrouter.ai/api', keyStr, configuredTemp),
+                brainName: `AI (${m} - OpenRouter)`
+            };
+        } else if (keyStr.startsWith('sk-') || keyStr.startsWith('sk-proj-')) {
+            const m = model || 'gpt-4o';
+            return {
+                client: new LocalOllamaClient(m, 'https://api.openai.com', keyStr, configuredTemp),
+                brainName: `AI (${m} - OpenAI)`
+            };
+        } else {
+            const m = model || 'gemini-1.5-pro';
+            const keys = options?.keys && options.keys.length > 0 ? options.keys : (keyStr ? [keyStr] : []);
+            return {
+                client: new GeminiCloudClient(keys, m, options?.timeoutSeconds, options?.maxOutputTokens),
+                brainName: `AI (${m})`
+            };
+        }
+    }
+}
+
