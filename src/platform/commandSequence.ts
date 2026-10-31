@@ -3,6 +3,7 @@ import * as path from 'path';
 import { runProcess, ProcessResult } from './process';
 import { resolvePython } from './python';
 import { cleanOutput } from './output';
+import { scanEnvironment } from './envScanner';
 
 export interface SegmentResult {
     segment: string;
@@ -85,6 +86,15 @@ export function splitSequence(cmd: string): string[] {
         if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
             // Check '&&'
             if (ch === '&' && next === '&') {
+                const trimmed = current.trim();
+                if (trimmed) segments.push(trimmed);
+                current = '';
+                i += 2;
+                continue;
+            }
+
+            // Check '||' (Split so PowerShell 5.1 doesn't throw syntax error)
+            if (ch === '|' && next === '|') {
                 const trimmed = current.trim();
                 if (trimmed) segments.push(trimmed);
                 current = '';
@@ -213,14 +223,63 @@ async function executeSingleSegment(
     const startTime = Date.now();
     const isWindows = process.platform === 'win32';
 
+    // 0. Transparently handle activation commands as successful no-ops because venv is auto-bound
+    if (/^\s*(?:source\s+)?(?:\.\/|\.\\)?(?:\.venv|venv|env)[\\/](?:bin|scripts)[\\/]activate(?:\.bat|\.ps1)?\s*$/i.test(segment) ||
+        /^\s*(?:activate|deactivate)\s*$/i.test(segment)) {
+        return {
+            segment,
+            cwd,
+            ok: true,
+            exitCode: 0,
+            output: 'Virtual environment auto-bound to execution context.',
+            durationMs: 1
+        };
+    }
+
+    // Prepare execution environment with workspace .venv auto-bound to PATH
+    const effectiveEnv: NodeJS.ProcessEnv = { ...(options?.env || process.env) };
+    const envSnap = scanEnvironment(workspaceRoot);
+    if (envSnap.venvBinDir && fs.existsSync(envSnap.venvBinDir)) {
+        const pathKey = isWindows
+            ? (Object.keys(effectiveEnv).find(k => k.toLowerCase() === 'path') || 'Path')
+            : 'PATH';
+        const currentPath = effectiveEnv[pathKey] || '';
+        if (!currentPath.split(path.delimiter).includes(envSnap.venvBinDir)) {
+            effectiveEnv[pathKey] = `${envSnap.venvBinDir}${path.delimiter}${currentPath}`;
+        }
+        if (envSnap.venvPath) {
+            effectiveEnv['VIRTUAL_ENV'] = envSnap.venvPath;
+        }
+    }
+
     // If python command is used on Windows, transparently map to resolved python (venv or py)
     let processedSegment = segment;
-    if (isWindows && /^(?:python|python3|py)(\.exe)?(\s|$)/i.test(segment)) {
-        const resolved = await resolvePython(workspaceRoot, cwd);
-        if (resolved.ok) {
-            const remainder = segment.replace(/^(?:python|python3|py)(\.exe)?/i, '').trim();
-            const preArgStr = resolved.preArgs.length > 0 ? resolved.preArgs.join(' ') + ' ' : '';
-            processedSegment = `& "${resolved.exe}" ${preArgStr}${remainder}`;
+    if (isWindows) {
+        if (/^(?:python|python3|py)(\.exe)?(\s|$)/i.test(segment)) {
+            const resolved = await resolvePython(workspaceRoot, cwd);
+            if (resolved.ok) {
+                const remainder = segment.replace(/^(?:python|python3|py)(\.exe)?/i, '').trim();
+                const preArgStr = resolved.preArgs.length > 0 ? resolved.preArgs.join(' ') + ' ' : '';
+                processedSegment = `& "${resolved.exe}" ${preArgStr}${remainder}`;
+            }
+        } else if (/^\s*rm\s+-(?:rf|fr|r)\s+(.+)$/i.test(processedSegment)) {
+            // Translate POSIX rm -rf to PowerShell Remove-Item
+            const target = processedSegment.replace(/^\s*rm\s+-(?:rf|fr|r)\s+/i, '').trim();
+            processedSegment = `if (Test-Path ${target}) { Remove-Item -Recurse -Force ${target} }`;
+        } else if (/^\s*mkdir\s+-p\s+(.+)$/i.test(processedSegment)) {
+            // Translate POSIX mkdir -p to PowerShell New-Item
+            const target = processedSegment.replace(/^\s*mkdir\s+-p\s+/i, '').trim();
+            processedSegment = `New-Item -ItemType Directory -Force -Path ${target}`;
+        } else if (/^\s*cat\s+(.+)$/i.test(processedSegment)) {
+            // Translate cat to Get-Content
+            const target = processedSegment.replace(/^\s*cat\s+/i, '').trim();
+            processedSegment = `Get-Content ${target}`;
+        } else if (/^\s*export\s+([A-Za-z0-9_]+)\s*=\s*(.+)$/i.test(processedSegment)) {
+            // Translate export VAR=val to $env:VAR="val"
+            const m = processedSegment.match(/^\s*export\s+([A-Za-z0-9_]+)\s*=\s*(.+)$/i);
+            if (m) {
+                processedSegment = `$env:${m[1]} = ${m[2]}`;
+            }
         }
     }
 
@@ -240,7 +299,7 @@ async function executeSingleSegment(
         exe: shellExe,
         args: shellArgs,
         cwd,
-        env: options?.env,
+        env: effectiveEnv,
         timeoutMs: options?.timeoutMs ?? 60000,
         maxOutputBytes: options?.maxOutputBytes ?? 1024 * 1024,
         signal: options?.signal

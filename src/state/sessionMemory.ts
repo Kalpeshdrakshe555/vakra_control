@@ -329,6 +329,14 @@ export class SessionMemory {
         return [...(this.snapshot.completedSubTasks || [])];
     }
 
+    public resetSession(): void {
+        this.snapshot.recentEvents = [];
+        this.snapshot.recentDiagnostics = [];
+        this.snapshot.completedSubTasks = [];
+        this.snapshot.sessionTouchedPaths = [];
+        this.save();
+    }
+
     /**
      * Renders Pinned Working Memory:
      * - Top 3 Most Recently Touched Files get their LIVE CODE SNIPPET + Routes pinned (survives chat summarization!).

@@ -1,220 +1,193 @@
 <div align="center">
-  <img src="icon.png" width="100" height="100" alt="Vakra AI Logo" />
-  <h1>⚡ Vakra AI</h1>
-  <p><strong>The Autonomous, High-Precision AI Coding Agent Tailored for 4B Models & Edge Hardware.</strong></p>
-  <p><em>Engineered from the ground up to empower small local models (3B–7B parameters, 40k context) and frontier LLMs alike with Cursor-level autonomy, full-duplex voice, and deterministic self-healing.</em></p>
+  <img src="icon.png" width="90" height="90" alt="Vakra AI Logo" />
+  <h1>⚡ Vakra AI (Beta)</h1>
+  <p><strong>The Open-Source Autonomous AI Coding Assistant for VS Code.</strong><br/>
+  <em>Mathematically engineered to empower local 4B parameter models and edge hardware with disciplined, deterministic multi-agent coding.</em></p>
 
   <p>
-    <a href="#-key-highlights">Highlights</a> •
-    <a href="#-architecture--innovations">Architecture</a> •
-    <a href="#-production-features">Features</a> •
-    <a href="#-local-model--vision-setup">Local Setup</a> •
-    <a href="#-skills-system">Skills System</a> •
-    <a href="#-configuration--settings">Settings</a> •
-    <a href="#-deep-dive-logic">Project Logic</a>
+    <a href="#-beta-status--community-call"><img src="https://img.shields.io/badge/Status-Beta%20%7C%20Active%20Dev-orange?style=flat-square" alt="Status" /></a>
+    <a href="#-recommended-models--hardware-expectations"><img src="https://img.shields.io/badge/Optimized%20For-4B%20Models-blueviolet?style=flat-square" alt="Model Tier" /></a>
+    <a href="#-local-first--privacy"><img src="https://img.shields.io/badge/Privacy-100%25%20Local%20First-success?style=flat-square" alt="Privacy" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" /></a>
+    <img src="https://img.shields.io/badge/Tests-91%20Passing-brightgreen?style=flat-square" alt="Tests" />
+  </p>
+
+  <p>
+    <a href="#-quick-start-run-locally">Quick Start</a> •
+    <a href="#-recommended-models--hardware-expectations">Model Guidelines</a> •
+    <a href="#-safety--approval-notice">Safety Caution</a> •
+    <a href="#-core-architecture--innovations">Architecture</a> •
+    <a href="#-contributing--bug-fixes">Contributing & PRs</a>
   </p>
 </div>
 
 ---
 
-## 🌟 Key Highlights
+## 📢 Beta Status & Community Call
 
-- **⚡ Tailored for Small Models & Tight Contexts (4B / 40k Window):**  
-  Unlike generic AI tools that collapse without 128k–200k tokens, **Vakra AI** is mathematically optimized to keep 3B–7B local models (e.g. Gemma 4B, Qwen 2.5 Coder, Llama 3.2) sharp, coherent, and loop-free within a strict 32k–40k context budget.
-- **🌐 Web Brain Bridge & Deterministic Execution (Phase 1 & 2):**  
-  Directly taps into your live Gemini or ChatGPT Web browser sessions in Google Chrome via Chrome DevTools Protocol (`--remote-debugging-port=9222`). Features:
-  - **Deterministic Protocol Parser (`===FILE: path===`):** Guarantees 100% file extraction without dropping secondary files or guessing delimiters.
-  - **Extension Direct Execution:** The extension writes files, applies multi-strategy SEARCH/REPLACE edits, and runs commands directly, saving 4B models from re-typing large code blocks.
-  - **Tool Guards & Placeholders Defense:** Blocks persistent server freezes (`npm run dev`, `runserver`), placeholders (`// ... existing code ...`), file shrinkage, and path escapes.
-  - **Post-Write In-Memory Syntax Validation:** Instant Python AST (stdin) and JSON parse checks catch syntax bugs before the turn ends.
-  - **Zero Impact on Normal Flow:** Strictly active only when Web Brain is toggled ON. When toggled OFF, local 4B models run 100% untouched.
-- **🧠 Master-Worker Micro-Step Orchestration (`PLAN.md` Grounding):**  
-  Frontier models (Gemini Web) act as the Mastermind producing structured architecture and `PLAN.md`, while the local 4B model acts as the executor. Automatically injects `PLAN.md` into prompts at Priority 15 and enforces single micro-steps (1 file / 1 command at a time) to eliminate small-model hallucination.
-- **💻 Windows PowerShell Native Sanitization:**  
-  Seamlessly transforms bash-style chained commands (`&&`) into PowerShell-compatible `;` sequences, prevents broken `cd` sub-process execution, and auto-routes framework root paths.
-- **🔄 Scaled Autonomous Loop (Up to 500 Steps / Turn):**  
-  Configurable up to 500 consecutive tool steps per turn, giving autonomous agents the runway needed for massive end-to-end full-stack project builds.
-- **🎙️ Full-Duplex Real-Time Voice Assistant:**  
-  Built with dynamic energy threshold gating (0.015 idle / 0.075 speaking), instant barge-in interruption (<500ms), 850ms trailing silence auto-submit, Whisper STT, and Kokoro-82M / Edge TTS speech synthesis.
-- **🌐 Deep Web Search & Verified Dual-Layer Citations:**  
-  Searches DuckDuckGo and deep-fetches 7,000+ characters of rich context per authoritative website. Strictly enforces inline citations `[[1]](url)` and a dedicated `### 🌐 Sources & References` markdown section with one-click external browser opening.
-- **⏪ Granular Rollback & File Recovery Modal:**  
-  Interactive rollback modal showing exact line deltas (`+X / -Y lines`) across every modified or created file. Reverts workspace files to their exact pre-prompt state with zero manual git stashing.
-- **🔄 Autonomous Self-Healing Tool Loop:**  
-  Executes file operations, terminal commands, directory explorations, and code modifications in a continuous execution cycle. Automatically captures compiler/runtime errors and self-corrects without manual prompt pasting.
-- **🧠 Zero-Bloat Session Memory & Anti-Reread Heuristics:**  
-  Maintains symbol-level footprints of visited files. Prevents the AI from repeatedly reading the same files, eliminating infinite loops and saving up to 75% of context window tokens.
-- **🎯 Dynamic Workspace Skills Engine:**  
-  Drop declarative skill protocols into `.ultra-light-ai/skills/<name>/SKILL.md`. Features built-in safety rules, strict checklist enforcement, and automated conflict resolution.
-- **💻 Intelligent CWD & Terminal Auto-Routing:**  
-  Automatically identifies the correct working directory for framework-specific commands (e.g. searching for `manage.py`, `package.json`, or nested project folders) before running terminal tasks.
-- **👁️ Multimodal Vision Support:**  
-  Feed UI screenshots, design mockups, or bug captures directly into the chat. Seamlessly works with local vision projectors (`--mmproj`) in `llama-server` or cloud multimodal vision endpoints.
-- **📊 Real-Time Three-Tier Token Meter:**  
-  Live visual breakdown displaying **Input Tokens**, **Output Tokens**, and **Active Context Window %** so developers always know their exact consumption and billing.
-- **🛡️ 100% Offline & Private Capability:**  
-  Direct, native integration with local backends (`llama-server`, `Ollama` with native 32K context allocation, `LM Studio`, `vLLM`) via OpenAI-compatible endpoints, keeping proprietary code strictly on your machine.
+> [!IMPORTANT]
+> **Vakra AI is currently in BETA (Active Development).**  
+> We are opening this repository early to the open-source community, AI researchers, and developers. You are warmly invited to **clone it, test it on your local machines, discover edge cases, fix bugs, and open Pull Requests (PRs)**!
+
+If you find a bug or have an optimization idea for small local models, please [open an issue](https://github.com/) or submit a PR. Let's build the future of local-first agentic coding together!
 
 ---
 
-## 📐 Architecture & Core Innovations
+## ⚠️ Safety & Approval Notice
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        VS Code Webview UI                              │
-│         (Streaming Thoughts • Tool Cards • History • Settings)         │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Webview Message Dispatcher
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                    SidebarProvider & Engine Router                     │
-├───────────────────────────────────┬────────────────────────────────────┤
-│  PromptBuilder & Classifier       │  ToolDispatcher (Autonomous Loop)  │
-│  - System Prompt & Framework Rules │  - readFile / writeFile / patch    │
-│  - Micro AST Repo-Map (LSP)       │  - runCommand & Smart CWD Routing  │
-│  - Session Memory Ingestion       │  - listDirectory / searchCodebase  │
-│  - Active Skill Instructions      │  - webSearch & Doc Distiller       │
-└─────────────────┬─────────────────┴──────────────────┬─────────────────┘
-                  │                                    │
-┌─────────────────▼─────────────────┐┌─────────────────▼─────────────────┐
-│     Session & Context Memory      ││     Skills & Extensibility        │
-│  - SessionMemory (Visited Cache)  ││  - Custom Workspace Skills        │
-│  - ConversationHistory (Persist)  ││  - Built-in Safety Skills         │
-│  - AST Skeletonizer (Code Slices) ││  - MCP Client & Plugin Hooks      │
-└───────────────────────────────────┘└───────────────────────────────────┘
+> [!WARNING]
+> **Check before giving Direct Full Control (Auto-Approve):**  
+> Autonomous coding agents execute terminal commands and modify files. Before enabling session auto-approval in settings, **always review the proposed plan and commands**, especially on production or uncommitted codebases. Run inside a clean, git-tracked workspace so you can easily review and revert changes.
+
+---
+
+## 🎯 Recommended Models & Hardware Expectations
+
+### 🧠 The Reality of 4B Parameter Models
+Most existing coding agents (Devin, Cursor, Claude Code) are built for **70B–200B+ frontier models** with massive context windows (128k–200k+ tokens). When run on small 4B local models, standard agents fail due to token thrashing, instruction competition, and context degradation.
+
+**Vakra AI solves this by shifting cognitive load from the model to deterministic TypeScript middleware.**
+
+However, small models have physical boundaries:
+* **✅ What Vakra AI handles great on 4B models:**
+  * Scoped feature additions and component creation.
+  * Surgical bug fixes and stack-trace crash diagnosis.
+  * New project scaffolding (Django, React/Vite, FastAPI, Node.js).
+  * Structured multi-step task execution guided by `PLAN.md`.
+* **❌ What you should NOT expect from a 4B model:**
+  * Massive architectural refactors touching dozens of legacy files in a single breath.
+  * Abstract domain guessing without reading existing file lines.
+* **⚠️ Models below 4B (<4B):**
+  * Models smaller than 4B (e.g. 1B–2B) **do NOT possess enough reasoning depth or structured tool-calling reliability** for autonomous workflows. Please use 4B+ models.
+
+### 🏆 Recommended Models to Run
+| Model Tier | Recommended Models | Local Provider | Notes |
+| :--- | :--- | :--- | :--- |
+| **Primary 4B Choice** | `gemma-2-4b-it` / `gemma4-agentic` | LM Studio / Ollama / llama-server | Sharp instruction following & clean CLI generation |
+| **Code-Specialized** | `Qwen2.5-Coder-7B-Instruct` / `Qwen2.5-Coder-3B` | LM Studio / Ollama | Excellent surgical syntax & diff accuracy |
+| **Balanced Edge** | `Llama-3.2-3B-Instruct` / `Llama-3.1-8B-Instruct` | Ollama / LM Studio | Fast local inference on consumer laptop GPUs/CPUs |
+
+---
+
+## 🚀 Quick Start: Run on Your Local PC
+
+Follow these steps to set up and run Vakra AI locally in under 3 minutes:
+
+### 1. Prerequisites
+* **Node.js** (v18.0.0 or higher) & **npm**
+* **VS Code** (v1.85.0 or higher)
+* A local LLM server running (e.g., **LM Studio**, **Ollama**, or **llama-server**) with an OpenAI-compatible API endpoint (e.g. `http://localhost:1234/v1` or `http://localhost:11434/v1`).
+
+### 2. Clone the Repository
+```bash
+git clone https://github.com/<your-username>/vakra_control.git
+cd vakra_control
 ```
 
-### 1. The Anti-Reread & Session Memory Engine
-In small models, reading entire source files repeatedly exhausts the token budget and triggers repetitive loops. Vakra AI intercepts every `readFile` call and stores:
-- File paths visited in the current session.
-- Extracted top-level symbols (functions, classes, interfaces).
-- Import signatures and line counts.  
-When the model considers re-reading a known file, the prompt injects a concise cached summary, allowing the model to write precise patches without wasting context.
-
-### 2. Turn-to-Turn State Continuity
-When an autonomous tool loop finishes a turn (or hits the user-defined step limit), the system captures the execution summary—which files were edited, which tests were run, and what errors occurred—and embeds it into the next turn as an immutable `[PREVIOUS TURN EXECUTION RECORD]`. The agent never "forgets" what it just completed.
-
-### 3. Smart Terminal Auto-Routing (CWD Heuristics)
-Small models often execute commands in the workspace root instead of the nested subfolder where `manage.py` or `package.json` resides. The extension inspects commands prior to execution, resolves the true path of project anchors, and seamlessly directs the command to the target folder.
-
----
-
-## 🖥️ Local Model & Vision Setup
-
-Vakra AI is tested and optimized for local inference backends such as `llama-server` (llama.cpp) and `Ollama`.
-
-### Running with a 4B Model + Multimodal Vision (Gemma / Qwen)
-
-Launch `llama-server` with your base model and multimodal vision projector:
-
-```powershell
-& "D:\llama_coo\llama-server.exe" `
-  -m "D:\models\gemma-4-E4B-it-Q4_K_M.gguf" `
-  --mmproj "D:\models\mmproj-F16.gguf" `
-  -ngl 99 `
-  -c 40000 `
-  -fa on `
-  --context-shift `
-  --cache-reuse 256 `
-  --host 127.0.0.1 `
-  --port 8083
+### 3. Install Dependencies & Build
+```bash
+npm install
+npm run compile
 ```
 
-In Vakra AI Settings (⚙️ icon in the sidebar):
-1. **API Provider:** `Local (llama-server / Ollama / OpenAI Compatible)`
-2. **Base URL:** `http://127.0.0.1:8083/v1`
-3. **Model Name:** Enter your model tag (e.g. `gemma-4-31b-it` or `gemma-4-E4B-it`)
-4. **Max Steps / Turn:** Set according to your workflow (e.g. `20`–`35` for full-stack tasks)
-
----
-
-## 🎯 Workspace Skills System
-
-Skills provide modular, domain-specific intelligence without modifying system prompts.
-
-### Directory Structure
-```
-your-project/
-└── .ultra-light-ai/
-    └── skills/
-        └── my-django-skill/
-            └── SKILL.md
-```
-
-### SKILL.md Specification
-```markdown
----
-name: "django-fullstack"
-description: "Production-ready Django & DRF architecture with strict checklist enforcement"
-trigger_rules: ["django", "manage.py", "drf", "rest_framework"]
----
-
-## Django Protocol Checklist:
-1. Always verify existing directory layout before running startproject.
-2. Root project folder and app folder MUST have distinct names.
-3. Register every new app immediately in INSTALLED_APPS.
-4. Execute `python manage.py check` before declaring task complete.
-```
-
-### Automatic Conflict Resolution
-- **Custom Overrides Built-in:** If you create a custom skill that triggers for `django`, any system-level fallback skill is **automatically suppressed**.
-- **Transparent UI Indicators:** The sidebar dynamically displays active skills with color-coded badges:
-  - `📁 Custom: .ultra-light-ai/skills/...` (Emerald)
-  - `⚙️ Built-in System Skill` (Amber)
-  - `📋 Enforcing Checklist` (Active verification protocol)
-
----
-
-## ⚙️ Configuration & Key Settings
-
-Access the Settings panel via the ⚙️ icon in the sidebar:
-
-| Setting | Description | Default |
-|---|---|---|
-| **API Provider** | Gemini, Claude, OpenAI, DeepSeek, Groq, OpenRouter, Local | `Local` |
-| **Model Name** | Identifier of the active language model | `gemma-4-31b-it` |
-| **Max Steps / Turn** | Maximum autonomous tool iterations per turn (Configurable up to 500) | `50` |
-| **Context Limit** | Target token window boundary (e.g. 32000, 40000) | `40000` |
-| **Web Brain Bridge** | Live Chrome pair programming with Gemini/ChatGPT Web | `Enabled` |
-| **Voice STT / TTS** | Browser Web Speech, local Whisper, Kokoro-82M, Edge TTS | `Browser` |
-| **MCP Config** | Opens `.ultra-light-ai/mcp.json` to attach external MCP tools | Click to Open |
-| **Plugins Script** | Opens `.ultra-light-ai/plugins.js` for custom JS runtime hooks | Click to Open |
-
----
-
-## 🌐 Web Brain Setup (Chrome CDP Pair-Programmer)
-
-Vakra AI connects directly to your active browser session so you can leverage frontier models (Gemini / ChatGPT) completely free of API charges:
-
-1. Close all active Google Chrome windows.
-2. Launch Chrome with remote debugging enabled:
-   ```powershell
-   chrome.exe --remote-debugging-port=9222
+### 4. Launch in VS Code Extension Host
+1. Open the project folder in VS Code:
+   ```bash
+   code .
    ```
-3. Open a tab with [gemini.google.com](https://gemini.google.com/app) or [chatgpt.com](https://chatgpt.com/) and log in.
-4. In Vakra AI, toggle the **🌐 Web Brain** button in the composer bar to **ON**.
-5. Your local model will now consult Web Brain as an autonomous pair programmer!
+2. Press **`F5`** (or go to **Run and Debug** in the sidebar and select **"Run Extension"**).
+3. A new **Extension Development Host** VS Code window will launch with Vakra AI installed!
+
+### 5. Connect Your Model
+1. In the new window, click the **⚡ Vakra AI** icon in the Activity Bar.
+2. Click the **Settings (gear icon)** at the bottom of the sidebar.
+3. Configure your local endpoint:
+   * **API Base URL:** `http://localhost:1234/v1` (LM Studio) or `http://localhost:11434/v1` (Ollama)
+   * **API Key:** `lm-studio` (or leave as dummy)
+   * **Model ID:** Your loaded model name (e.g. `gemma-2-4b-it` or `qwen2.5-coder-7b-instruct`)
+4. Save and start coding!
 
 ---
 
-## ⌨️ Shortcuts & Commands
+## 🏛️ Core Architecture & Reliability Innovations
 
-| Shortcut / Command | Action |
-|---|---|
-| `Ctrl+Shift+P` → `Vakra AI: Open Chat` | Opens the assistant sidebar |
-| `Ctrl+Shift+P` → `Vakra AI: New Chat` | Starts a fresh session with clean context |
-| `Ctrl+Shift+P` → `Vakra AI: AI Quick Fix` | Analyzes and fixes current editor diagnostics |
-| `Ctrl+K` (Inline Edit) | Surgically refactors selected code directly in the editor |
-| Terminal Context Menu → `Fix Terminal Error` | Ingests last 60 terminal lines for instant debugging |
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 USER PROMPT / TASK                                      │
+└───────────────────────────────────────────┬─────────────────────────────────────────────┘
+                                            │
+                                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│              Agent 1: Architect & Planner (Explicit Plan / New Projects)                │
+│  • Researches online docs via DuckDuckGo extraction                                     │
+│  • Generates clean roadmap in root PLAN.md                                              │
+│  • Displays dedicated UI Plan Approval Card: [✔ Approve & Proceed]                      │
+│  • Pauses and awaits user authorization                                                 │
+└───────────────────────────────────────────┬─────────────────────────────────────────────┘
+                                            │ User Click / Direct Bug Fix
+                                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Agent 2: Autonomous Executor & Developer                         │
+│  • Auto-Environment Snapshot (<30ms): Live OS, PowerShell, .venv path & versions        │
+│  • Smart VirtualEnv Auto-Binding: Pre-binds .venv/Scripts to PATH for pip/python/CLI   │
+│  • File Operations: Surgical Search/Replace (DiffPatcher) & write_file                  │
+│  • Official Self-Verification: python manage.py check, npm test, get_code_diagnostics  │
+│  • 1-Strike Web Search Gate: Intercepts library/syntax errors & retrieves latest docs   │
+│  • Marks step complete in PLAN.md & concludes cleanly                                   │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. 2-Agent Lean Architecture
+* **Agent 1 (Architect / Planner):** Triggers only on explicit planning requests or new project scaffolding. Researches modern syntax, establishes high-level steps in `PLAN.md`, and yields to the user with a UI Plan Approval card.
+* **Agent 2 (Autonomous Executor):** Executes approved steps one-by-one or handles direct bug fixes without unnecessary agent handoffs. Has full developer tools (`execute_terminal_command`, `write_file`, `edit_file`, `search_web`, `get_code_diagnostics`, `complete_plan_step`, `finish`).
+
+### 2. Single Source of Truth (`PLAN.md`)
+* No hidden duplicate files or out-of-sync metadata.
+* `PLAN.md` is maintained directly in your workspace root so both you and the model see the exact same progress.
+
+### 3. Smart Virtual Environment Auto-Binding
+* Automatically detects `.venv`, `venv`, or `env` in your workspace.
+* Automatically prepends `.venv/Scripts` (Windows) or `.venv/bin` (macOS/Linux) to `PATH` in spawned processes.
+* Commands like `python`, `pip`, and `django-admin` **always run inside your virtual environment** without requiring manual shell activation.
+
+### 4. 1-Strike Web Search Gate (Post-2024 Knowledge Grounding)
+* Small models often suffer from 2024 training cutoffs and hallucinate outdated library APIs.
+* If a terminal command fails with a missing module or syntax error, the system blocks blind guesswork edits and prompts the model to execute `search_web` for the exact error and library version first.
+
+### 5. Fast Grounding & Crash Traceback Diagnoser
+* Pasted terminal errors and stack traces are automatically parsed by `ErrorDiagnoser`, which extracts crashing filepaths and line numbers to pre-ground the model before it executes its turn.
 
 ---
 
-## 📚 Deep Dive Logic
+## 🧪 Verification & Test Suite
 
-For an in-depth breakdown of the internal algorithms, token budget allocations, AST skeletonization, and state machine mechanics, consult:
-👉 **[project_logic.md](project_logic.md)**
+Vakra AI is strictly developed under the **Gravitas Reliability Runtime** framework (empirical proof, no fabricated claims, bounded retries).
+
+Run the full test suite locally:
+```bash
+# Run 91 unit, contract, platform, and guard tests
+npx mocha -u tdd -r ./out/test/suite/mockVscode.js "./out/test/suite/!(realModelBenchmark).test.js"
+
+# Compile TypeScript
+npx tsc -p .
+
+# Build CSS and Webview bundles
+npm run compile
+```
+> **Current Status:** 91/91 passing tests (100% pass rate).
+
+---
+
+## 🤝 Contributing & Bug Fixes
+
+We love community contributions! Here is how you can help:
+1. **Fork the Repo** and create your branch (`git checkout -b feature/cool-enhancement` or `bugfix/fix-terminal-handling`).
+2. Make your changes and write unit tests under `src/test/suite/`.
+3. Ensure all tests pass: `npm test`.
+4. Submit a **Pull Request (PR)** with a clear description of the bug and empirical verification output.
 
 ---
 
 ## 📄 License
 
-Vakra AI is licensed under the MIT License. Built with passion for high-performance, autonomous, local-first developer tooling.
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.

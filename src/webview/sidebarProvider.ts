@@ -12,6 +12,7 @@ import { PromptClassifier } from '../utils/promptClassifier';
 import { InMemoryTaskPlanner } from '../state/inMemoryTaskPlanner';
 import { TerminalCapture } from '../tools/terminalCapture';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
+import { StateLedger } from '../state/stateLedger';
 import { SessionMemory } from '../state/sessionMemory';
 import { SkillsManager } from '../features/skillsManager';
 import { ToolDispatcher } from './tools/toolDispatcher';
@@ -313,9 +314,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 } catch {}
             }
 
-            this.taskPlanner.syncWithDisk(workspaceRoot);
+            const isPlanTurn = PromptClassifier.isExplicitPlanRequest(message.text, !!message.architectMode) || PromptClassifier.isPlanContinuation(message.text);
+            if (isPlanTurn) {
+                this.taskPlanner.syncWithDisk(workspaceRoot);
+            }
             this.currentTaskState = PromptBuilder.startTask(workspaceRoot, message.text);
-            this.currentTaskState.plan = this.taskPlanner.getPromptPlanSteps();
+            this.currentTaskState.plan = isPlanTurn ? this.taskPlanner.getPromptPlanSteps() : [];
 
             let finalPrompt = await this.buildPrompt(message.text, workspaceRoot);
 
@@ -336,7 +340,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     functionDeclarations: [
                         {
                             name: "read_multiple_files",
-                            description: "Reads workspace files with optional line range slicing. Max 3 files at once.",
+                            description: "Reads workspace files with line numbers. Supports reading large files in chunks using start_line and end_line (1-based, up to 1,500 lines per chunk). Max 3 files at once.",
                             parameters: { 
                                 type: "object", 
                                 properties: { 
@@ -475,12 +479,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         },
                         {
                             name: "edit_file",
-                            description: "Replaces exact old_text snippet with new_text in an existing file.",
-                            parameters: { type: "object", properties: { filepath: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, required: ["filepath", "old_text", "new_text"] }
+                            description: "Replaces exact old_text snippet or replaces lines between start_line and end_line with new_text in an existing file.",
+                            parameters: { 
+                                type: "object", 
+                                properties: { 
+                                    filepath: { type: "string", description: "Path of the file to edit" }, 
+                                    old_text: { type: "string", description: "Exact string or snippet to replace" }, 
+                                    new_text: { type: "string", description: "Replacement text" },
+                                    start_line: { type: "number", description: "Optional starting line number (1-based) to replace lines directly" },
+                                    end_line: { type: "number", description: "Optional ending line number (1-based) to replace lines directly" }
+                                }, 
+                                required: ["filepath", "new_text"] 
+                            }
                         },
                         {
                             name: "execute_terminal_command",
-                            description: "Executes a shell command in the integrated terminal.",
+                            description: "Executes a non-interactive shell command in the integrated terminal. Used for project/app initialization commands, package installation, running tests, and database migrations. Do NOT use this to edit code files.",
                             parameters: { type: "object", properties: { command: { type: "string" }, explanation: { type: "string" } }, required: ["command"] }
                         },
                         {
@@ -499,6 +513,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                                     offset: { type: "number", description: "Character offset to read the next chunk of long documentation (default 0)" }
                                 }, 
                                 required: ["query"] 
+                            }
+                        },
+                        {
+                            name: "get_code_diagnostics",
+                            description: "Inspects compiler diagnostics, LSP red squiggles, and syntax errors for a target file or workspace.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    filepath: { type: "string", description: "Optional relative path of the file to check for compiler errors" }
+                                }
                             }
                         }
                     ]
@@ -526,6 +550,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         config: config,
                         postMessage: (msg) => {
                             if (msg.command === 'toolCallEvent') {
+                                if (activeRole && (!msg.data || !msg.data.agentRole)) {
+                                    msg.data = { ...(msg.data || {}), agentRole: activeRole };
+                                }
                                 this.currentTurnToolCalls.push({
                                     tool: msg.tool,
                                     title: msg.title || '',
@@ -595,25 +622,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         let contextSources: ContextSource[] = [];
 
         if (workspaceRoot) {
-            // Auto-ground model with PLAN.md so it never loses track of its current step
-            const planCandidates = [
-                path.join(workspaceRoot, 'PLAN.md'),
-                path.join(workspaceRoot, '.ultra-light-ai', 'PLAN.md'),
-                path.join(workspaceRoot, 'plan.md')
-            ];
-            for (const p of planCandidates) {
-                if (fs.existsSync(p)) {
-                    try {
-                        const planContent = fs.readFileSync(p, 'utf8').trim();
-                        if (planContent) {
-                            contextSources.push({
-                                name: 'Active Project Plan (PLAN.md)',
-                                content: `[CURRENT WORKSPACE PLAN]\n${planContent}\n\n[MANDATORY EXECUTION DIRECTIVE]:\n1. Find the FIRST unchecked step (- [ ]) in this plan.\n2. Execute ONLY that step right now.\n3. After completing it, mark it (- [x]) in PLAN.md using edit_file.`,
-                                priority: 15
-                            });
-                            break;
-                        }
-                    } catch {}
+            // ONLY ground model with PLAN.md if this turn is an explicit plan request or user is approving/continuing an existing plan!
+            const isPlanTurn = PromptClassifier.isExplicitPlanRequest(text, false) || PromptClassifier.isPlanContinuation(text);
+            if (isPlanTurn) {
+                const planCandidates = [
+                    path.join(workspaceRoot, 'PLAN.md'),
+                    path.join(workspaceRoot, '.ultra-light-ai', 'PLAN.md'),
+                    path.join(workspaceRoot, 'plan.md')
+                ];
+                for (const p of planCandidates) {
+                    if (fs.existsSync(p)) {
+                        try {
+                            const planContent = fs.readFileSync(p, 'utf8').trim();
+                            if (planContent) {
+                                contextSources.push({
+                                    name: 'Active Project Plan (PLAN.md)',
+                                    content: `[CURRENT WORKSPACE PLAN]\n${planContent}\n\n[MANDATORY EXECUTION DIRECTIVE]:\n1. Find the FIRST unchecked step (- [ ]) in this plan.\n2. Execute ONLY that step right now.\n3. After completing it, mark it (- [x]) in PLAN.md using edit_file.`,
+                                    priority: 15
+                                });
+                                break;
+                            }
+                        } catch {}
+                    }
                 }
             }
 
@@ -667,6 +697,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this.conversationHistory.clear();
         this.taskPlanner.clear();
         ToolDispatcher.resetSessionState();
+        const root = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0 ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined;
+        if (root) {
+            StateLedger.clear(root);
+            try { SessionMemory.getInstance(root).resetSession(); } catch {}
+        }
         this.postMessageToWebview({ command: 'chatCleared' });
     }
 

@@ -17,18 +17,18 @@
     <script src="{{HIGHLIGHT_JS_URI}}"></script>
     <style>
         :root {
-            --bg: #0b0b0d;
-            --bg1: #111113;
-            --bg2: #17171a;
-            --bg3: #1e1e22;
-            --line: rgba(255, 255, 255, .07);
-            --line2: rgba(255, 255, 255, .13);
-            --tx: #ececef;
-            --tx2: #a1a1aa;
-            --tx3: #6f6f78;
-            --ac: #8b8cf8;
-            --ac2: #a78bfa;
-            --acs: rgba(139, 140, 248, .14);
+            --bg: #0e0e11;
+            --bg1: #141418;
+            --bg2: #1a1a20;
+            --bg3: #22222a;
+            --line: rgba(255, 255, 255, .08);
+            --line2: rgba(255, 255, 255, .15);
+            --tx: #f3f3f6;
+            --tx2: #9da0aa;
+            --tx3: #6b6e79;
+            --ac: #6366f1;
+            --ac2: #818cf8;
+            --acs: rgba(99, 102, 241, .16);
             --ok: #4ade80;
             --err: #f87171;
             --warn: #fbbf24;
@@ -191,12 +191,16 @@
         }
 
         .user-bubble {
-            max-width: 88%;
-            background: var(--bg3);
-            border: 1px solid var(--line2);
-            border-radius: 12px 12px 4px 12px;
-            padding: 8px 12px;
-            color: var(--tx)
+            max-width: 82%;
+            background: #1b1b22;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px 16px 4px 16px;
+            padding: 9px 14px;
+            color: #f3f3f6;
+            font-size: 13px;
+            line-height: 1.55;
+            letter-spacing: -0.01em;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
 
         .user-bubble p {
@@ -382,14 +386,14 @@
         .file-change-card,
         .planning-decision-card,
         #plan-stepper {
-            background: var(--bg1) !important;
-            border: 1px solid var(--line) !important;
+            background: #141419 !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
             border-radius: 10px !important;
-            box-shadow: none !important;
-            padding: 10px 12px !important;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25) !important;
+            padding: 9px 12px !important;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 7px;
             animation: fadeIn .2s ease-out
         }
 
@@ -637,31 +641,39 @@
 
         /* Unified Thinking Accordion Layout - Expanded & Legible */
         .thinking-accordion {
-            background: rgba(18, 18, 24, 0.75) !important;
-            border: 1px solid rgba(255, 255, 255, 0.12) !important;
-            border-radius: 12px !important;
-            margin: 8px 0 !important;
-            overflow: hidden;
+            background: transparent !important;
+            border: none !important;
+            border-left: 2px solid rgba(99, 102, 241, 0.4) !important;
+            border-radius: 0 8px 8px 0 !important;
+            margin: 6px 0 10px 0 !important;
+            padding: 0 !important;
             width: 100%;
+            transition: border-color 0.2s ease;
         }
 
         .thinking-accordion:hover {
-            border-color: rgba(139, 140, 248, 0.45) !important;
+            border-left-color: var(--ac) !important;
         }
 
         .thinking-accordion summary {
-            display: flex !important;
+            display: inline-flex !important;
             align-items: center !important;
             justify-content: flex-start !important;
-            gap: 12px !important;
-            padding: 12px 18px !important;
-            font-size: 13.5px !important;
-            font-weight: 600 !important;
-            color: var(--tx) !important;
+            gap: 7px !important;
+            padding: 3px 8px !important;
+            font-size: 12px !important;
+            font-weight: 500 !important;
+            color: var(--tx2) !important;
             cursor: pointer;
             user-select: none;
             list-style: none;
-            transition: background 0.15s ease;
+            border-radius: 6px;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .thinking-accordion summary:hover {
+            background: rgba(255, 255, 255, 0.04) !important;
+            color: var(--tx) !important;
         }
 
         .thinking-accordion summary:hover {
@@ -684,13 +696,14 @@
         }
 
         .thinking-accordion .thinking-content {
-            padding: 16px 20px !important;
-            font: 13px/1.7 var(--mono) !important;
-            color: #e2e8f0 !important;
-            background: #08090d !important;
-            border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
-            max-height: 520px !important;
-            min-height: 110px !important;
+            padding: 8px 12px 10px 14px !important;
+            font: 11.5px/1.65 var(--mono) !important;
+            color: var(--tx2) !important;
+            background: rgba(0, 0, 0, 0.25) !important;
+            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            border-radius: 6px !important;
+            margin: 6px 0 4px 6px !important;
+            max-height: 380px !important;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-word;
@@ -698,10 +711,12 @@
 
         .thinking-arrow {
             display: inline-block;
-            transition: transform .2s ease;
-            font-size: 13px;
+            transition: transform .18s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 10.5px;
+            font-family: var(--mono);
+            font-weight: 700;
             flex-shrink: 0;
-            color: #38bdf8 !important;
+            color: var(--ac) !important;
         }
 
         .thinking-accordion[open] .thinking-arrow {
@@ -836,12 +851,17 @@
         }
 
         .composer {
-            background: var(--bg1);
-            border: 1px solid var(--line2);
+            background: #141419;
+            border: 1px solid rgba(255, 255, 255, 0.09);
             border-radius: 14px;
             transition: border-color .2s, box-shadow .2s;
             display: flex;
-            flex-direction: column
+            flex-direction: column;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+        }
+        .composer:focus-within {
+            border-color: rgba(99, 102, 241, 0.5) !important;
+            box-shadow: 0 4px 24px rgba(99, 102, 241, 0.15) !important;
         }
 
         .composer:focus-within {
@@ -2457,6 +2477,24 @@
 
         // Singleton Thinking Accordion Tracker (Fix 1)
         let activeThinkingAccordion = null;
+        let activeThinkingOpen = false;
+
+        // Immediately track user toggle/click on thinking accordion so state is never lost during streaming
+        document.addEventListener('toggle', (e) => {
+            if (e.target && e.target.classList && e.target.classList.contains('thinking-accordion')) {
+                activeThinkingOpen = e.target.open;
+            }
+        }, true);
+
+        document.addEventListener('click', (e) => {
+            const summary = e.target && e.target.closest ? e.target.closest('.thinking-accordion summary') : null;
+            if (summary) {
+                const details = summary.closest('.thinking-accordion');
+                if (details) {
+                    activeThinkingOpen = !details.open;
+                }
+            }
+        }, true);
 
         function getOrCreateActiveThinking(initialLabel = 'Thinking & reasoning...') {
             if (!chatContainer) return null;
@@ -2471,13 +2509,13 @@
 
             const details = document.createElement('details');
             details.className = 'thinking-accordion';
-            details.open = false;
+            details.open = !!activeThinkingOpen;
             details.innerHTML = `
                 <summary>
-                    <span class="thinking-arrow font-bold text-cyan-400">▶</span>
-                    <span class="thinking-label">${escapeHtml(initialLabel)}</span>
+                    <span class="thinking-arrow">❯</span>
+                    <span class="thinking-label text-slate-300 font-sans text-xs flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>${escapeHtml(initialLabel || 'Thinking...')}</span>
                 </summary>
-                <div class="thinking-content"><span class="text-slate-400 italic">Analyzing requirements & structuring execution plan...</span></div>
+                <div class="thinking-content"><span class="text-slate-500 italic">Reasoning & structuring plan...</span></div>
             `;
             chatContainer.appendChild(details);
             activeThinkingAccordion = details;
@@ -2487,15 +2525,13 @@
         function closeActiveThinking(customLabel) {
             if (activeThinkingAccordion) {
                 const label = activeThinkingAccordion.querySelector('.thinking-label');
-                if (label && customLabel) label.textContent = customLabel;
-                activeThinkingAccordion.open = false;
+                if (label) label.textContent = customLabel || 'Thought process';
                 activeThinkingAccordion.dataset.closed = 'true';
                 activeThinkingAccordion = null;
             }
             document.querySelectorAll('.thinking-accordion:not([data-closed="true"])').forEach(t => {
                 const label = t.querySelector('.thinking-label');
-                if (label && customLabel) label.textContent = customLabel;
-                t.open = false;
+                if (label) label.textContent = customLabel || 'Thought process';
                 t.dataset.closed = 'true';
             });
         }
@@ -3066,10 +3102,14 @@
                     thoughtParts.push(header + escapeHtml(activeStreamingThought));
                 }
                 const fullThoughtContent = thoughtParts.join('\n\n' + '─'.repeat(35) + '\n\n');
-                const isOpen = '';
+                const isCurrentlyThinking = isStreaming && !!activeStreamingThought;
+                const isOpen = activeThinkingOpen ? 'open' : '';
+                const labelHtml = isCurrentlyThinking
+                    ? '<span class="thinking-label text-slate-300 font-sans text-xs flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>Thinking...</span>'
+                    : '<span class="thinking-label text-slate-400 font-sans text-xs hover:text-slate-200">Thought process</span>';
 
-                // Unified summary layout - collapsed by default
-                const unifiedWidget = `<details class="thinking-accordion my-2" ${isOpen}><summary><span class="thinking-arrow font-bold text-cyan-400">▶</span><span class="thinking-label font-bold text-slate-200">🧠 Thinking Process</span></summary><div class="thinking-content">${fullThoughtContent || '<em class="text-slate-500">Analyzing instructions & preparing tool execution...</em>'}</div></details>`;
+                // Unified summary layout - preserves user open/closed state across all live streaming tokens
+                const unifiedWidget = `<details class="thinking-accordion" ${isOpen}><summary><span class="thinking-arrow">❯</span>${labelHtml}</summary><div class="thinking-content">${fullThoughtContent || '<em class="text-slate-500">Reasoning completed.</em>'}</div></details>`;
                 const placeholder = `%%VAKRA_THINK_UNIFIED%%`;
                 widgetMap.set(placeholder, unifiedWidget);
                 processed = `${placeholder}\n\n` + processed.trim();
@@ -3343,7 +3383,34 @@
                 currentStreamText += text;
             }
 
+            // Preserve thinking accordion state and internal scroll position across streaming updates
+            let prevThinkScroll = 0;
+            let wasAtBottom = true;
+            if (currentStreamTextDiv) {
+                const oldDetails = currentStreamTextDiv.querySelector('.thinking-accordion');
+                if (oldDetails) {
+                    activeThinkingOpen = oldDetails.open;
+                }
+                const oldContent = currentStreamTextDiv.querySelector('.thinking-accordion .thinking-content');
+                if (oldContent) {
+                    prevThinkScroll = oldContent.scrollTop;
+                    wasAtBottom = oldContent.scrollHeight - oldContent.clientHeight <= oldContent.scrollTop + 40;
+                }
+            }
+
             currentStreamTextDiv.innerHTML = renderMarkdownWithCustomWidgets(currentStreamText, !done);
+
+            if (currentStreamTextDiv) {
+                const newContent = currentStreamTextDiv.querySelector('.thinking-accordion .thinking-content');
+                if (newContent) {
+                    if (wasAtBottom) {
+                        newContent.scrollTop = newContent.scrollHeight;
+                    } else {
+                        newContent.scrollTop = prevThinkScroll;
+                    }
+                }
+            }
+
             smartScrollToBottom();
 
             // Live token counting during generation
@@ -3422,10 +3489,80 @@
         }
 
         // Render rich tool execution cards
+        let currentActivityGroup = null;
+        let currentActivityCount = 0;
+        let currentActivityStartTime = null;
+
+        function getOrCreateActivityGroup() {
+            if (currentActivityGroup && currentActivityGroup.parentNode) {
+                return currentActivityGroup;
+            }
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'activity-timeline-group w-full my-2 animate-fade-in';
+            groupDiv.id = 'activity-group-' + Date.now();
+            currentActivityStartTime = Date.now();
+            currentActivityCount = 0;
+
+            groupDiv.innerHTML = `
+                <details class="group border border-white/10 bg-white/[0.02] hover:bg-white/[0.04] rounded-xl overflow-hidden transition-all shadow-sm">
+                    <summary class="flex items-center justify-between px-3 py-1.5 cursor-pointer select-none text-[11.5px] text-slate-300 font-medium hover:text-white">
+                        <div class="flex items-center gap-2">
+                            <span class="activity-spinner text-indigo-400 text-xs">⚡</span>
+                            <span class="activity-title text-slate-300 font-sans">Running steps...</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                            <span class="activity-count-badge bg-white/[0.07] px-2 py-0.5 rounded-md text-slate-300 font-sans">0 actions</span>
+                            <span class="activity-chevron font-mono text-[10px] text-indigo-400 transform transition-transform group-open:rotate-90 inline-block font-bold">❯</span>
+                        </div>
+                    </summary>
+                    <div class="activity-items-container flex flex-col gap-1.5 p-2.5 pt-1.5 border-t border-white/[0.06] bg-black/20"></div>
+                </details>
+            `;
+
+            chatContainer.appendChild(groupDiv);
+            currentActivityGroup = groupDiv;
+            return groupDiv;
+        }
+
+        function finalizeActivityGroup() {
+            if (!currentActivityGroup) return;
+            const titleEl = currentActivityGroup.querySelector('.activity-title');
+            const countEl = currentActivityGroup.querySelector('.activity-count-badge');
+            const spinnerEl = currentActivityGroup.querySelector('.activity-spinner');
+            const elapsed = Math.max(1, Math.round((Date.now() - (currentActivityStartTime || Date.now())) / 1000));
+            if (titleEl && currentActivityCount > 0) {
+                titleEl.textContent = 'Completed ' + currentActivityCount + ' action' + (currentActivityCount === 1 ? '' : 's') + ' in ' + elapsed + 's';
+            }
+            if (spinnerEl && currentActivityCount > 0) {
+                spinnerEl.textContent = '✔';
+                spinnerEl.className = 'text-emerald-400';
+            }
+            currentActivityGroup = null;
+            currentActivityCount = 0;
+            currentActivityStartTime = null;
+        }
+
         function renderToolCallCard(toolName, title, data) {
             removeThinking();
-            const cardDiv = document.createElement('div');
-            cardDiv.className = 'flex justify-start w-full my-2 animate-fade-in';
+
+            // Interactive approval cards (write_file approval, terminal approval) require full visibility outside collapsed group
+            const isApprovalRequired = (toolName === 'execute_terminal_command' && !data.isAutoApproved) ||
+                                       ((toolName === 'write_file' || toolName === 'edit_file') && !data.isAutoApproved);
+
+            const isPassiveReadOrSearch = (toolName === 'read_multiple_files' || toolName === 'search_codebase' || toolName === 'list_directory_tree' || toolName === 'search_web');
+
+            let cardDiv = document.createElement('div');
+            if (isPassiveReadOrSearch) {
+                const group = getOrCreateActivityGroup();
+                currentActivityCount++;
+                const countBadge = group.querySelector('.activity-count-badge');
+                if (countBadge) countBadge.textContent = currentActivityCount + ' step' + (currentActivityCount === 1 ? '' : 's');
+                const titleSpan = group.querySelector('.activity-title');
+                if (titleSpan) titleSpan.textContent = 'Running: ' + (title || toolName);
+                cardDiv.className = 'activity-item-card flex justify-start w-full py-0.5 animate-fade-in';
+            } else {
+                cardDiv.className = 'flex justify-start w-full my-2 animate-fade-in';
+            }
 
             let innerHtml = '';
             if (toolName === 'execute_terminal_command') {
@@ -3693,6 +3830,31 @@
                         ${data.filePath ? `<div class="text-[9px] text-slate-400 font-mono mt-1">Saved to: ${escapeHtml(data.filePath)}</div>` : ''}
                     </div>
                 `;
+            } else if (toolName === 'set_task_plan') {
+                const steps = Array.isArray(data.steps) ? data.steps : [];
+                innerHtml = `
+                    <div class="tool-call-card border-purple-500/40 bg-purple-950/20 p-2.5 rounded-lg max-w-[95%] w-full">
+                        <div class="flex items-center justify-between pb-1 border-b border-purple-500/20 mb-1.5">
+                            <span class="flex items-center gap-1.5 text-xs font-semibold text-purple-300">
+                                <span>📋</span>
+                                <span>Task Roadmap Established (${steps.length} Steps)</span>
+                            </span>
+                            <span class="text-[9px] font-mono text-purple-400 bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-500/40">
+                                PLAN.md
+                            </span>
+                        </div>
+                        <div class="space-y-1">
+                            ${steps.map((s, idx) => `<div class="text-[11px] text-slate-300 flex items-start gap-1.5"><span class="text-purple-400 font-mono font-bold">${idx + 1}.</span><span>${escapeHtml(typeof s === 'string' ? s : s.title || '')}</span></div>`).join('')}
+                        </div>
+                    </div>
+                `;
+            } else if (toolName === 'complete_plan_step') {
+                innerHtml = `
+                    <div class="tool-call-pill border-emerald-500/40 bg-emerald-950/20 py-1.5 px-3">
+                        <span>✔</span>
+                        <span class="text-emerald-300 font-medium">Completed Step ${escapeHtml(data.sub_step_id || data.step_id || '')}: <span class="text-slate-300">${escapeHtml(data.summary || '')}</span></span>
+                    </div>
+                `;
             } else {
                 innerHtml = `
                     <div class="tool-call-pill">
@@ -3703,7 +3865,16 @@
             }
 
             cardDiv.innerHTML = innerHtml;
-            chatContainer.appendChild(cardDiv);
+            if (isPassiveReadOrSearch && currentActivityGroup) {
+                const container = currentActivityGroup.querySelector('.activity-items-container');
+                if (container) {
+                    container.appendChild(cardDiv);
+                } else {
+                    chatContainer.appendChild(cardDiv);
+                }
+            } else {
+                chatContainer.appendChild(cardDiv);
+            }
             smartScrollToBottom();
         }
 
@@ -3801,6 +3972,7 @@
 
             if (message.command === 'receiveChat' || message.command === 'streamChunk') {
                 if (message.done) {
+                    finalizeActivityGroup();
                     closeActiveThinking();
                     setGenerating(false);
                 } else {
@@ -3927,6 +4099,76 @@
                     </div>
                 `;
                 chatContainer.appendChild(bannerDiv);
+                smartScrollToBottom();
+            }
+            else if (message.command === 'agentRoleHandoff') {
+                removeThinking();
+                const role = message.role;
+                const desc = message.description || '';
+                const roleConfig = {
+                    planner: { name: 'Planner Agent', icon: '📋', border: 'border-purple-500/40', bg: 'bg-purple-950/40', text: 'text-purple-300' },
+                    researcher: { name: 'Researcher Agent', icon: '🔍', border: 'border-sky-500/40', bg: 'bg-sky-950/40', text: 'text-sky-300' },
+                    coder: { name: 'Coder Agent', icon: '⚡', border: 'border-emerald-500/40', bg: 'bg-emerald-950/40', text: 'text-emerald-300' },
+                    verifier: { name: 'Verifier Agent', icon: '🧪', border: 'border-amber-500/40', bg: 'bg-amber-950/40', text: 'text-amber-300' }
+                };
+                const cfg = roleConfig[role] || { name: (role || 'Agent'), icon: '🤖', border: 'border-slate-700', bg: 'bg-slate-900', text: 'text-slate-300' };
+                const badgeDiv = document.createElement('div');
+                badgeDiv.className = 'agent-handoff-banner flex items-center justify-between w-full my-1.5 px-3 py-1.5 rounded-lg border ' + cfg.border + ' ' + cfg.bg + ' text-xs shadow-sm animate-fade-in';
+                badgeDiv.innerHTML = `
+                    <div class="flex items-center gap-2 truncate">
+                        <span class="text-sm">${cfg.icon}</span>
+                        <strong class="${cfg.text} font-mono">${escapeHtml(cfg.name)}:</strong>
+                        <span class="text-slate-300 text-[11px] truncate">${escapeHtml(desc)}</span>
+                    </div>
+                    <span class="text-[9px] font-mono opacity-60 uppercase tracking-wider">${escapeHtml(role)}</span>
+                `;
+                chatContainer.appendChild(badgeDiv);
+                smartScrollToBottom();
+            }
+            else if (message.command === 'planApprovalRequest') {
+                removeThinking();
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'planning-decision-card max-w-[95%] w-full my-3 border border-purple-500/50 bg-slate-950/80 p-3 rounded-xl shadow-lg animate-fade-in';
+                const steps = Array.isArray(message.steps) ? message.steps : [];
+                const goal = message.goal || message.userRequirements || 'Project Execution Roadmap';
+                let stepsHtml = steps.map((s, idx) => {
+                    const title = typeof s === 'string' ? s : (s.title || `Step ${idx + 1}`);
+                    return `
+                        <div class="flex items-start gap-2 py-1 text-xs text-slate-200">
+                            <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-950/70 border border-purple-500/40 text-purple-300 font-bold">Step ${idx + 1}</span>
+                            <span class="font-medium">${escapeHtml(title)}</span>
+                        </div>
+                    `;
+                }).join('');
+                cardDiv.innerHTML = `
+                    <div class="flex items-center justify-between border-b border-purple-500/30 pb-2 mb-2">
+                        <span class="flex items-center gap-2 text-xs font-bold text-purple-300">
+                            <span>📋</span>
+                            <span>Task Roadmap Ready (PLAN.md)</span>
+                        </span>
+                        <span class="text-[9px] font-mono px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-500/40 font-semibold animate-pulse">
+                            Awaiting Approval
+                        </span>
+                    </div>
+                    <div class="text-[11px] text-slate-400 mb-2 font-sans">
+                        <strong class="text-slate-300">Goal:</strong> ${escapeHtml(goal)}
+                    </div>
+                    <div class="space-y-1 bg-black/40 p-2.5 rounded-lg border border-line/60 mb-3">
+                        ${stepsHtml || '<div class="text-xs text-slate-400 italic">Sequential steps formulated in PLAN.md</div>'}
+                    </div>
+                    <div class="flex items-center justify-between gap-3 pt-2 border-t border-line/60">
+                        <span class="text-[10px] text-slate-400">Review the roadmap before code changes begin.</span>
+                        <div class="flex items-center gap-2">
+                            <button type="button" onclick="vscode.postMessage({ command: 'sendMessage', text: 'Please modify the plan with smaller steps.' })" class="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-line cursor-pointer">
+                                ✎ Modify
+                            </button>
+                            <button type="button" onclick="vscode.postMessage({ command: 'sendMessage', text: 'Approved, proceed with the plan.' })" class="plan-btn-yes px-3.5 py-1.5 text-[11px] font-bold rounded shadow-sm cursor-pointer">
+                                ✔ Approve & Proceed
+                            </button>
+                        </div>
+                    </div>
+                `;
+                chatContainer.appendChild(cardDiv);
                 smartScrollToBottom();
             }
             // Fix 6: Chronological Tool Calls Persistence on Reload

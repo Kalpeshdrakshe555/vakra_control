@@ -43,6 +43,8 @@ export class ToolDispatcher {
     private static consecutiveReadCount = 0;
     private static lastReadFiles: Set<string> = new Set<string>();
     private static lastFailedCommand: string | null = null;
+    private static lastCommandErrorText: string = '';
+    private static webSearchPerformedForLastError: boolean = false;
     private static filesModifiedSinceLastCommand: boolean = false;
 
     public static getLastFailedCommand(): string | null {
@@ -61,6 +63,8 @@ export class ToolDispatcher {
         this.consecutiveReadCount = 0;
         this.lastReadFiles.clear();
         this.lastFailedCommand = null;
+        this.lastCommandErrorText = '';
+        this.webSearchPerformedForLastError = false;
         this.filesModifiedSinceLastCommand = false;
     }
 
@@ -313,6 +317,8 @@ export class ToolDispatcher {
                 filepaths = args.paths;
             } else if (Array.isArray(args.filepaths)) {
                 filepaths = args.filepaths;
+            } else if (Array.isArray(args.files)) {
+                filepaths = args.files;
             } else if (typeof args.filepath === 'string') {
                 filepaths = [args.filepath];
             } else if (typeof args.path === 'string') {
@@ -321,19 +327,13 @@ export class ToolDispatcher {
                 return "Error: 'paths' must be an array of file paths.";
             }
 
-            if (this.consecutiveReadCount >= 3) {
-                this.consecutiveReadCount = 0;
-                return "Notice: Multiple consecutive reads completed. The file context is already loaded. Please proceed with your plan/edit/test step instead of reading more files.";
-            }
-            this.consecutiveReadCount++;
-
             const startLine = typeof args.start_line === 'number' ? Math.max(1, args.start_line) : undefined;
             const endLine = typeof args.end_line === 'number' ? Math.max(1, args.end_line) : undefined;
 
             let targetFilepaths: string[] = filepaths.slice(0, 3);
-            const joinedKey = targetFilepaths.slice().sort().join('|');
+            const joinedKey = targetFilepaths.slice().sort().join('|') + `:${startLine || 0}-${endLine || 0}`;
             if (this.lastReadFiles.has(joinedKey) && !this.filesModifiedSinceLastCommand) {
-                return `Notice: Files [${targetFilepaths.join(', ')}] were already inspected recently and have not been modified. You already have this code context. Please proceed directly to writing/editing code or running a verification check.`;
+                return `Notice: File section [${targetFilepaths.join(', ')}] was already inspected recently and has not been modified. Please proceed to writing/editing code or running a verification check.`;
             }
             this.lastReadFiles.add(joinedKey);
 
@@ -394,41 +394,28 @@ export class ToolDispatcher {
                 const allLines = safeContent.split(/\r?\n/);
                 const totalLines = allLines.length;
 
-                // Case A: Specific line range requested
+                // Case A: Specific line range or chunk requested
                 if (startLine !== undefined || endLine !== undefined) {
                     const s = Math.max(1, startLine || 1);
-                    const e = Math.min(totalLines, endLine || totalLines);
+                    const maxChunk = 1500;
+                    const requestedEnd = endLine !== undefined ? endLine : (s + maxChunk - 1);
+                    const e = Math.min(totalLines, requestedEnd);
                     const slicedLines = allLines.slice(s - 1, e).map((line, idx) => `${s + idx} | ${line}`).join('\n');
-                    combinedResult += `\n--- File: ${fp} (Lines ${s}-${e} of ${totalLines}) ---\n${slicedLines}\n`;
-                    continue;
-                }
-
-                // Case B: Large file (> 350 lines or > 2000 tokens) without explicit range
-                const estimatedTok = estimateTokens(safeContent);
-                if (totalLines > 350 || estimatedTok > 2000) {
-                    const previewLines = allLines.slice(0, 80).map((line, idx) => `${idx + 1} | ${line}`).join('\n');
-                    
-                    // Extract functions / classes outline
-                    const symbols: string[] = [];
-                    allLines.forEach((line, idx) => {
-                        const m = line.match(/^\s*(?:export\s+)?(?:def|class|function|interface|type)\s+([A-Za-z0-9_]+)/);
-                        if (m) symbols.push(`Line ${idx + 1}: ${m[0].trim()}`);
-                    });
-
-                    const outlineText = symbols.length > 0 
-                        ? `\nSymbol Outline:\n${symbols.slice(0, 30).join('\n')}` 
+                    const hasMore = e < totalLines;
+                    const chunkNotice = hasMore
+                        ? `\n[NOTE: Displaying lines ${s}-${e} of ${totalLines}. Use start_line=${e + 1} and end_line=${Math.min(totalLines, e + maxChunk)} to read the next chunk.]`
                         : '';
-
-                    combinedResult += `\n--- File: ${fp} [LARGE FILE: ${totalLines} lines, ~${estimatedTok} tokens] ---\n` +
-                        `Top 80 lines:\n${previewLines}\n` +
-                        `${outlineText}\n` +
-                        `\n[NOTE: File is large. To inspect specific functions or code blocks, call read_multiple_files with start_line and end_line parameters.]\n`;
+                    combinedResult += `\n--- File: ${fp} (Lines ${s}-${e} of ${totalLines}) ---\n${slicedLines}${chunkNotice}\n`;
                     continue;
                 }
 
-                // Case C: Standard normal-sized file
-                const numbered = allLines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
-                combinedResult += `\n--- File: ${fp} (${totalLines} lines) ---\n${numbered}\n`;
+                // Full code inspection: Deliver all lines up to 1,500 lines directly with line numbers
+                const numbered = allLines.slice(0, 1500).map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+                const notice = totalLines > 1500
+                    ? `\n[NOTE: Displaying first 1500 of ${totalLines} lines. Call with start_line=1501 and end_line=${Math.min(totalLines, 3000)} to inspect the next chunk.]`
+                    : '';
+                combinedResult += `\n--- File: ${fp} (${totalLines} lines) ---\n${numbered}${notice}\n`;
+                continue;
             }
 
             SessionMemory.getInstance(workspaceRoot).recordToolResult('read_multiple_files', args, 'Files inspected', true);
@@ -587,9 +574,11 @@ export class ToolDispatcher {
             });
             const oldText = args.old_text ?? args.oldText;
             const newText = args.new_text ?? args.newText;
+            const startLine = typeof args.start_line === 'number' ? args.start_line : (typeof args.startLine === 'number' ? args.startLine : undefined);
+            const endLine = typeof args.end_line === 'number' ? args.end_line : (typeof args.endLine === 'number' ? args.endLine : undefined);
 
-            if (typeof oldText !== 'string' || typeof newText !== 'string') {
-                return "Error: Both 'old_text' and 'new_text' strings are required for edit_file.";
+            if (typeof newText !== 'string' || (typeof oldText !== 'string' && startLine === undefined)) {
+                return "Error: Both 'old_text' and 'new_text' strings are required for edit_file (or provide 'start_line'/'end_line' with 'new_text').";
             }
 
             const safeCheck = resolveSafeWorkspacePath(filepath, workspaceRoot, false);
@@ -607,41 +596,54 @@ export class ToolDispatcher {
 
             let fileContent = fs.readFileSync(fullPath, 'utf8');
 
-            // 1. Try exact match
+            // 0. Line-numbered replacement fallback (Extremely reliable for small models)
             let matchedOldText = null;
-            if (fileContent.includes(oldText)) {
-                matchedOldText = oldText;
-            } else {
-                // 2. Try normalized line endings (Windows CRLF vs LF)
-                const normFile = fileContent.replace(/\r\n/g, '\n');
-                const normOld = oldText.replace(/\r\n/g, '\n');
-                if (normFile.includes(normOld)) {
-                    fileContent = normFile;
-                    matchedOldText = normOld;
-                } else {
-                    // 3. Line-by-line trimmed fallback match (ignores trailing spaces / indentation quirks)
-                    const fileLines = fileContent.split(/\r?\n/);
-                    const oldLines = oldText.split(/\r?\n/).map(l => l.trimEnd());
+            if (startLine !== undefined) {
+                const lines = fileContent.split(/\r?\n/);
+                const s = Math.max(1, startLine);
+                const e = Math.min(lines.length, endLine !== undefined ? endLine : s);
+                if (s <= lines.length) {
+                    matchedOldText = lines.slice(s - 1, e).join('\n');
+                    fileContent = lines.join('\n');
+                }
+            }
 
-                    if (oldLines.length > 0 && oldLines[0].trim().length > 0) {
-                        let foundIdx = -1;
-                        for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
-                            let match = true;
-                            for (let j = 0; j < oldLines.length; j++) {
-                                if (fileLines[i + j].trimEnd() !== oldLines[j]) {
-                                    match = false;
+            // 1. Try exact match
+            if (!matchedOldText && typeof oldText === 'string') {
+                if (fileContent.includes(oldText)) {
+                    matchedOldText = oldText;
+                } else {
+                    // 2. Try normalized line endings (Windows CRLF vs LF)
+                    const normFile = fileContent.replace(/\r\n/g, '\n');
+                    const normOld = oldText.replace(/\r\n/g, '\n');
+                    if (normFile.includes(normOld)) {
+                        fileContent = normFile;
+                        matchedOldText = normOld;
+                    } else {
+                        // 3. Line-by-line trimmed fallback match (ignores trailing spaces / indentation quirks)
+                        const fileLines = fileContent.split(/\r?\n/);
+                        const oldLines = oldText.split(/\r?\n/).map(l => l.trimEnd());
+
+                        if (oldLines.length > 0 && oldLines[0].trim().length > 0) {
+                            let foundIdx = -1;
+                            for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
+                                let match = true;
+                                for (let j = 0; j < oldLines.length; j++) {
+                                    if (fileLines[i + j].trimEnd() !== oldLines[j]) {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (match) {
+                                    foundIdx = i;
                                     break;
                                 }
                             }
-                            if (match) {
-                                foundIdx = i;
-                                break;
-                            }
-                        }
 
-                        if (foundIdx !== -1) {
-                            fileContent = fileLines.join('\n');
-                            matchedOldText = fileLines.slice(foundIdx, foundIdx + oldLines.length).join('\n');
+                            if (foundIdx !== -1) {
+                                fileContent = fileLines.join('\n');
+                                matchedOldText = fileLines.slice(foundIdx, foundIdx + oldLines.length).join('\n');
+                            }
                         }
                     }
                 }
@@ -966,6 +968,33 @@ export class ToolDispatcher {
             return await ToolRegistry.executeTool('list_directory_tree', JSON.stringify(args), workspaceRoot);
         }
 
+        if (name === 'get_code_diagnostics') {
+            try {
+                const fp = args?.filepath || args?.path;
+                if (fp && workspaceRoot) {
+                    const targetUri = vscode.Uri.file(path.resolve(workspaceRoot, fp));
+                    const diags = vscode.languages.getDiagnostics(targetUri);
+                    const errors = diags.filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+                    if (errors.length === 0) return 'No active compiler or syntax errors found in target file.';
+                    return errors.map(d => `[Line ${d.range.start.line + 1}] Error: ${d.message}`).join('\n');
+                } else {
+                    const allDiags = vscode.languages.getDiagnostics();
+                    const errors: Array<{ uri: vscode.Uri; d: vscode.Diagnostic }> = [];
+                    for (const [uri, diags] of allDiags) {
+                        for (const d of diags) {
+                            if (d.severity === vscode.DiagnosticSeverity.Error) {
+                                errors.push({ uri, d });
+                            }
+                        }
+                    }
+                    if (errors.length === 0) return 'No active compiler or syntax errors found in workspace.';
+                    return errors.slice(0, 15).map(({ uri, d }) => `[${workspaceRoot ? path.relative(workspaceRoot, uri.fsPath) : uri.fsPath}:${d.range.start.line + 1}] Error: ${d.message}`).join('\n');
+                }
+            } catch (err) {
+                return 'No active compiler or syntax errors found in workspace.';
+            }
+        }
+
         /* ========================================================================= */
         /* [VERSION 1 - LEGACY DISPATCHER FOR search_web & research_web_docs - PRESERVED FOR ROLLBACK]
         // To rollback to Version 1 legacy tools, simply uncomment the block below and comment out Version 2.
@@ -1075,6 +1104,7 @@ ${searchRes.text}
         /* Both search_web and research_web_docs route to this single unified engine */
         /* ========================================================================= */
         if (name === 'search_web' || name === 'research_web_docs') {
+            this.webSearchPerformedForLastError = true;
             const query = args.query || args.prompt || '';
             const urls = Array.isArray(args.urls) ? args.urls : [];
             const offset = typeof args.offset === 'number' ? args.offset : 0;

@@ -405,6 +405,21 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
         if (this.ctx) {
             this.ctx.workspaceState.update(STORAGE_KEY, undefined);
         }
+        const root = this.workspaceRoot || (vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0 ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined);
+        if (root) {
+            try {
+                const candidates = [
+                    path.join(root, '.ultra-light-ai', 'PLAN.md'),
+                    path.join(root, 'PLAN.md'),
+                    path.join(root, 'plan.md')
+                ];
+                for (const c of candidates) {
+                    if (fs.existsSync(c)) {
+                        try { fs.unlinkSync(c); } catch {}
+                    }
+                }
+            } catch {}
+        }
         this.commit();
     }
 
@@ -461,18 +476,19 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
         const root = this.workspaceRoot || (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0 ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined);
         if (root) {
             try {
-                const metaDir = path.join(root, '.ultra-light-ai');
-                if (!fs.existsSync(metaDir)) fs.mkdirSync(metaDir, { recursive: true });
-                const planPath = path.join(metaDir, 'PLAN.md');
                 const rootPlan = path.join(root, 'PLAN.md');
+                const legacyPlan = path.join(root, '.ultra-light-ai', 'PLAN.md');
 
                 if (this.steps.length === 0) {
-                    if (fs.existsSync(planPath)) fs.unlinkSync(planPath);
                     if (fs.existsSync(rootPlan)) fs.unlinkSync(rootPlan);
+                    if (fs.existsSync(legacyPlan)) fs.unlinkSync(legacyPlan);
                 } else {
                     const md = this.generatePlanMarkdown();
-                    fs.writeFileSync(planPath, md, 'utf8');
                     fs.writeFileSync(rootPlan, md, 'utf8');
+                    // Clean up duplicate legacy plan in .ultra-light-ai if present
+                    if (fs.existsSync(legacyPlan)) {
+                        try { fs.unlinkSync(legacyPlan); } catch {}
+                    }
                 }
             } catch (e) {
                 console.warn('[InMemoryTaskPlanner] Failed to write PLAN.md:', e);

@@ -40,3 +40,16 @@ Thumbs.db
 
 # Project Notes
 features.md
+
+# Agent Workspace, Skills & Scratch
+.ultra-light-ai/
+.agents/
+skills-lock.json
+scratch/
+
+# Python Virtual Environments & Cache
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc

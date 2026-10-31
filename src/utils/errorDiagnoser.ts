@@ -130,20 +130,37 @@ FIX: Move the template into the nested directory: \`catalog/templates/catalog/${
             }
         }
 
+        // Framework Diagnostic 4: Django OperationalError / FieldError / NoReverseMatch
+        if (/OperationalError:\s*no such table:\s*([a-zA-Z0-9_]+)/i.test(errorText) || /OperationalError:\s*no such column:/i.test(errorText)) {
+            contexts.unshift({
+                filepath: 'manage.py',
+                line: 0,
+                codeSnippet: `### DJANGO DATABASE MIGRATION DIAGNOSTIC ###\nDatabase tables/columns are out of sync with models.py.\nFIX: Run 'python manage.py makemigrations' followed by 'python manage.py migrate'.`
+            });
+        } else if (/NoReverseMatch at/i.test(errorText) || /Reverse for ['"]([^'"]+)['"] not found/i.test(errorText)) {
+            contexts.unshift({
+                filepath: 'urls.py',
+                line: 0,
+                codeSnippet: `### DJANGO URL REVERSE DIAGNOSTIC ###\nDjango template or view tried to reverse a URL name that does not match urls.py (or is missing app_name namespace).\nFIX: Inspect urls.py and the template {% url '...' %} tag to ensure the exact route name and arguments match.`
+            });
+        }
+
         return contexts;
     }
 
-    private static readCodeSnippet(filepath: string, line: number, contextLines: number = 7): string {
+    private static readCodeSnippet(filepath: string, line: number, contextLines: number = 35): string {
         try {
             const content = fs.readFileSync(filepath, 'utf8');
-            const lines = content.split('\n');
-            const start = Math.max(0, line - 1 - contextLines);
-            const end = Math.min(lines.length, line + contextLines);
+            const lines = content.split(/\r?\n/);
+            // If file is reasonably sized (<= 250 lines), provide the ENTIRE file so the small model has 100% context!
+            const start = lines.length <= 250 ? 0 : Math.max(0, line - 1 - contextLines);
+            const end = lines.length <= 250 ? lines.length : Math.min(lines.length, line + contextLines);
             
-            let snippet = `// --- ${path.basename(filepath)} (Lines ${start + 1}-${end}) ---\n`;
+            const relPath = filepath.replace(/\\/g, '/');
+            let snippet = `// --- FILE: ${relPath} (Lines ${start + 1}-${end} of ${lines.length}) ---\n`;
             for (let i = start; i < end; i++) {
                 const marker = (i === line - 1) ? '>> ' : '   ';
-                snippet += `${marker}${i + 1}: ${lines[i]}\n`;
+                snippet += `${marker}${i + 1} | ${lines[i]}\n`;
             }
             return snippet;
         } catch (e) {

@@ -422,11 +422,11 @@ suite('Phase 4: Multi-Agent Workflow & Recovery Verification', () => {
                     return { text: 'Research done.' };
                 }
                 if (opts.systemInstruction.includes('CODER')) {
-                    // Coder illegally attempts to execute a terminal command!
+                    // Coder illegally attempts to call set_task_plan!
                     if (opts.onToolCall) {
                         const callRes = await opts.onToolCall({
-                            name: 'execute_terminal_command',
-                            args: { command: 'echo "hacked"' }
+                            name: 'set_task_plan',
+                            args: { steps: ['hacked'] }
                         });
                         errorReceived = String(callRes);
                     }
@@ -470,7 +470,7 @@ suite('Phase 4: Multi-Agent Workflow & Recovery Verification', () => {
 
         await orchestrator.execute();
         assert.ok(
-            errorReceived.includes('Permission denied') && errorReceived.includes('execute_terminal_command'),
+            errorReceived.includes('Permission denied') && errorReceived.includes('set_task_plan'),
             `Dispatcher must fail closed with permission denied: ${errorReceived}`
         );
     });

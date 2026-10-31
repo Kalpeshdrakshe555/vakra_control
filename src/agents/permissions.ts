@@ -11,7 +11,10 @@ export const ROLE_ALLOWED_TOOLS: Record<AgentRoleType, readonly string[]> = {
         'read_state_ledger',
         'list_directory_tree',
         'read_multiple_files',
-        'read_skill'
+        'read_skill',
+        'execute_terminal_command',
+        'search_web',
+        'research_web_docs'
     ],
     researcher: [
         'read_multiple_files',
@@ -22,15 +25,22 @@ export const ROLE_ALLOWED_TOOLS: Record<AgentRoleType, readonly string[]> = {
         'search_web',
         'research_web_docs',
         'read_skill',
-        'read_state_ledger'
+        'read_state_ledger',
+        'execute_terminal_command'
     ],
     coder: [
         'write_file',
         'edit_file',
+        'execute_terminal_command',
         'read_multiple_files',
+        'search_codebase',
+        'list_directory_tree',
         'read_state_ledger',
         'read_skill',
-        'create_skill'
+        'create_skill',
+        'search_web',
+        'research_web_docs',
+        'get_code_diagnostics'
     ],
     verifier: [
         'execute_terminal_command',
@@ -47,7 +57,6 @@ export const ROLE_PROHIBITED_TOOLS: Record<AgentRoleType, readonly string[]> = {
     planner: [
         'write_file',
         'edit_file',
-        'execute_terminal_command',
         'complete_plan_step',
         'finish',
         'create_skill'
@@ -55,7 +64,6 @@ export const ROLE_PROHIBITED_TOOLS: Record<AgentRoleType, readonly string[]> = {
     researcher: [
         'write_file',
         'edit_file',
-        'execute_terminal_command',
         'set_task_plan',
         'expand_plan_step',
         'complete_plan_step',
@@ -63,13 +71,10 @@ export const ROLE_PROHIBITED_TOOLS: Record<AgentRoleType, readonly string[]> = {
         'create_skill'
     ],
     coder: [
-        'execute_terminal_command',
         'set_task_plan',
         'expand_plan_step',
         'complete_plan_step',
-        'finish',
-        'search_web',
-        'research_web_docs'
+        'finish'
     ],
     verifier: [
         'write_file',

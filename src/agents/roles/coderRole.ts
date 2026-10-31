@@ -46,6 +46,13 @@ export class CoderRoleHandler {
                     reason: 'File edited by Coder',
                     diffSnippet: typeof result === 'string' ? result.slice(0, 300) : ''
                 });
+            } else if (call.name === 'execute_terminal_command') {
+                changes.push({
+                    filepath: 'CLI Command',
+                    action: 'create',
+                    reason: `Executed: ${call.args?.command || 'command'}`,
+                    diffSnippet: typeof result === 'string' ? result.slice(0, 300) : ''
+                });
             }
 
             return result;

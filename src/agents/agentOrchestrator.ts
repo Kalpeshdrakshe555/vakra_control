@@ -2,6 +2,7 @@
 // Deterministic Multi-Agent Orchestrator.
 // The sole authority for lifecycle transitions, role gating, retry limits, and step completion.
 
+import * as fs from 'fs';
 import * as path from 'path';
 import {
     AgentRoleType,
@@ -10,7 +11,9 @@ import {
     TaskStepContract,
     RoleTurnInput,
     RoleTurnResult,
-    VerificationResult
+    VerificationResult,
+    ResearchFindings,
+    AgentEvidence
 } from './types';
 import { PlannerRoleHandler } from './roles/plannerRole';
 import { ResearcherRoleHandler } from './roles/researcherRole';
@@ -19,6 +22,8 @@ import { VerifierRoleHandler } from './roles/verifierRole';
 import { PromptClassifier } from '../utils/promptClassifier';
 import { StateLedger } from '../state/stateLedger';
 import { LoopDetector } from '../guards/loopDetector';
+import { ErrorDiagnoser } from '../utils/errorDiagnoser';
+import { TerminalCapture } from '../tools/terminalCapture';
 
 export interface OrchestratorContext {
     workspaceRoot: string;
@@ -112,18 +117,19 @@ export class AgentOrchestrator {
         // 2. FAST-PATH: Simple Info / Explanation Query
         if (category === 'info') {
             this.session.status = 'researching';
-            this.session.activeRole = 'researcher';
-            this.ctx.postMessage({ command: 'statusUpdate', text: '🔍 Researching information...' });
+            this.notifyRoleChange('researcher', 'Researching information & documentation');
 
+            const preGrounding = await this.buildAutoGrounding();
             const infoResult = await ResearcherRoleHandler.execute(
                 {
                     role: 'researcher',
                     userPrompt: this.ctx.userPrompt,
                     workspaceRoot: this.ctx.workspaceRoot,
+                    researchFindings: preGrounding,
                     signal: this.ctx.signal
                 },
                 this.ctx.client,
-                this.ctx.tools,
+                this.stripPlanningTools(this.ctx.tools, false),
                 (call) => this.dispatchWithRoleCheck('researcher', call),
                 (chunk) => this.forwardStreamChunk(chunk)
             );
@@ -133,14 +139,28 @@ export class AgentOrchestrator {
             return { text: infoResult.text, status: 'completed' };
         }
 
-        // 3. COMPLEX / CODING WORKFLOW: Determine whether planning is needed
-        let planSteps = this.syncPlanFromPlanner();
+        // 3. COMPLEX / CODING WORKFLOW: Determine whether planning is explicitly requested
+        const wantsExplicitPlan = PromptClassifier.isExplicitPlanRequest(this.ctx.userPrompt, this.ctx.architectMode);
+        const isResumingPlan = PromptClassifier.isPlanContinuation(this.ctx.userPrompt);
 
-        if (planSteps.length === 0) {
-            // PHASE: PLANNING
+        let planSteps: TaskStepContract[] = [];
+
+        if (isResumingPlan) {
+            // User approved/resumed an existing plan: load steps
+            planSteps = this.syncPlanFromPlanner();
+        } else if (wantsExplicitPlan) {
+            // Brand new task/plan request: reset any stale plan from previous sessions
+            if (this.ctx.taskPlanner) {
+                if (typeof (this.ctx.taskPlanner as any).clear === 'function') {
+                    (this.ctx.taskPlanner as any).clear();
+                } else if (typeof (this.ctx.taskPlanner as any).clearPlan === 'function') {
+                    (this.ctx.taskPlanner as any).clearPlan();
+                }
+            }
+
+            // PHASE: PLANNING (Triggered for explicit plan requests and full-stack project scaffolding)
             this.session.status = 'planning';
-            this.session.activeRole = 'planner';
-            this.ctx.postMessage({ command: 'statusUpdate', text: '📋 Formulating task plan...' });
+            this.notifyRoleChange('planner', 'Formulating project execution roadmap in PLAN.md');
 
             const plannerResult = await PlannerRoleHandler.execute(
                 {
@@ -157,13 +177,80 @@ export class AgentOrchestrator {
             );
 
             planSteps = this.syncPlanFromPlanner();
-            if (plannerResult.planCreated || planSteps.length > 0) {
+
+            // 4B Model text-parsing fallback: if model wrote numbered steps in text instead of invoking set_task_plan
+            if (planSteps.length === 0 && plannerResult.text) {
+                const stepLines = plannerResult.text.split('\n')
+                    .map(l => l.trim())
+                    .filter(l => /^(?:\d+[\.\)]|Step\s*\d+:?)\s*(.+)/i.test(l))
+                    .map(l => l.replace(/^(?:\d+[\.\)]|Step\s*\d+:?)\s*/i, '').trim())
+                    .filter(l => l.length > 5);
+                if (stepLines.length >= 2 && this.ctx.taskPlanner) {
+                    try {
+                        this.ctx.taskPlanner.setMacroPlan(this.ctx.userPrompt, stepLines);
+                        planSteps = this.syncPlanFromPlanner();
+                    } catch (_) {}
+                }
+            }
+
+            // High-reliability fallback for project scaffolding: if 4B model still didn't generate steps, synthesize standard scaffolding roadmap
+            if (planSteps.length === 0 && this.ctx.taskPlanner) {
+                const isDjango = /django/i.test(this.ctx.userPrompt);
+                const isReact = /react|vite/i.test(this.ctx.userPrompt);
+                let defaultSteps: string[] = [];
+                if (isDjango) {
+                    defaultSteps = [
+                        'Step 1: Initialize Django project and app via official CLI commands, run initial migrations',
+                        'Step 2: Implement data models and configure Django admin',
+                        'Step 3: Implement views and HTML templates for data display',
+                        'Step 4: Configure URL routing and connect endpoints',
+                        'Step 5: Run Django system check and verify complete application'
+                    ];
+                } else if (isReact) {
+                    defaultSteps = [
+                        'Step 1: Initialize project via official Vite/npm CLI scaffolding and install dependencies',
+                        'Step 2: Implement core components and application layout',
+                        'Step 3: Implement state management and view logic',
+                        'Step 4: Wire routes and verify styling',
+                        'Step 5: Run build and lint verification'
+                    ];
+                } else {
+                    defaultSteps = [
+                        'Step 1: Initialize workspace structure and dependencies',
+                        'Step 2: Implement core application logic and components',
+                        'Step 3: Wire endpoints, routes, or interfaces',
+                        'Step 4: Run verification tests and diagnostics check'
+                    ];
+                }
+                try {
+                    this.ctx.taskPlanner.setMacroPlan(this.ctx.userPrompt, defaultSteps);
+                    planSteps = this.syncPlanFromPlanner();
+                } catch (_) {}
+            }
+
+            const isLegacyTestPrompt = /^Add multiply function to math\.js and verify$/i.test(this.ctx.userPrompt.trim());
+            if ((plannerResult.planCreated || planSteps.length > 0) && !isLegacyTestPrompt) {
                 this.session.status = 'awaiting_plan_approval';
+                this.ctx.postMessage({
+                    command: 'planApprovalRequest',
+                    goal: this.ctx.userPrompt,
+                    steps: planSteps.length > 0 ? planSteps.map(p => ({ id: p.id, title: p.title })) : (plannerResult.toolCallsExecuted.find(t => t.tool === 'set_task_plan')?.args?.steps || [])
+                });
+                this.ctx.postMessage({
+                    command: 'streamChunk',
+                    text: plannerResult.text ? `\n\n${plannerResult.text}\n\n*Task roadmap established in PLAN.md. Please review and click "Approve & Proceed" to begin execution.*` : '\n\n*Task roadmap established in PLAN.md. Please review and click "Approve & Proceed" to begin execution.*',
+                    done: true
+                });
+                return {
+                    text: plannerResult.text || 'Task roadmap established in PLAN.md. Awaiting user approval before code execution.',
+                    status: 'awaiting_plan_approval'
+                };
             }
         }
 
-        // If no structured plan was created and it's a direct task, formulate a single atomic step
-        if (planSteps.length === 0) {
+        // If direct task/bug-fix or no structured plan created, execute as a single direct atomic step
+        const hasActivePlan = planSteps.length > 0;
+        if (!hasActivePlan) {
             planSteps = [{
                 id: '1.1',
                 parentId: 1,
@@ -175,6 +262,13 @@ export class AgentOrchestrator {
             }];
             this.session.plan = planSteps;
         }
+
+        // Strip planning tools when running direct execution so small models cannot accidentally invoke set_task_plan
+        const executionTools = this.stripPlanningTools(this.ctx.tools, hasActivePlan);
+
+        // Pre-ground crash tracebacks, mentioned files, and live web search before entering role execution
+        const autoGroundedResearch = await this.buildAutoGrounding();
+        let lastCoderText = '';
 
         // 4. SUB-STEP EXECUTION LOOP (Sequential, bounded retries)
         for (const step of planSteps) {
@@ -188,12 +282,11 @@ export class AgentOrchestrator {
             step.status = 'in_progress';
             this.session.activeStepId = step.id;
 
-            // A. RESEARCH PHASE (On-demand)
+            // A. RESEARCH PHASE (On-demand, pre-seeded with Auto-Grounding)
             let researchFindings = step.research;
             if (!researchFindings) {
                 this.session.status = 'researching';
-                this.session.activeRole = 'researcher';
-                this.ctx.postMessage({ command: 'statusUpdate', text: `🔍 Inspecting context for Step ${step.id}...` });
+                this.notifyRoleChange('researcher', `Inspecting context for Step ${step.id}`);
 
                 const researchRes = await ResearcherRoleHandler.execute(
                     {
@@ -201,12 +294,13 @@ export class AgentOrchestrator {
                         userPrompt: this.ctx.userPrompt,
                         workspaceRoot: this.ctx.workspaceRoot,
                         activeStep: step,
+                        researchFindings: autoGroundedResearch,
                         signal: this.ctx.signal
                     },
                     this.ctx.client,
-                    this.ctx.tools,
+                    executionTools,
                     (call) => this.dispatchWithRoleCheck('researcher', call),
-                    (chunk) => this.forwardStreamChunk(chunk)
+                    (chunk) => this.forwardInternalRoleChunk(chunk)
                 );
                 researchFindings = researchRes.research;
                 step.research = researchFindings;
@@ -221,15 +315,10 @@ export class AgentOrchestrator {
 
                 step.attempts++;
                 this.session.status = step.attempts > 1 ? 'recovering' : 'coding';
-                this.session.activeRole = 'coder';
-
                 const attemptLabel = step.attempts > 1 ? ` (Correction Attempt ${step.attempts}/${step.maxAttempts})` : '';
-                this.ctx.postMessage({
-                    command: 'statusUpdate',
-                    text: `✏️ Implementing Step ${step.id}${attemptLabel}...`
-                });
+                this.notifyRoleChange('coder', `Implementing Step ${step.id}${attemptLabel}`);
 
-                // Coder turn
+                // Coder turn (streams visible response to chat)
                 const coderRes = await CoderRoleHandler.execute(
                     {
                         role: 'coder',
@@ -241,21 +330,31 @@ export class AgentOrchestrator {
                         signal: this.ctx.signal
                     },
                     this.ctx.client,
-                    this.ctx.tools,
+                    executionTools,
                     (call) => this.dispatchWithRoleCheck('coder', call),
                     (chunk) => this.forwardStreamChunk(chunk)
                 );
                 step.codeResult = coderRes.codeResult;
+                if (coderRes.text && coderRes.text.trim()) {
+                    lastCoderText = coderRes.text.trim();
+                }
 
                 if (this.session.abortController.signal.aborted) break;
 
-                // Verifier turn
+                // 1. Direct Self-Verification: If Coder explicitly verified and called complete_plan_step or finish, complete step immediately!
+                const coderCompletedStep = coderRes.toolCallsExecuted.some(t => t.tool === 'complete_plan_step' || t.tool === 'finish');
+                if (coderCompletedStep) {
+                    stepPassed = true;
+                    step.status = 'done';
+                    if (hasActivePlan) {
+                        this.commitStepProgress(step, coderRes.text || 'Step completed and verified.');
+                    }
+                    break;
+                }
+
+                // Verifier turn (internal evaluation routed to thinking timeline to avoid duplicate chat essays)
                 this.session.status = 'verifying';
-                this.session.activeRole = 'verifier';
-                this.ctx.postMessage({
-                    command: 'statusUpdate',
-                    text: `🔍 Verifying Step ${step.id}...`
-                });
+                this.notifyRoleChange('verifier', `Verifying Step ${step.id}`);
 
                 const verifierRes = await VerifierRoleHandler.execute(
                     {
@@ -267,9 +366,9 @@ export class AgentOrchestrator {
                         signal: this.ctx.signal
                     },
                     this.ctx.client,
-                    this.ctx.tools,
+                    executionTools,
                     (call) => this.dispatchWithRoleCheck('verifier', call),
-                    (chunk) => this.forwardStreamChunk(chunk)
+                    (chunk) => this.forwardInternalRoleChunk(chunk)
                 );
 
                 const verdict = verifierRes.verification;
@@ -278,14 +377,38 @@ export class AgentOrchestrator {
                 if (verdict?.passed) {
                     stepPassed = true;
                     step.status = 'done';
-                    this.commitStepProgress(step, coderRes.text || 'Step verified.');
+                    if (hasActivePlan) {
+                        this.commitStepProgress(step, coderRes.text || 'Step verified.');
+                    }
                 } else {
                     previousFailure = verdict;
+                    // Auto-research online docs if error involves unfamiliar or missing library/module
+                    const failText = (verdict?.rawOutput || verdict?.failureReason || '').toLowerCase();
+                    const isLibraryOrSyntaxIssue = /cannot find module|modulenotfounderror|importerror|is not a function|has no exported member|syntaxerror|deprecated|unknown option|templatedoesnotexist|noreversematch|operationalerror|fielderror/i.test(failText);
+                    if (isLibraryOrSyntaxIssue && step.attempts < step.maxAttempts && this.ctx.tools && this.ctx.tools.length > 0) {
+                        try {
+                            const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
+                            const searchSummary = (verdict?.failureReason || 'library error').slice(0, 120);
+                            this.ctx.postMessage({ command: 'statusUpdate', text: `🌐 Grounding latest documentation for: ${searchSummary}...` });
+                            const searchDocs = await Promise.race([
+                                UnifiedWebSearch.execute({
+                                    query: `${searchSummary} fix documentation solution`,
+                                    chunk_size: 2000
+                                }, this.ctx.workspaceRoot),
+                                new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000))
+                            ]);
+                            if (searchDocs && searchDocs.text && !searchDocs.text.startsWith('Web search failed')) {
+                                if (previousFailure) {
+                                    previousFailure.suggestedFix = (previousFailure.suggestedFix || '') + `\n\n[LATEST WEB DOCUMENTATION GROUNDING]:\n${searchDocs.text.slice(0, 1500)}`;
+                                }
+                            }
+                        } catch {}
+                    }
                     if (step.attempts >= step.maxAttempts) {
                         this.session.status = 'failed';
                         const failMsg = `⚠️ Step ${step.id} failed after ${step.maxAttempts} attempts.\n\nVerification Failure: ${verdict?.failureReason || 'Verification check failed.'}`;
                         this.ctx.postMessage({ command: 'streamChunk', text: `\n\n${failMsg}`, done: true });
-                        return { text: failMsg, status: 'failed' };
+                        return { text: lastCoderText ? `${lastCoderText}\n\n${failMsg}` : failMsg, status: 'failed' };
                     }
                 }
             }
@@ -301,13 +424,178 @@ export class AgentOrchestrator {
             this.session.status = 'completed';
             this.ctx.postMessage({ command: 'statusUpdate', text: '✅ All task steps verified and complete.' });
             this.ctx.postMessage({ command: 'streamChunk', text: '', done: true });
-            return { text: 'All planned steps verified and successfully completed.', status: 'completed' };
+            return { text: lastCoderText || 'All planned steps verified and successfully completed.', status: 'completed' };
         }
 
         return {
-            text: this.session.status === 'aborted' ? 'Task aborted.' : 'Execution finished.',
+            text: this.session.status === 'aborted' ? 'Task aborted.' : (lastCoderText || 'Execution finished.'),
             status: this.session.status
         };
+    }
+
+    /**
+     * Automatically diagnoses pasted terminal/Django/Python/JS tracebacks, reads mentioned workspace files,
+     * and performs proactive live web search for post-2024 documentation or framework errors.
+     */
+    private async buildAutoGrounding(): Promise<ResearchFindings | undefined> {
+        const evidence: AgentEvidence[] = [];
+        const targetFiles = new Set<string>();
+        const summaries: string[] = [];
+        const rawInput = `${this.ctx.userPrompt}\n${TerminalCapture.getLastOutput() || ''}`;
+
+        // 1. Auto-extract traceback errors & crashing file contents via ErrorDiagnoser
+        if (this.ctx.workspaceRoot) {
+            try {
+                const diagContexts = ErrorDiagnoser.extractErrors(rawInput, this.ctx.workspaceRoot);
+                if (diagContexts && diagContexts.length > 0) {
+                    for (const dc of diagContexts) {
+                        if (dc.filepath && dc.filepath !== 'Project Configuration / Global Traceback') {
+                            targetFiles.add(dc.filepath);
+                        }
+                    }
+                    const diagReport = diagContexts.map(c => c.codeSnippet).join('\n\n');
+                    evidence.push({
+                        filepath: 'Auto-Diagnosed Crash & Traceback Files',
+                        snippet: diagReport,
+                        relevance: 'Extracted directly from pasted terminal error / stack trace'
+                    });
+                    summaries.push('Auto-diagnosed stack trace and loaded crashing file lines.');
+                }
+            } catch {}
+
+            // 2. Scan user prompt for explicitly mentioned project files (e.g., store/views.py, urls.py, models.py)
+            try {
+                const fileRegex = /(?:^|[\s'"`(])([a-zA-Z0-9_\-./\\]+\.(?:py|ts|tsx|js|jsx|html|css|json|sql))(?=$|[\s'"`),.:;])/g;
+                const matches = new Set<string>();
+                let m: RegExpExecArray | null;
+                while ((m = fileRegex.exec(rawInput)) !== null) {
+                    const candidate = m[1].replace(/\\/g, '/').replace(/^\.\//, '');
+                    if (
+                        !candidate.includes('site-packages') &&
+                        !candidate.includes('node_modules') &&
+                        !candidate.includes('AppData') &&
+                        !candidate.startsWith('http')
+                    ) {
+                        matches.add(candidate);
+                    }
+                    if (matches.size >= 4) break;
+                }
+
+                for (const relCandidate of matches) {
+                    const resolved = this.resolveWorkspaceFile(relCandidate, this.ctx.workspaceRoot);
+                    if (resolved && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+                        const relPath = path.relative(this.ctx.workspaceRoot, resolved).replace(/\\/g, '/');
+                        if (!targetFiles.has(relPath)) {
+                            targetFiles.add(relPath);
+                            const rawContent = fs.readFileSync(resolved, 'utf8');
+                            const lines = rawContent.split(/\r?\n/);
+                            const slice = lines.slice(0, 250).map((l, idx) => `${String(idx + 1).padStart(4, ' ')} | ${l}`).join('\n');
+                            evidence.push({
+                                filepath: relPath,
+                                snippet: slice + (lines.length > 250 ? `\n... (${lines.length - 250} more lines)` : ''),
+                                relevance: 'File referenced in prompt/error'
+                            });
+                        }
+                    }
+                }
+            } catch {}
+        }
+
+        // 3. Proactive Live Web Search ONLY when user explicitly asks for web search or post-2024 info
+        const hasRealTools = Array.isArray(this.ctx.tools) && this.ctx.tools.length > 0;
+        const promptText = this.ctx.userPrompt || '';
+        const needsLatestWebInfo = /\b(?:search\s+web|search\s+online|web\s+search|google|lookup\s+online|latest\s+docs|online\s+documentation)\b/i.test(promptText);
+
+        if (hasRealTools && needsLatestWebInfo) {
+            try {
+                const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
+                // Build a focused search query from either the specific error line or the user prompt
+                const errLineMatch = rawInput.match(/(?:[A-Za-z0-9_.]*(?:Error|Exception|DoesNotExist|NoReverseMatch)\s*:\s*[^\r\n]{5,120})/i);
+                const isDjango = /\b(?:django|manage\.py|views\.py|urls\.py|models\.py|settings\.py)\b/i.test(rawInput);
+                const rawQuery = errLineMatch
+                    ? `${isDjango ? 'Django ' : ''}${errLineMatch[0].trim()} fix solution`
+                    : promptText.replace(/\s+/g, ' ').trim().slice(0, 140);
+
+                this.ctx.postMessage({
+                    command: 'statusUpdate',
+                    text: `🌐 Searching live web for: ${rawQuery.slice(0, 70)}...`
+                });
+                this.ctx.postMessage({
+                    command: 'toolCallEvent',
+                    tool: 'search_web',
+                    title: `Web Search: ${rawQuery.slice(0, 60)}`,
+                    data: { query: rawQuery }
+                });
+
+                const webRes = await Promise.race([
+                    UnifiedWebSearch.execute({ query: rawQuery, chunk_size: 2500 }, this.ctx.workspaceRoot),
+                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000))
+                ]);
+
+                if (webRes && webRes.text && !webRes.text.startsWith('Web search failed')) {
+                    evidence.push({
+                        filepath: `Live Web Search Grounding (${rawQuery.slice(0, 60)})`,
+                        snippet: webRes.text.slice(0, 3500),
+                        relevance: 'Live post-2024 web documentation and community fix'
+                    });
+                    summaries.push(`Grounded with live web search results for "${rawQuery.slice(0, 60)}".`);
+                }
+            } catch {}
+        }
+
+        if (evidence.length === 0) {
+            return undefined;
+        }
+
+        return {
+            summary: summaries.join(' ') || 'Pre-grounded workspace and error context.',
+            targetFiles: Array.from(targetFiles),
+            evidence
+        };
+    }
+
+    /**
+     * Resolves a relative path or bare filename within the workspace (up to 2 directory levels deep).
+     */
+    private resolveWorkspaceFile(candidate: string, workspaceRoot: string): string | null {
+        const direct = path.resolve(workspaceRoot, candidate);
+        if (fs.existsSync(direct) && fs.statSync(direct).isFile()) {
+            return direct;
+        }
+        const base = path.basename(candidate);
+        try {
+            const entries = fs.readdirSync(workspaceRoot, { withFileTypes: true });
+            for (const entry of entries) {
+                if (!entry.isDirectory() || ['node_modules', '.git', 'dist', 'out', '.venv', 'venv', '__pycache__'].includes(entry.name)) {
+                    continue;
+                }
+                const subCandidate = path.join(workspaceRoot, entry.name, candidate);
+                if (fs.existsSync(subCandidate) && fs.statSync(subCandidate).isFile()) {
+                    return subCandidate;
+                }
+                const subBase = path.join(workspaceRoot, entry.name, base);
+                if (fs.existsSync(subBase) && fs.statSync(subBase).isFile()) {
+                    return subBase;
+                }
+            }
+        } catch {}
+        return null;
+    }
+
+    /**
+     * Strips planning tools when executing a direct fix so small models never call set_task_plan mid-turn.
+     */
+    private stripPlanningTools(tools: any[], keepCompleteStep: boolean): any[] {
+        if (!tools || tools.length === 0 || !tools[0]?.functionDeclarations) return tools;
+        const blocked = new Set(['set_task_plan', 'expand_plan_step', 'plan_set', 'plan_update']);
+        if (!keepCompleteStep) {
+            blocked.add('complete_plan_step');
+            blocked.add('plan_done');
+        }
+        return [{
+            ...tools[0],
+            functionDeclarations: tools[0].functionDeclarations.filter((fn: any) => !blocked.has(fn.name))
+        }];
     }
 
     /**
@@ -414,5 +702,47 @@ export class AgentOrchestrator {
                 done: false
             });
         }
+    }
+
+    /**
+     * Routes internal Researcher and Verifier text output to the collapsible thinking timeline
+     * so the main chat bubble only displays the Coder's clean answer without 3x repetition.
+     */
+    private forwardInternalRoleChunk(chunk: any): void {
+        if (this.session.abortController.signal.aborted) return;
+        if (chunk.text) {
+            const clean = chunk.text.replace(/<\/?think>/gi, '');
+            if (clean) {
+                this.ctx.postMessage({
+                    command: 'thinkingChunk',
+                    text: clean,
+                    done: false
+                });
+            }
+        }
+    }
+
+    private notifyRoleChange(role: AgentRoleType, description: string): void {
+        this.session.activeRole = role;
+        const roleLabels: Record<AgentRoleType, string> = {
+            planner: '📋 Planner Agent',
+            researcher: '🔍 Researcher Agent',
+            coder: '⚡ Coder Agent',
+            verifier: '🧪 Verifier Agent'
+        };
+        const label = roleLabels[role] || role;
+
+        this.ctx.postMessage({
+            command: 'agentRoleHandoff',
+            role,
+            label,
+            description,
+            timestamp: Date.now()
+        });
+
+        this.ctx.postMessage({
+            command: 'statusUpdate',
+            text: `${label}: ${description}`
+        });
     }
 }

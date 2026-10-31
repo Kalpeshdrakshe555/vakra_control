@@ -22,10 +22,10 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         assert.strictEqual(isToolAllowedForRole('planner', 'expand_plan_step'), true);
         assert.strictEqual(isToolAllowedForRole('planner', 'write_file'), false);
         assert.strictEqual(isToolAllowedForRole('planner', 'edit_file'), false);
-        assert.strictEqual(isToolAllowedForRole('planner', 'execute_terminal_command'), false);
+        assert.strictEqual(isToolAllowedForRole('planner', 'execute_terminal_command'), true);
         assert.strictEqual(isToolAllowedForRole('planner', 'finish'), false);
 
-        // Researcher (Strictly Read-Only)
+        // Researcher (Evidence Gathering & Environment Inspection)
         assert.strictEqual(isToolAllowedForRole('researcher', 'read_multiple_files'), true);
         assert.strictEqual(isToolAllowedForRole('researcher', 'search_codebase'), true);
         assert.strictEqual(isToolAllowedForRole('researcher', 'list_directory_tree'), true);
@@ -33,13 +33,13 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         assert.strictEqual(isToolAllowedForRole('researcher', 'search_web'), true);
         assert.strictEqual(isToolAllowedForRole('researcher', 'write_file'), false);
         assert.strictEqual(isToolAllowedForRole('researcher', 'edit_file'), false);
-        assert.strictEqual(isToolAllowedForRole('researcher', 'execute_terminal_command'), false);
+        assert.strictEqual(isToolAllowedForRole('researcher', 'execute_terminal_command'), true);
         assert.strictEqual(isToolAllowedForRole('researcher', 'finish'), false);
 
-        // Coder (Surgical Writer, No Shell / Complete Authority)
+        // Coder (Surgical Writer, Terminal Scaffolding / Code Modification)
         assert.strictEqual(isToolAllowedForRole('coder', 'write_file'), true);
         assert.strictEqual(isToolAllowedForRole('coder', 'edit_file'), true);
-        assert.strictEqual(isToolAllowedForRole('coder', 'execute_terminal_command'), false);
+        assert.strictEqual(isToolAllowedForRole('coder', 'execute_terminal_command'), true);
         assert.strictEqual(isToolAllowedForRole('coder', 'complete_plan_step'), false);
         assert.strictEqual(isToolAllowedForRole('coder', 'finish'), false);
 
@@ -72,7 +72,7 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         const plannerNames = plannerTools[0].functionDeclarations.map((f: any) => f.name);
         assert.ok(plannerNames.includes('set_task_plan'));
         assert.ok(!plannerNames.includes('write_file'));
-        assert.ok(!plannerNames.includes('execute_terminal_command'));
+        assert.ok(plannerNames.includes('execute_terminal_command'));
         assert.ok(!plannerNames.includes('finish'));
 
         // Coder schema
@@ -80,7 +80,7 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         const coderNames = coderTools[0].functionDeclarations.map((f: any) => f.name);
         assert.ok(coderNames.includes('write_file'));
         assert.ok(coderNames.includes('edit_file'));
-        assert.ok(!coderNames.includes('execute_terminal_command'));
+        assert.ok(coderNames.includes('execute_terminal_command'));
         assert.ok(!coderNames.includes('complete_plan_step'));
         assert.ok(!coderNames.includes('finish'));
 
@@ -95,10 +95,10 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
     });
 
     test('validateRoleToolCall rejects prohibited and malformed calls with structured error', () => {
-        // Coder attempting to run terminal command
-        const coderShellCheck = validateRoleToolCall('coder', 'execute_terminal_command', { command: 'npm test' });
-        assert.strictEqual(coderShellCheck.allowed, false);
-        assert.ok(coderShellCheck.error?.includes("Tool 'execute_terminal_command' is prohibited for agent role 'coder'"));
+        // Coder attempting to execute planning command
+        const coderPlanCheck = validateRoleToolCall('coder', 'set_task_plan', { steps: ['Step 1'] });
+        assert.strictEqual(coderPlanCheck.allowed, false);
+        assert.ok(coderPlanCheck.error?.includes("Tool 'set_task_plan' is prohibited for agent role 'coder'"));
 
         // Researcher attempting to write a file
         const researchWriteCheck = validateRoleToolCall('researcher', 'write_file', { filepath: 'foo.ts', content: 'code' });
@@ -132,13 +132,13 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
             activeRole: 'coder' as AgentRoleType
         };
 
-        // Coder attempting to execute terminal command through dispatcher
+        // Coder attempting to execute set_task_plan through dispatcher
         const res = await ToolDispatcher.dispatch(
-            { name: 'execute_terminal_command', args: { command: 'echo hello' } },
+            { name: 'set_task_plan', args: { steps: ['Step 1'] } },
             dummyContext
         );
         assert.ok(typeof res === 'string');
-        assert.ok(res.startsWith('Error: Permission denied: Tool \'execute_terminal_command\' is prohibited for agent role \'coder\''));
+        assert.ok(res.startsWith('Error: Permission denied: Tool \'set_task_plan\' is prohibited for agent role \'coder\''));
 
         // Researcher attempting to write file through dispatcher
         const res2 = await ToolDispatcher.dispatch(
@@ -173,7 +173,7 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         const plannerInstruction = RolePromptBuilder.buildSystemInstruction('planner');
         assert.ok(plannerInstruction.includes('PLANNER'));
         assert.ok(plannerInstruction.includes('set_task_plan'));
-        assert.ok(plannerInstruction.includes('FORBIDDEN from writing, editing, or executing code'));
+        assert.ok(plannerInstruction.includes('FORBIDDEN from writing, editing, or modifying code'));
 
         const researcherInstruction = RolePromptBuilder.buildSystemInstruction('researcher');
         assert.ok(researcherInstruction.includes('RESEARCHER'));

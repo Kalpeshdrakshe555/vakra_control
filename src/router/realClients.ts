@@ -1056,6 +1056,19 @@ export class GeminiCloudClient implements IEngine {
                         }
                     }]
                 });
+
+                // Context Compaction for Small Models: Prune older raw tool outputs if contents exceed 8 entries
+                if (contents.length > 8) {
+                    for (let cIdx = 1; cIdx < contents.length - 4; cIdx++) {
+                        const c = contents[cIdx];
+                        if (c.role === 'function' && c.parts?.[0]?.functionResponse) {
+                            const resObj = c.parts[0].functionResponse.response;
+                            if (typeof resObj?.result === 'string' && resObj.result.length > 300) {
+                                resObj.result = '(Prior step tool output pruned for token budget.)';
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -1178,9 +1191,10 @@ export class LocalOllamaClient implements IEngine {
             }));
         }
 
-        const MAX_TOOL_ITERATIONS = this.maxToolIterations;
+        const MAX_TOOL_ITERATIONS = Math.min(this.maxToolIterations || 8, 8);
         const localToolExecutionCounts = new Map<string, number>();
         let lastFullText = '';
+        let previousIterationText = '';
         let currentUsage: CompletionResult['usage'] | undefined;
         let forceTextSummary = false;
 
@@ -1189,6 +1203,10 @@ export class LocalOllamaClient implements IEngine {
                 if (stream && onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: currentUsage });
                 return { text: lastFullText || 'Stopped by user.', usage: currentUsage };
             }
+            // On final allowed iteration, force text summary so the role turn concludes cleanly
+            if (iteration === MAX_TOOL_ITERATIONS - 1) {
+                forceTextSummary = true;
+            }
             const requestBody: any = {
                 model: this.model,
                 messages: messages,
@@ -1196,12 +1214,18 @@ export class LocalOllamaClient implements IEngine {
                 temperature: this.temperature
             };
 
-            // Allocate full 32K context window for Ollama so 4B models never suffer silent context truncation
+            // Allocate full 32K context window + anti-repetition penalties for 4B/9B models
             if (isOllama) {
                 requestBody.options = {
                     num_ctx: 32768,
-                    temperature: this.temperature
+                    temperature: this.temperature,
+                    repeat_penalty: 1.15,
+                    repeat_last_n: 256,
+                    top_p: 0.9
                 };
+            } else {
+                requestBody.frequency_penalty = 0.35;
+                requestBody.presence_penalty = 0.25;
             }
 
             // Only add tools if not forced to produce conversational text summary (e.g. after macro step completes or plan is created)
@@ -1352,6 +1376,20 @@ export class LocalOllamaClient implements IEngine {
                             console.error("Local stream parse error", e, "Line:", line);
                         }
                     }
+                    // Real-time stream repetition circuit breaker for small 4B/9B models
+                    if (fullText.length > 400) {
+                        const tail = fullText.slice(-100);
+                        if (tail.trim().length > 40) {
+                            const firstIdx = fullText.indexOf(tail);
+                            const secondIdx = firstIdx !== -1 ? fullText.indexOf(tail, firstIdx + 100) : -1;
+                            if (firstIdx !== -1 && secondIdx !== -1 && secondIdx < fullText.length - 120) {
+                                console.warn('[LocalOllamaClient] Detected live stream repetition loop; breaking stream.');
+                                fullText = fullText.slice(0, secondIdx + tail.length);
+                                try { await reader.cancel(); } catch {}
+                                break;
+                            }
+                        }
+                    }
                 }
                 if (isInsideThinking) {
                     isInsideThinking = false;
@@ -1421,21 +1459,34 @@ export class LocalOllamaClient implements IEngine {
                                 const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
                                 localToolExecutionCounts.set(callSig, count);
 
-                                if (count > 2) {
-                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                if (count > 1) {
+                                    forceTextSummary = true;
+                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called in this turn. Do NOT repeat tool calls; summarize your findings or complete the task now.`;
                                     messages.push({ role: 'user', content: loopMsg });
                                     continue;
                                 }
 
                                 const result = await onToolCall({ name: tc.name, args });
                                 let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                                if (safeResultStr.length > 3500) {
-                                    safeResultStr = safeResultStr.substring(0, 3500) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in STATE_LEDGER.md]';
+                                // Permit full file reads up to 25k chars, only clamp non-file results
+                                const maxChars = tc.name === 'read_multiple_files' ? 25000 : 8000;
+                                if (safeResultStr.length > maxChars) {
+                                    safeResultStr = safeResultStr.substring(0, maxChars) + '\n... [Remaining content clamped for context safety]';
                                 }
                                 if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
                                     forceTextSummary = true;
                                 }
                                 messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${safeResultStr}\n\nPlease inspect the output and proceed to the next step.` });
+
+                                // Context Compaction: Prune older raw tool results if messages exceed 8 entries
+                                if (messages.length > 8) {
+                                    for (let mIdx = 1; mIdx < messages.length - 4; mIdx++) {
+                                        const m = messages[mIdx];
+                                        if (m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('[Tool Result') && m.content.length > 300) {
+                                            m.content = '[Tool Result]: (Prior tool output pruned for 4B/9B context budget. Key facts preserved in session.)';
+                                        }
+                                    }
+                                }
 
                                 // PRUNE VOLATILE FILE-READ CONTEXT ON STEP COMPLETION:
                                 // Keeps conversation history intact, but wipes dead-weight raw file dumps from prior steps!
@@ -1473,21 +1524,34 @@ export class LocalOllamaClient implements IEngine {
                                 const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
                                 localToolExecutionCounts.set(callSig, count);
 
-                                if (count > 2) {
-                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
+                                if (count > 1) {
+                                    forceTextSummary = true;
+                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called in this turn. Do NOT repeat tool calls; summarize your findings or complete the task now.`;
                                     messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: loopMsg });
                                     continue;
                                 }
 
                                 const result = await onToolCall({ name: tc.name, args });
                                 let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                                if (safeResultStr.length > 3500) {
-                                    safeResultStr = safeResultStr.substring(0, 3500) + '\n... [Remaining content clamped for 4B context budget. Key facts saved in STATE_LEDGER.md]';
+                                // Permit full file reads up to 25k chars, only clamp non-file results
+                                const maxChars = tc.name === 'read_multiple_files' ? 25000 : 8000;
+                                if (safeResultStr.length > maxChars) {
+                                    safeResultStr = safeResultStr.substring(0, maxChars) + '\n... [Remaining content clamped for context safety]';
                                 }
                                 if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
                                     forceTextSummary = true;
                                 }
                                 messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: safeResultStr });
+
+                                // Context Compaction: Prune older raw tool results if messages exceed 8 entries
+                                if (messages.length > 8) {
+                                    for (let mIdx = 1; mIdx < messages.length - 4; mIdx++) {
+                                        const m = messages[mIdx];
+                                        if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 300) {
+                                            m.content = '(Prior tool output pruned for token budget.)';
+                                        }
+                                    }
+                                }
 
                                 // PRUNE VOLATILE FILE-READ CONTEXT ON STEP COMPLETION:
                                 if (tc.name === 'complete_plan_step') {

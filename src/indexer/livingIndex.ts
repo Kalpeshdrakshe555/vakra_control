@@ -122,10 +122,12 @@ export class LivingIndex {
         this.lastScanTime = Date.now();
         const bpText = this.buildBlueprintText(workspaceRoot, 4000);
 
+        // Clean up legacy BLUEPRINT.md if it exists on disk
         try {
-            const findingsDir = path.join(workspaceRoot, '.ultra-light-ai');
-            if (!fs.existsSync(findingsDir)) fs.mkdirSync(findingsDir, { recursive: true });
-            fs.writeFileSync(path.join(findingsDir, 'BLUEPRINT.md'), bpText, 'utf8');
+            const legacyBp = path.join(workspaceRoot, '.ultra-light-ai', 'BLUEPRINT.md');
+            if (fs.existsSync(legacyBp)) {
+                fs.unlinkSync(legacyBp);
+            }
         } catch {}
 
         return bpText;

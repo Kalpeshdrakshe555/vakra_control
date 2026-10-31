@@ -130,6 +130,17 @@ export class StateLedger {
     }
 
     /**
+     * Clears and resets the STATE_LEDGER.md on disk when a new chat starts.
+     */
+    public static clear(workspaceRoot: string): void {
+        if (!workspaceRoot) return;
+        const ledgerPath = this.getLedgerPath(workspaceRoot);
+        if (fs.existsSync(ledgerPath)) {
+            try { fs.unlinkSync(ledgerPath); } catch {}
+        }
+    }
+
+    /**
      * Returns a compact token-efficient snapshot of the ledger for prompt injection.
      */
     public static getCompactPromptSlice(workspaceRoot: string, maxChars: number = 2500): string {

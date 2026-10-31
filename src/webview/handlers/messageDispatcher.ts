@@ -6,6 +6,8 @@ import { FileVersioning } from '../../operations/fileVersioning';
 import { SettingsHandler } from '../settingsHandler';
 import { TerminalCapture } from '../../tools/terminalCapture';
 import { SessionMemory } from '../../state/sessionMemory';
+import { StateLedger } from '../../state/stateLedger';
+import { ToolDispatcher } from '../tools/toolDispatcher';
 import { getAgentConfig } from '../../config';
 import { transcribeAudio, synthesizeSpeech } from '../../voice/voiceEngine';
 import { PromptBuilder } from '../promptBuilder';
@@ -448,6 +450,12 @@ export class MessageDispatcher {
 
             case 'newSession': {
                 conversationHistory.createNewSession();
+                taskPlanner.clear();
+                ToolDispatcher.resetSessionState();
+                if (workspaceRoot) {
+                    StateLedger.clear(workspaceRoot);
+                    try { SessionMemory.getInstance(workspaceRoot).resetSession(); } catch {}
+                }
                 postMessage({
                     command: 'showSessions',
                     sessions: conversationHistory.getAllSessionsSummary(),
@@ -556,6 +564,11 @@ export class MessageDispatcher {
             case 'reset': {
                 conversationHistory.clear();
                 taskPlanner.clear();
+                ToolDispatcher.resetSessionState();
+                if (workspaceRoot) {
+                    StateLedger.clear(workspaceRoot);
+                    try { SessionMemory.getInstance(workspaceRoot).resetSession(); } catch {}
+                }
                 postMessage({ command: 'chatCleared' });
                 break;
             }

@@ -100,7 +100,7 @@ RULES:
    - PHASE 2 (EXPAND ONLY ACTIVE STEP): When user approves, expand ONLY the active Step (e.g. Step 1) into micro sub-steps using \`expand_plan_step(step_id, sub_steps[])\`. Never overwrite or wipe other macro steps.
    - PHASE 3 (ATOMIC SUB-STEP EXECUTION & MANDATORY UPDATE): For each sub-step:
      * Inspect file context first via \`read_multiple_files\`. NO BLIND EDITS.
-     * Output a concise 2-3 line [BLUEPRINT] (file & symbols, logic, verification check).
+     * Identify target file and symbols, make surgical edits, and verify.
      * Edit code surgically and run verification.
      * MANDATORY STEP RECORDING: Call \`complete_plan_step(sub_step_id, summary, modified_files?, logic_summary?)\` to mark the sub-step done in \`PLAN.md\` and record the exact files modified and core code logic. \`PLAN.md\` is the single source of truth for both roadmap and architecture!
    - PHASE 4 (MACRO STEP BOUNDARY STOP): When all sub-steps of a macro step finish, \`complete_plan_step\` will notify you that the macro step is complete. Stop execution and obtain user confirmation before starting the next macro step. DO NOT autonomously jump to the next macro step without user permission.
@@ -108,7 +108,7 @@ RULES:
 TOOLS:
 - list_directory_tree(path, depth)
 - search_codebase(query)
-- read_multiple_files(paths[], start_line?, end_line?)
+- read_multiple_files(paths[], start_line?, end_line?) - Reads file contents with line numbers. For large files, use start_line and end_line to inspect chunks.
 - read_skill(skill_name)
 - read_state_ledger() - Read the project plan and architectural memory (PLAN.md).
 - set_task_plan(user_requirements, steps[]) - Define the macro roadmap with user requirements and sequential macro steps.
@@ -116,7 +116,7 @@ TOOLS:
 - complete_plan_step(step_id, summary, modified_files?, logic_summary?) - Mark current sub-step or macro step as done in PLAN.md, recording touched files and core code logic.
 - write_file(filepath, content)
 - edit_file(filepath, old_text, new_text)
-- execute_terminal_command(command)
+- execute_terminal_command(command) - Run CLI commands for project/app initialization, dependencies, tests, or migrations. Do NOT use to edit code files.
 - search_web(query, offset?, urls?) - Continuous 5k-chunk web extraction from top 2 sites. Use offset to stream deeper slices (e.g. 5000, 10000).
 - finish(summary)`;
 
@@ -239,7 +239,7 @@ TEMPORAL RESOLUTION RULES:
         if (workspaceRoot) {
             // 1. Living Architecture Blueprint injection (4-Tier MRU & Dependency Graph)
             try {
-                const bp = LivingIndex.buildBlueprintText(workspaceRoot, 4000);
+                const bp = LivingIndex.buildBlueprintText(workspaceRoot, 800);
                 if (bp) dynamicParts.push(`[ACTIVE LIVING ARCHITECTURE BLUEPRINT]\n${bp}`);
             } catch {}
 
