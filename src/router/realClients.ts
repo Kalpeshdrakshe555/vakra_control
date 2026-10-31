@@ -67,19 +67,22 @@ function isValidToolCall(name: string, args: any): boolean {
 
     switch (name) {
         case 'read_multiple_files': {
-            const paths = args.filepaths || args.paths;
+            const paths = args.filepaths || args.paths || args.files || args.file_paths || args.filepath;
             return Array.isArray(paths) ? paths.length > 0 : typeof paths === 'string' && paths.trim().length > 0;
         }
         case 'write_file': {
-            return typeof args.filepath === 'string' && args.filepath.trim().length > 0 && typeof args.content === 'string';
+            const fp = args.filepath || (Array.isArray(args.filepaths) ? args.filepaths[0] : args.filepaths) || args.path || args.file;
+            const content = args.content !== undefined ? args.content : args.code;
+            return typeof fp === 'string' && fp.trim().length > 0 && typeof content === 'string';
         }
         case 'edit_file': {
+            const fp = args.filepath || (Array.isArray(args.filepaths) ? args.filepaths[0] : args.filepaths) || args.path || args.file;
             const oldT = args.old_text ?? args.oldText ?? args.search;
             const newT = args.new_text ?? args.newText ?? args.replace;
-            return typeof args.filepath === 'string' && args.filepath.trim().length > 0 && typeof oldT === 'string' && typeof newT === 'string';
+            return typeof fp === 'string' && fp.trim().length > 0 && typeof oldT === 'string' && typeof newT === 'string';
         }
         case 'execute_terminal_command': {
-            const cmd = args.command ?? args.cmd;
+            const cmd = args.command ?? args.cmd ?? args.terminal_command ?? args.shell_command;
             return typeof cmd === 'string' && cmd.trim().length > 0;
         }
         case 'search_codebase': {
@@ -197,19 +200,48 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         };
     }
 
+    // 11. write_file signature (checked before read_multiple_files so filepaths + content is correctly identified)
+    if ((obj.filepath || obj.filepaths || obj.path || obj.file) && (obj.content !== undefined || obj.code !== undefined) && !obj.symbolName && !obj.old_text && !obj.oldText) {
+        const rawFp = obj.filepath || obj.filepaths || obj.path || obj.file;
+        const fp = Array.isArray(rawFp) ? rawFp[0] : rawFp;
+        let c = String(obj.content !== undefined ? obj.content : obj.code);
+        c = c.replace(/^"""[\r\n]*|[\r\n]*"""$/g, '').replace(/^'''[\r\n]*|[\r\n]*'''$/g, '');
+        return {
+            name: 'write_file',
+            args: {
+                filepath: String(fp),
+                content: c
+            }
+        };
+    }
+
+    // 12. edit_file signature
+    if ((obj.filepath || obj.filepaths || obj.path || obj.file) && (obj.old_text !== undefined || obj.oldText !== undefined || obj.search !== undefined) && (obj.new_text !== undefined || obj.newText !== undefined || obj.replace !== undefined)) {
+        const rawFp = obj.filepath || obj.filepaths || obj.path || obj.file;
+        const fp = Array.isArray(rawFp) ? rawFp[0] : rawFp;
+        return {
+            name: 'edit_file',
+            args: {
+                filepath: String(fp),
+                old_text: String(obj.old_text !== undefined ? obj.old_text : (obj.oldText !== undefined ? obj.oldText : obj.search)),
+                new_text: String(obj.new_text !== undefined ? obj.new_text : (obj.newText !== undefined ? obj.newText : obj.replace))
+            }
+        };
+    }
+
     // 1. read_multiple_files signature
-    if (obj.filepaths) {
+    if (obj.filepaths && obj.content === undefined && obj.code === undefined) {
         const paths = Array.isArray(obj.filepaths) ? obj.filepaths : [String(obj.filepaths)];
         return { name: 'read_multiple_files', args: { filepaths: paths } };
     }
     if (obj.files && Array.isArray(obj.files) && obj.files.length > 0 && typeof obj.files[0] === 'string') {
         return { name: 'read_multiple_files', args: { filepaths: obj.files } };
     }
-    if (obj.file_paths) {
+    if (obj.file_paths && obj.content === undefined && obj.code === undefined) {
         const paths = Array.isArray(obj.file_paths) ? obj.file_paths : [String(obj.file_paths)];
         return { name: 'read_multiple_files', args: { filepaths: paths } };
     }
-    if (obj.filepath && !obj.newCode && !obj.symbolName && !obj.content && !obj.command) {
+    if (obj.filepath && !obj.newCode && !obj.symbolName && !obj.content && !obj.code && !obj.command) {
         return { name: 'read_multiple_files', args: { filepaths: [String(obj.filepath)] } };
     }
 
@@ -302,28 +334,7 @@ function inferToolFromObject(obj: any): { name: string; args: any } | null {
         };
     }
 
-    // 11. write_file signature
-    if (obj.filepath && (obj.content !== undefined || obj.code !== undefined) && !obj.symbolName && !obj.old_text && !obj.oldText) {
-        return {
-            name: 'write_file',
-            args: {
-                filepath: String(obj.filepath),
-                content: String(obj.content !== undefined ? obj.content : obj.code)
-            }
-        };
-    }
 
-    // 12. edit_file signature
-    if (obj.filepath && (obj.old_text !== undefined || obj.oldText !== undefined || obj.search !== undefined) && (obj.new_text !== undefined || obj.newText !== undefined || obj.replace !== undefined)) {
-        return {
-            name: 'edit_file',
-            args: {
-                filepath: String(obj.filepath),
-                old_text: String(obj.old_text !== undefined ? obj.old_text : (obj.oldText !== undefined ? obj.oldText : obj.search)),
-                new_text: String(obj.new_text !== undefined ? obj.new_text : (obj.newText !== undefined ? obj.newText : obj.replace))
-            }
-        };
-    }
 
     // Legacy planner signatures disabled - agent acts directly via write_file / edit_file / execute_terminal_command
 
@@ -334,8 +345,37 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     const results: Array<{ name: string; args: any; raw: string }> = [];
     if (!text || typeof text !== 'string') return results;
 
-    const pushUnique = (name: string, args: any, raw: string) => {
+    const pushUnique = (name: string, rawArgs: any, raw: string) => {
         let toolName = name === 'final_answer' ? 'finish' : name;
+        const args = { ...rawArgs };
+
+        if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'get_code_diagnostics' || toolName === 'get_symbol_outline') {
+            const rawFp = args.filepath || (Array.isArray(args.filepaths) ? args.filepaths[0] : args.filepaths) || args.path || args.file;
+            if (rawFp) args.filepath = String(rawFp);
+        }
+        if (toolName === 'write_file') {
+            if (args.code !== undefined && args.content === undefined) {
+                args.content = args.code;
+            }
+            if (typeof args.content === 'string') {
+                args.content = args.content.replace(/^"""[\r\n]*|[\r\n]*"""$/g, '').replace(/^'''[\r\n]*|[\r\n]*'''$/g, '');
+            }
+        }
+        if (toolName === 'execute_terminal_command') {
+            const rawCmd = args.command ?? args.cmd ?? args.terminal_command ?? args.shell_command;
+            if (rawCmd) args.command = String(rawCmd);
+        }
+        if (toolName === 'read_multiple_files') {
+            const rawPaths = args.filepaths || args.paths || args.files || args.file_paths || args.filepath;
+            if (rawPaths) {
+                args.filepaths = Array.isArray(rawPaths) ? rawPaths.map(String) : [String(rawPaths)];
+            }
+        }
+        if (toolName === 'search_web' || toolName === 'research_web_docs' || toolName === 'search_codebase') {
+            const rawQ = args.query ?? args.search_query ?? args.search ?? args.term ?? args.prompt;
+            if (rawQ) args.query = String(rawQ);
+        }
+
         if (!isValidToolCall(toolName, args)) return;
         if (!results.some(r => r.name === toolName && JSON.stringify(r.args) === JSON.stringify(args))) {
             results.push({ name: toolName, args, raw });
@@ -441,6 +481,32 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
         const parsed = tryParseJsonRelaxed(match[1].trim());
         if (parsed && parsed.name) {
             pushUnique(parsed.name, parsed.arguments || parsed.args || {}, match[0]);
+        }
+    }
+
+    // Pattern 4b: Tag/XML-based function calls (Common in 4B/9B local models like Qwen, Llama, Hermes, Gemma)
+    // Matches: <tool_call><function=write_file><parameter=filepath>...</parameter></function></tool_call>
+    // Handles parameter closing tags: </parameter>, </content>, </filepaths>, or next parameter tag
+    const tagFnRegex = /(?:<tool_call>[\s\n]*)?<function[=\s](?:name=)?["']?([a-zA-Z0-9_]+)["']?>([\s\S]*?)(?:<\/function>(?:[\s\n]*<\/tool_call>)?|<\/tool_call>|$)/gi;
+    let tagFnMatch;
+    while ((tagFnMatch = tagFnRegex.exec(text)) !== null) {
+        const toolName = tagFnMatch[1].trim();
+        const body = tagFnMatch[2];
+        const args: any = {};
+        const paramRegex = /<parameter[=\s](?:name=)?["']?([a-zA-Z0-9_]+)["']?>([\s\S]*?)(?:<\/(?:parameter|\1)>|(?=<parameter|<\/function|<\/tool_call|$))/gi;
+        let pMatch;
+        while ((pMatch = paramRegex.exec(body)) !== null) {
+            const pName = pMatch[1].trim();
+            let pVal = pMatch[2].trim();
+            if ((pVal.startsWith('[') && pVal.endsWith(']')) || (pVal.startsWith('{') && pVal.endsWith('}'))) {
+                try { pVal = JSON.parse(pVal); } catch {}
+            } else {
+                pVal = pVal.replace(/^"""[\r\n]*|[\r\n]*"""$/g, '').replace(/^'''[\r\n]*|[\r\n]*'''$/g, '');
+            }
+            args[pName] = pVal;
+        }
+        if (Object.keys(args).length > 0) {
+            pushUnique(toolName, args, tagFnMatch[0]);
         }
     }
 

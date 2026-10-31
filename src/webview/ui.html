@@ -3135,6 +3135,41 @@
                 return `\n\n${placeholder}\n\n`;
             });
 
+            // Convert or clean tag-based tool calls so raw XML never pollutes chat bubbles
+            const toolCallTagRegex = /(?:<tool_call>[\s\n]*)?<function[=\s](?:name=)?["']?([a-zA-Z0-9_]+)["']?>([\s\S]*?)(?:<\/function>(?:[\s\n]*<\/tool_call>)?|<\/tool_call>|$)/gi;
+            processed = processed.replace(toolCallTagRegex, (match, toolName, body) => {
+                const isComplete = match.includes('</function>') || match.includes('</tool_call>');
+                let targetFile = '';
+                let targetCmd = '';
+                const fpMatch = body.match(/<parameter[=\s](?:name=)?["']?(?:filepaths?|path|file)["']?>([\s\S]*?)(?:<\/(?:parameter|filepaths?|path|file)>|(?=<parameter|<\/function|<\/tool_call|$))/i);
+                if (fpMatch) {
+                    let fp = fpMatch[1].trim();
+                    try { const parsedFp = JSON.parse(fp); if (Array.isArray(parsedFp)) fp = parsedFp[0]; } catch {}
+                    targetFile = fp.replace(/^["']|["']$/g, '');
+                }
+                const cmdMatch = body.match(/<parameter[=\s](?:name=)?["']?(?:command|cmd)["']?>([\s\S]*?)(?:<\/(?:parameter|command|cmd)>|(?=<parameter|<\/function|<\/tool_call|$))/i);
+                if (cmdMatch) {
+                    targetCmd = cmdMatch[1].trim();
+                }
+
+                const placeholder = `%%VAKRA_TOOLCHIP_${widgetCounter++}%%`;
+                let chipHtml = '';
+                if (targetFile) {
+                    chipHtml = `<div class="inline-file-chip border border-cyan-500/30 text-xs text-slate-200"><div class="flex items-center gap-2"><span class="${isStreaming && !isComplete ? 'animate-spin ' : ''}text-cyan-400">📄</span><span>${escapeHtml(toolName)}: <code class="text-cyan-300 font-mono font-semibold">${escapeHtml(targetFile)}</code></span></div><span class="text-[10px] font-mono text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-500/30 font-semibold">${isStreaming && !isComplete ? 'Executing...' : 'Ready'}</span></div>`;
+                } else if (targetCmd) {
+                    chipHtml = `<div class="inline-file-chip border border-amber-500/30 text-xs text-slate-200"><div class="flex items-center gap-2"><span class="${isStreaming && !isComplete ? 'animate-pulse ' : ''}text-amber-400">⚡</span><span>Command: <code class="text-amber-300 font-mono font-semibold">${escapeHtml(targetCmd.slice(0, 60))}</code></span></div><span class="text-[10px] font-mono text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-500/30 font-semibold">${isStreaming && !isComplete ? 'Running...' : 'CLI'}</span></div>`;
+                } else {
+                    chipHtml = `<div class="inline-file-chip border border-indigo-500/30 text-xs text-slate-200"><div class="flex items-center gap-2"><span class="${isStreaming && !isComplete ? 'animate-spin ' : ''}text-indigo-400">⚙️</span><span>Tool: <code class="text-indigo-300 font-mono font-semibold">${escapeHtml(toolName)}</code></span></div><span class="text-[10px] font-mono text-indigo-400 bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-500/30 font-semibold">${isStreaming && !isComplete ? 'Calling...' : 'Action'}</span></div>`;
+                }
+                widgetMap.set(placeholder, chipHtml);
+                return `\n\n${placeholder}\n\n`;
+            });
+
+            // Strip any orphaned tool call tags
+            processed = processed
+                .replace(/<\/?(?:tool_call|parameter|function)[^>]*>/gi, '')
+                .replace(/<\/(?:content|filepaths?|old_text|new_text|command|query)>/gi, '');
+
             let parsed = '';
             if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
                 parsed = marked.parse(processed);

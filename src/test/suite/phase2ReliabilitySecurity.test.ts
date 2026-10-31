@@ -248,6 +248,18 @@ suite('Phase 2: Reliability, Security & Tool-Contract Hardening', () => {
             const calls = extractTextToolCalls(duplicateText);
             assert.strictEqual(calls.length, 1, 'Duplicate calls must be deduplicated');
         });
+
+        test('extracts XML/tag-based tool calls with plural filepaths and triple-quoted content', () => {
+            const rawTagSnippet = `<tool_call> <function=write_file> <parameter=filepaths> ["task_manager/settings.py"] </parameter> <parameter=content> """ Django settings for task_manager project.
+DEBUG = True
+""" </content> </function> </tool_call>`;
+            const calls = extractTextToolCalls(rawTagSnippet);
+            assert.strictEqual(calls.length, 1, 'Tag-based call must be parsed');
+            assert.strictEqual(calls[0].name, 'write_file');
+            assert.strictEqual(calls[0].args.filepath, 'task_manager/settings.py');
+            assert.ok(!calls[0].args.content.includes('"""'), 'Triple quotes must be stripped');
+            assert.ok(calls[0].args.content.includes('DEBUG = True'));
+        });
     });
 
     // =========================================================================
