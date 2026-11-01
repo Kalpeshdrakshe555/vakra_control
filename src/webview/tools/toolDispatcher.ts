@@ -14,7 +14,7 @@ import { executeDeepResearch, searchWebQuick, searchWebQuickDetailed } from '../
 import { UnifiedWebSearch } from '../../tools/unifiedWebSearch';
 import { SkillsManager } from '../../features/skillsManager';
 import { guardTool } from '../../guards';
-import { validateFile, formatValidationReport } from '../../validators';
+import { validateFile, formatValidationReport, ProjectIntegrityChecker } from '../../validators';
 import { redact, isSecretPath } from '../../security/secretsFilter';
 import { getModelProfile } from '../../config/modelProfile';
 import { RuntimePlugins } from '../../plugins/runtimePlugins';
@@ -498,7 +498,14 @@ export class ToolDispatcher {
             const getValidationSuffix = async (): Promise<string> => {
                 if (workspaceRoot) {
                     const valResults = await validateFile(fullPath, { workspaceRoot });
-                    return formatValidationReport(fullPath, valResults);
+                    let rep = formatValidationReport(fullPath, valResults);
+                    if (fullPath.endsWith('.py') || fullPath.endsWith('.html') || fullPath.endsWith('.json')) {
+                        const integrityIssues = ProjectIntegrityChecker.checkWorkspace(workspaceRoot);
+                        if (integrityIssues.length > 0) {
+                            rep += ProjectIntegrityChecker.formatReport(integrityIssues, 2);
+                        }
+                    }
+                    return rep;
                 }
                 return '';
             };
@@ -703,7 +710,14 @@ export class ToolDispatcher {
             const getValidationSuffix = async (): Promise<string> => {
                 if (workspaceRoot) {
                     const valResults = await validateFile(fullPath, { workspaceRoot });
-                    return formatValidationReport(fullPath, valResults);
+                    let rep = formatValidationReport(fullPath, valResults);
+                    if (fullPath.endsWith('.py') || fullPath.endsWith('.html') || fullPath.endsWith('.json')) {
+                        const integrityIssues = ProjectIntegrityChecker.checkWorkspace(workspaceRoot);
+                        if (integrityIssues.length > 0) {
+                            rep += ProjectIntegrityChecker.formatReport(integrityIssues, 2);
+                        }
+                    }
+                    return rep;
                 }
                 return '';
             };
