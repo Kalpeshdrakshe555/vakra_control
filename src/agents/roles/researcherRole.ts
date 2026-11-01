@@ -4,6 +4,8 @@
 import { RoleTurnInput, RoleTurnResult, ResearchFindings, AgentEvidence } from '../types';
 import { filterToolsForRole } from '../permissions';
 import { RolePromptBuilder } from '../prompts/rolePrompts';
+import { RecipeCatalog } from '../../recipes';
+import { UnifiedWebSearch } from '../../tools/unifiedWebSearch';
 
 export class ResearcherRoleHandler {
     public static async execute(
@@ -27,6 +29,20 @@ export class ResearcherRoleHandler {
         const toolCallsExecuted: Array<{ tool: string; args: any; result: any }> = [];
         const targetFilesSet = new Set<string>(input.researchFindings?.targetFiles || []);
         const evidenceList: AgentEvidence[] = [...(input.researchFindings?.evidence || [])];
+
+        // Pre-seed recipe documentation links if available
+        const matchedRecipe = RecipeCatalog.findRecipe(input.userPrompt);
+        if (matchedRecipe && matchedRecipe.docs) {
+            for (const doc of matchedRecipe.docs) {
+                if (!evidenceList.some(e => e.filepath.includes(doc.title))) {
+                    evidenceList.push({
+                        filepath: `Official Documentation (${doc.title})`,
+                        snippet: `Title: ${doc.title}\nURL: ${doc.url}\nNote: ${doc.pitfall || "Official Documentation"}`,
+                        relevance: 'Official framework documentation & links'
+                    });
+                }
+            }
+        }
 
         const onToolCall = async (call: any) => {
             const result = await dispatchTool(call);

@@ -1553,6 +1553,9 @@ export class LocalOllamaClient implements IEngine {
                                     forceTextSummary = true;
                                 }
                                 let nextDirective = 'Please inspect the output and proceed to the next step.';
+                                if (tc.name === 'read_multiple_files') {
+                                    nextDirective = 'Context loaded. You have inspected the code. Now call edit_file or write_file to apply the code fix, or run execute_terminal_command.';
+                                }
                                 if (tc.name === 'execute_terminal_command' && (safeResultStr.includes('failed with exit code') || safeResultStr.includes('Command failed') || safeResultStr.includes('Error:') || safeResultStr.includes('[GUARD BLOCKED]'))) {
                                     nextDirective = `[COMMAND FAILED]: The command failed. If this involves a missing package, syntax error, or unknown library/API, you MUST call 'search_web' with the exact error message or inspect the affected files before repeating shell commands.`;
                                 }

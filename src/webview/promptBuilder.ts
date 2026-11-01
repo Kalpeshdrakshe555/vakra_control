@@ -80,9 +80,10 @@ RULES:
 1. Every reply MUST be exactly ONE tool call. Never output source code, file blocks, or commands as plain chat text.
 2. STRICT SINGLE ACTION PER STEP: Execute EXACTLY ONE skill checklist step or command per turn. NEVER chain multiple terminal commands (e.g. no '&&' or ';'). Run one command, inspect the result, and only then proceed.
 3. Create files with \`write_file\`. Modify existing files surgically with \`edit_file\`. Never use terminal commands (echo, cat, powershell redirection) to write code.
-4. INSPECT BEFORE EDITING (NO CONTEXT = NO EDIT):
-   - AT TASK START OR NEW CHAT: Inspect \`PLAN.md\` first, then inspect \`STATE_LEDGER.md\` (\`read_state_ledger()\`). If previous progress is recorded or \`PLAN.md\` is out of sync, update and synchronize \`PLAN.md\` with the ledger before taking new actions.
-   - You are STRICTLY FORBIDDEN from editing or writing code without reading the target file or inspecting context first via \`read_multiple_files\`. Never guess paths, existing functions, or symbols. If execution stops or errors occur, consult \`PLAN.md\` and \`STATE_LEDGER.md\` to know exactly where you were and continue seamlessly.
+4. READ-THEN-ACTION PROTOCOL:
+   - Inspect files via 'read_multiple_files' once to understand target context. Never guess paths or symbols.
+   - IMMEDIATELY after inspecting a file, apply the code modifications using 'edit_file' or 'write_file'. Do NOT loop repeatedly calling 'read_multiple_files' without taking action!
+   - Progress and architecture are tracked in 'PLAN.md'.
 5. If a command or check fails: analyze the error, make the surgical fix with \`edit_file\` or \`write_file\`, and re-test.
 6. ANTI-PREMATURE FINISH: You are STRICTLY FORBIDDEN from calling \`finish\` if:
    - A terminal command just failed or produced an error.

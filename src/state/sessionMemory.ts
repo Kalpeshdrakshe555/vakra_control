@@ -329,6 +329,10 @@ export class SessionMemory {
         return [...(this.snapshot.completedSubTasks || [])];
     }
 
+    public clear(): void {
+        this.resetSession();
+    }
+
     public resetSession(): void {
         this.snapshot.recentEvents = [];
         this.snapshot.recentDiagnostics = [];

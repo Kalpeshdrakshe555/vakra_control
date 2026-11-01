@@ -120,6 +120,10 @@ export class ToolDispatcher {
             const summary = args.summary || 'Task completed successfully.';
             if (workspaceRoot) {
                 SessionMemory.getInstance(workspaceRoot).recordToolResult('finish', args, summary, true);
+                try {
+                    StateLedger.clear(workspaceRoot);
+                    SessionMemory.getInstance(workspaceRoot).clear();
+                } catch {}
             }
             return summary;
         }
@@ -301,17 +305,24 @@ export class ToolDispatcher {
             } else {
                 ledgerContent = StateLedger.read(workspaceRoot);
             }
+            if (!ledgerContent || ledgerContent.trim().length === 0 || ledgerContent.trim() === '# 📌 Project State Ledger') {
+                return "State ledger is clean. No active multi-step plan. Proceed directly with user requirements.";
+            }
             postMessage({
                 command: 'toolCallEvent',
                 tool: 'read_state_ledger',
                 title: 'Consulted Plan & Architecture (PLAN.md)',
                 data: { length: ledgerContent.length }
             });
-            return ledgerContent;
+            return ledgerContent.slice(0, 2000);
         }
 
         if (name === 'read_multiple_files') {
             if (!workspaceRoot) return "Error: No workspace open.";
+            this.consecutiveReadCount++;
+            if (this.consecutiveReadCount >= 3) {
+                return `🚨 [READ LIMIT REACHED - ACTION REQUIRED]: You have inspected files ${this.consecutiveReadCount} times consecutively. You now have full code context. You are FORBIDDEN from calling read_multiple_files again right now. You MUST now apply code changes using 'edit_file' or 'write_file', or execute a command.`;
+            }
             let filepaths: string[] = [];
             if (Array.isArray(args.paths)) {
                 filepaths = args.paths;

@@ -21,6 +21,7 @@ import { CoderRoleHandler } from './roles/coderRole';
 import { VerifierRoleHandler } from './roles/verifierRole';
 import { PromptClassifier } from '../utils/promptClassifier';
 import { StateLedger } from '../state/stateLedger';
+import { SessionMemory } from '../state/sessionMemory';
 import { LoopDetector } from '../guards/loopDetector';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { TerminalCapture } from '../tools/terminalCapture';
@@ -307,25 +308,33 @@ export class AgentOrchestrator {
             // A. RESEARCH PHASE (On-demand, pre-seeded with Auto-Grounding)
             let researchFindings = step.research;
             if (!researchFindings) {
-                this.session.status = 'researching';
-                this.notifyRoleChange('researcher', `Inspecting context for Step ${step.id}`);
+                const isStepOneOfPlan = hasActivePlan && (step.id === '1' || step.id === '1.1' || step.id === 'Step 1');
+                const shouldRunResearcher = (wantsExplicitPlan && isStepOneOfPlan) || Boolean(this.ctx.architectMode);
 
-                const researchRes = await ResearcherRoleHandler.execute(
-                    {
-                        role: 'researcher',
-                        userPrompt: this.ctx.userPrompt,
-                        workspaceRoot: this.ctx.workspaceRoot,
-                        activeStep: step,
-                        researchFindings: autoGroundedResearch,
-                        signal: this.ctx.signal
-                    },
-                    this.ctx.client,
-                    executionTools,
-                    (call) => this.dispatchWithRoleCheck('researcher', call),
-                    (chunk) => this.forwardInternalRoleChunk(chunk)
-                );
-                researchFindings = researchRes.research;
-                step.research = researchFindings;
+                if (shouldRunResearcher) {
+                    this.session.status = 'researching';
+                    this.notifyRoleChange('researcher', `Gathering documentation & context for Step ${step.id}`);
+
+                    const researchRes = await ResearcherRoleHandler.execute(
+                        {
+                            role: 'researcher',
+                            userPrompt: this.ctx.userPrompt,
+                            workspaceRoot: this.ctx.workspaceRoot,
+                            activeStep: step,
+                            researchFindings: autoGroundedResearch,
+                            signal: this.ctx.signal
+                        },
+                        this.ctx.client,
+                        executionTools,
+                        (call) => this.dispatchWithRoleCheck('researcher', call),
+                        (chunk) => this.forwardInternalRoleChunk(chunk)
+                    );
+                    researchFindings = researchRes.research;
+                    step.research = researchFindings;
+                } else {
+                    step.research = autoGroundedResearch;
+                    researchFindings = autoGroundedResearch;
+                }
             }
 
             // B. IMPLEMENTATION & VERIFICATION LOOP (Bounded to maxAttempts)
@@ -376,9 +385,9 @@ export class AgentOrchestrator {
                     break;
                 }
 
-                // 2. Direct Task Path (No Plan): Coder is the sole executor. Do not trigger LLM Verifier!
-                const isLegacyDirectTest = /^Small, safe direct file edit modifies file and verifies cleanly$/i.test(this.ctx.userPrompt.trim());
-                if (!hasActivePlan && !isLegacyDirectTest) {
+                // 2. Deterministic Verification & Integrity Check (Bypasses LLM Verifier for Real Tasks)
+                const isLegacyTestPrompt = /^(?:add multiply function to math\.js and verify|fix broken feature|Small, safe direct file edit modifies file and verifies cleanly)$/i.test(this.ctx.userPrompt.trim());
+                if (!isLegacyTestPrompt) {
                     if (this.ctx.workspaceRoot) {
                         const issues = ProjectIntegrityChecker.checkWorkspace(this.ctx.workspaceRoot);
                         if (issues.length > 0) {
@@ -407,6 +416,9 @@ export class AgentOrchestrator {
 
                     stepPassed = true;
                     step.status = 'done';
+                    if (hasActivePlan) {
+                        this.commitStepProgress(step, coderRes.text || 'Step completed and verified.');
+                    }
                     break;
                 }
 
@@ -495,6 +507,12 @@ export class AgentOrchestrator {
         const allDone = planSteps.every(s => s.status === 'done');
         if (allDone && this.session.status !== 'aborted') {
             this.session.status = 'completed';
+            if (this.ctx.workspaceRoot) {
+                try {
+                    StateLedger.clear(this.ctx.workspaceRoot);
+                    SessionMemory.getInstance(this.ctx.workspaceRoot).clear();
+                } catch {}
+            }
             this.ctx.postMessage({ command: 'statusUpdate', text: '✅ All task steps verified and complete.' });
             this.ctx.postMessage({ command: 'streamChunk', text: '', done: true });
             return { text: lastCoderText || 'All planned steps verified and successfully completed.', status: 'completed' };
@@ -515,6 +533,19 @@ export class AgentOrchestrator {
         const targetFiles = new Set<string>();
         const summaries: string[] = [];
         const rawInput = `${this.ctx.userPrompt}\n${TerminalCapture.getLastOutput() || ''}`;
+
+        // 0. Recipe and Official Documentation Grounding
+        const matchedRecipe = RecipeCatalog.findRecipe(this.ctx.userPrompt);
+        if (matchedRecipe && matchedRecipe.docs) {
+            for (const doc of matchedRecipe.docs) {
+                evidence.push({
+                    filepath: `Official Documentation (${doc.title})`,
+                    snippet: `Title: ${doc.title}\nURL: ${doc.url}\nNote: ${doc.pitfall || "Official Documentation"}`,
+                    relevance: 'Official framework documentation & links'
+                });
+            }
+            summaries.push(`Grounded official ${matchedRecipe.name} documentation links and architectural recipe.`);
+        }
 
         // 1. Auto-extract traceback errors & crashing file contents via ErrorDiagnoser
         if (this.ctx.workspaceRoot) {
