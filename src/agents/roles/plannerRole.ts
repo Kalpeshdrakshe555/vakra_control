@@ -17,6 +17,7 @@ export class PlannerRoleHandler {
         const systemInstruction = RolePromptBuilder.buildSystemInstruction('planner');
         const prompt = RolePromptBuilder.buildTurnPrompt('planner', {
             userPrompt: input.userPrompt,
+            modelName: input.modelName,
             repoMap: input.planStepsSummary,
             workspaceRoot: input.workspaceRoot
         });

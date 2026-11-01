@@ -4,10 +4,12 @@
 import { AgentRoleType, TaskStepContract, ResearchFindings, CoderResult, VerificationResult } from '../types';
 import { estimateTokens, truncateToTokens } from '../../utils/tokenBudget';
 import { getEnvironmentPromptSnapshot } from '../../platform/envScanner';
+import { isSmallModel } from '../../config/modelProfile';
 
 export interface PromptContextOptions {
     workspaceRoot?: string;
     userPrompt: string;
+    modelName?: string;
     activeStep?: TaskStepContract;
     research?: ResearchFindings;
     coderResult?: CoderResult;
@@ -87,6 +89,14 @@ RULES:
      */
     public static buildTurnPrompt(role: AgentRoleType, opts: PromptContextOptions): string {
         const sections: string[] = [];
+        const isSmall = isSmallModel(opts.modelName);
+
+        const planLimit = isSmall ? 300 : 800;
+        const mapLimit = isSmall ? 500 : 1000;
+        const preGroundedLimit = isSmall ? 1500 : 12000;
+        const codeContextLimit = isSmall ? 1500 : 18000;
+        const failureLimitChars = isSmall ? 800 : 1500;
+        const ledgerLimit = isSmall ? 300 : 800;
 
         // 1. User Prompt / Goal
         sections.push(`### TASK OBJECTIVE\n${opts.userPrompt.trim()}`);
@@ -102,7 +112,7 @@ RULES:
         // 3. Current Plan Summary (compact - only inject when active multi-step plan exists)
         if (opts.planSummary && (!opts.activeStep || opts.activeStep.id !== '1.1')) {
             const planTok = estimateTokens(opts.planSummary);
-            const clampedPlan = planTok > 800 ? truncateToTokens(opts.planSummary, 800) : opts.planSummary;
+            const clampedPlan = planTok > planLimit ? truncateToTokens(opts.planSummary, planLimit) : opts.planSummary;
             sections.push(`### PROJECT PLAN (PLAN.md)\n${clampedPlan}`);
         }
 
@@ -110,7 +120,7 @@ RULES:
         if (role === 'planner') {
             if (opts.repoMap) {
                 const mapTok = estimateTokens(opts.repoMap);
-                const clampedMap = mapTok > 1000 ? truncateToTokens(opts.repoMap, 1000) : opts.repoMap;
+                const clampedMap = mapTok > mapLimit ? truncateToTokens(opts.repoMap, mapLimit) : opts.repoMap;
                 sections.push(`### REPOSITORY STRUCTURE MAP\n${clampedMap}`);
             }
             sections.push(`### DIRECTIVE
@@ -123,7 +133,7 @@ Provide 3 to 5 sequential high-level steps with clear verification criteria. Do 
                     preStr += opts.research.evidence.map(e => `--- Pre-Grounded Evidence (${e.filepath}) ---\n${e.snippet}`).join('\n\n');
                 }
                 const preTok = estimateTokens(preStr);
-                const clampedPre = preTok > 12000 ? truncateToTokens(preStr, 12000) : preStr;
+                const clampedPre = preTok > preGroundedLimit ? truncateToTokens(preStr, preGroundedLimit) : preStr;
                 sections.push(`### PRE-GROUNDED CRASH & WEB EVIDENCE\n${clampedPre}`);
             }
             sections.push(`### DIRECTIVE
@@ -135,7 +145,7 @@ Investigate the codebase for Step ${opts.activeStep?.id || ''}. Inspect any addi
                     evidenceStr += '\nEvidence:\n' + opts.research.evidence.map(e => `--- File Evidence (${e.filepath}) ---\n${e.snippet || e.relevance}`).join('\n\n');
                 }
                 const evTok = estimateTokens(evidenceStr);
-                const clampedEv = evTok > 18000 ? truncateToTokens(evidenceStr, 18000) : evidenceStr;
+                const clampedEv = evTok > codeContextLimit ? truncateToTokens(evidenceStr, codeContextLimit) : evidenceStr;
                 sections.push(`### RESEARCH EVIDENCE (FULL CODE CONTEXT)\n${clampedEv}`);
             }
 
@@ -145,7 +155,7 @@ Failure Reason: ${opts.previousFailure.failureReason || 'Verification check fail
 Exit Code: ${opts.previousFailure.exitCode !== undefined ? opts.previousFailure.exitCode : 'N/A'}
 Error Output:
 \`\`\`
-${(opts.previousFailure.rawOutput || opts.previousFailure.failureReason || '').slice(-1500)}
+${(opts.previousFailure.rawOutput || opts.previousFailure.failureReason || '').slice(-failureLimitChars)}
 \`\`\`
 Suggested Fix: ${opts.previousFailure.suggestedFix || 'Analyze the failing file and correct the syntax/logic.'}
 
@@ -176,7 +186,7 @@ Independently verify Step ${opts.activeStep?.id || ''}.
         // 5. State Ledger compact slice (for background continuity)
         if (opts.stateLedgerSummary) {
             const ledgTok = estimateTokens(opts.stateLedgerSummary);
-            const clampedLedg = ledgTok > 800 ? truncateToTokens(opts.stateLedgerSummary, 800) : opts.stateLedgerSummary;
+            const clampedLedg = ledgTok > ledgerLimit ? truncateToTokens(opts.stateLedgerSummary, ledgerLimit) : opts.stateLedgerSummary;
             sections.push(`### STATE LEDGER\n${clampedLedg}`);
         }
 

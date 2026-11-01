@@ -24,6 +24,7 @@ import { StateLedger } from '../state/stateLedger';
 import { LoopDetector } from '../guards/loopDetector';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { TerminalCapture } from '../tools/terminalCapture';
+import { RecipeCatalog } from '../recipes';
 
 export interface OrchestratorContext {
     workspaceRoot: string;
@@ -162,11 +163,13 @@ export class AgentOrchestrator {
             this.session.status = 'planning';
             this.notifyRoleChange('planner', 'Formulating project execution roadmap in PLAN.md');
 
+            const modelName = this.ctx.config?.model || this.ctx.config?.defaultModel;
             const plannerResult = await PlannerRoleHandler.execute(
                 {
                     role: 'planner',
                     userPrompt: this.ctx.userPrompt,
                     workspaceRoot: this.ctx.workspaceRoot,
+                    modelName,
                     planStepsSummary: this.ctx.repoMap,
                     signal: this.ctx.signal
                 },
@@ -193,34 +196,52 @@ export class AgentOrchestrator {
                 }
             }
 
-            // High-reliability fallback for project scaffolding: if 4B model still didn't generate steps, synthesize standard scaffolding roadmap
+            // Scaffolding roadmap & Recipe alignment:
+            const matchedRecipe = RecipeCatalog.findRecipe(this.ctx.userPrompt);
+            if (matchedRecipe && this.ctx.workspaceRoot) {
+                try {
+                    const researchPath = path.join(this.ctx.workspaceRoot, 'RESEARCH.md');
+                    const researchMd = RecipeCatalog.generateResearchDoc(matchedRecipe, this.ctx.userPrompt);
+                    fs.writeFileSync(researchPath, researchMd, 'utf8');
+                } catch (e) {
+                    console.warn('[AgentOrchestrator] Failed to write RESEARCH.md:', e);
+                }
+            }
+
+            // High-reliability fallback for project scaffolding: if 4B model still didn't generate steps, synthesize standard scaffolding roadmap from recipe
             if (planSteps.length === 0 && this.ctx.taskPlanner) {
-                const isDjango = /django/i.test(this.ctx.userPrompt);
-                const isReact = /react|vite/i.test(this.ctx.userPrompt);
                 let defaultSteps: string[] = [];
-                if (isDjango) {
-                    defaultSteps = [
-                        'Step 1: Initialize Django project and app via official CLI commands, run initial migrations',
-                        'Step 2: Implement data models and configure Django admin',
-                        'Step 3: Implement views and HTML templates for data display',
-                        'Step 4: Configure URL routing and connect endpoints',
-                        'Step 5: Run Django system check and verify complete application'
-                    ];
-                } else if (isReact) {
-                    defaultSteps = [
-                        'Step 1: Initialize project via official Vite/npm CLI scaffolding and install dependencies',
-                        'Step 2: Implement core components and application layout',
-                        'Step 3: Implement state management and view logic',
-                        'Step 4: Wire routes and verify styling',
-                        'Step 5: Run build and lint verification'
-                    ];
+                if (matchedRecipe) {
+                    defaultSteps = RecipeCatalog.formatRecipeStepTitles(matchedRecipe);
                 } else {
-                    defaultSteps = [
-                        'Step 1: Initialize workspace structure and dependencies',
-                        'Step 2: Implement core application logic and components',
-                        'Step 3: Wire endpoints, routes, or interfaces',
-                        'Step 4: Run verification tests and diagnostics check'
-                    ];
+                    const isDjango = /django/i.test(this.ctx.userPrompt);
+                    const isReact = /react|vite/i.test(this.ctx.userPrompt);
+                    if (isDjango) {
+                        const djangoRec = RecipeCatalog.getRecipeById('django-web');
+                        defaultSteps = djangoRec ? RecipeCatalog.formatRecipeStepTitles(djangoRec) : [
+                            'Step 1: Initialize Django project and app via official CLI commands, run initial migrations',
+                            'Step 2: Implement data models and configure Django admin',
+                            'Step 3: Implement views and HTML templates for data display',
+                            'Step 4: Configure URL routing and connect endpoints',
+                            'Step 5: Run Django system check and verify complete application'
+                        ];
+                    } else if (isReact) {
+                        const reactRec = RecipeCatalog.getRecipeById('react-vite');
+                        defaultSteps = reactRec ? RecipeCatalog.formatRecipeStepTitles(reactRec) : [
+                            'Step 1: Initialize project via official Vite/npm CLI scaffolding and install dependencies',
+                            'Step 2: Implement core components and application layout',
+                            'Step 3: Implement state management and view logic',
+                            'Step 4: Wire routes and verify styling',
+                            'Step 5: Run build and lint verification'
+                        ];
+                    } else {
+                        defaultSteps = [
+                            'Step 1: Initialize workspace structure and dependencies',
+                            'Step 2: Implement core application logic and components',
+                            'Step 3: Wire endpoints, routes, or interfaces',
+                            'Step 4: Run verification tests and diagnostics check'
+                        ];
+                    }
                 }
                 try {
                     this.ctx.taskPlanner.setMacroPlan(this.ctx.userPrompt, defaultSteps);
@@ -319,11 +340,13 @@ export class AgentOrchestrator {
                 this.notifyRoleChange('coder', `Implementing Step ${step.id}${attemptLabel}`);
 
                 // Coder turn (streams visible response to chat)
+                const modelName = this.ctx.config?.model || this.ctx.config?.defaultModel;
                 const coderRes = await CoderRoleHandler.execute(
                     {
                         role: 'coder',
                         userPrompt: this.ctx.userPrompt,
                         workspaceRoot: this.ctx.workspaceRoot,
+                        modelName,
                         activeStep: step,
                         researchFindings,
                         previousFailure,

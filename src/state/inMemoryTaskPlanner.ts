@@ -411,7 +411,8 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
                 const candidates = [
                     path.join(root, '.ultra-light-ai', 'PLAN.md'),
                     path.join(root, 'PLAN.md'),
-                    path.join(root, 'plan.md')
+                    path.join(root, 'plan.md'),
+                    path.join(root, 'PLAN.json')
                 ];
                 for (const c of candidates) {
                     if (fs.existsSync(c)) {
@@ -477,14 +478,24 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
         if (root) {
             try {
                 const rootPlan = path.join(root, 'PLAN.md');
+                const rootPlanJson = path.join(root, 'PLAN.json');
                 const legacyPlan = path.join(root, '.ultra-light-ai', 'PLAN.md');
 
                 if (this.steps.length === 0) {
                     if (fs.existsSync(rootPlan)) fs.unlinkSync(rootPlan);
+                    if (fs.existsSync(rootPlanJson)) fs.unlinkSync(rootPlanJson);
                     if (fs.existsSync(legacyPlan)) fs.unlinkSync(legacyPlan);
                 } else {
                     const md = this.generatePlanMarkdown();
                     fs.writeFileSync(rootPlan, md, 'utf8');
+                    try {
+                        const jsonPayload = JSON.stringify({
+                            goal: this.goal,
+                            userRequirements: this.userRequirements,
+                            steps: this.steps
+                        }, null, 2);
+                        fs.writeFileSync(rootPlanJson, jsonPayload, 'utf8');
+                    } catch {}
                     // Clean up duplicate legacy plan in .ultra-light-ai if present
                     if (fs.existsSync(legacyPlan)) {
                         try { fs.unlinkSync(legacyPlan); } catch {}

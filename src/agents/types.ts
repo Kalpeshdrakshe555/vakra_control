@@ -109,6 +109,7 @@ export interface RoleTurnInput {
     role: AgentRoleType;
     userPrompt: string;
     workspaceRoot: string;
+    modelName?: string;
     activeStep?: TaskStepContract;
     researchFindings?: ResearchFindings;
     coderResult?: CoderResult;

@@ -17,6 +17,7 @@ export class CoderRoleHandler {
         const systemInstruction = RolePromptBuilder.buildSystemInstruction('coder');
         const prompt = RolePromptBuilder.buildTurnPrompt('coder', {
             userPrompt: input.userPrompt,
+            modelName: input.modelName,
             activeStep: input.activeStep,
             research: input.researchFindings,
             previousFailure: input.previousFailure,

@@ -151,27 +151,89 @@ export class RuntimePlugins {
 
         // 2. Built-in Terminal Noise Filter & Attention Protection
         if (toolName === 'execute_terminal_command' || toolName === 'run_in_terminal') {
-            const lines = rawOutput.split(/\r?\n/);
+            const rawLines = rawOutput.split(/\r?\n/);
+            const compressedLines = this.compressTraceback(rawLines, workspaceRoot);
 
-            // Filter out noisy framework library trace lines
-            const filteredLines = lines.filter(line => {
-                const isSitePackages = line.includes('site-packages');
-                const isNodeModules = line.includes('node_modules');
-                const isInternalRuntime = line.includes('internal/modules') || line.includes('node:internal');
-                return !(isSitePackages || isNodeModules || isInternalRuntime);
-            });
-
-            // If log output exceeds 35 lines, slice to preserve head (command start) and tail (root error/result)
-            if (filteredLines.length > 35) {
-                const topSlice = filteredLines.slice(0, 10).join('\n');
-                const bottomSlice = filteredLines.slice(-25).join('\n');
-                return `${topSlice}\n\n[... TRUNCATED ${filteredLines.length - 35} INTERMEDIARY LOG LINES TO CONSERVE 4B CONTEXT BUDGET ...]\n\n${bottomSlice}`;
+            // If log output still exceeds 35 lines, slice to preserve head (command start) and tail (root error/result)
+            if (compressedLines.length > 35) {
+                const topSlice = compressedLines.slice(0, 10).join('\n');
+                const bottomSlice = compressedLines.slice(-25).join('\n');
+                return `${topSlice}\n\n[... TRUNCATED ${compressedLines.length - 35} INTERMEDIARY LOG LINES TO CONSERVE 4B CONTEXT BUDGET ...]\n\n${bottomSlice}`;
             }
 
-            return filteredLines.join('\n');
+            return compressedLines.join('\n');
         }
 
         return rawOutput;
+    }
+
+    /**
+     * Intelligently compresses Python/Node stack traces by collapsing external library
+     * frames while preserving root cause, local workspace frames, and final error lines.
+     */
+    public static compressTraceback(lines: string[], workspaceRoot?: string): string[] {
+        const tbIdx = lines.findIndex(l => l.includes('Traceback (most recent call last):'));
+        if (tbIdx === -1) {
+            // General output: remove standalone site-packages/node_modules chatter
+            return lines.filter(l => {
+                const isLib = l.includes('site-packages') || l.includes('node_modules') || l.includes('node:internal');
+                return !isLib;
+            });
+        }
+
+        const headLines = lines.slice(0, tbIdx + 1);
+        const tbLines = lines.slice(tbIdx + 1);
+
+        const resultTb: string[] = [];
+        let hiddenLibFrames = 0;
+        let i = 0;
+
+        while (i < tbLines.length) {
+            const line = tbLines[i];
+            const isFileFrame = /^\s*File\s+"([^"]+)",\s+line\s+(\d+)/.test(line);
+
+            if (isFileFrame) {
+                const isExternal = line.includes('site-packages') || line.includes('dist-packages') || line.includes('lib\\') || line.includes('Lib/');
+                const isWorkspace = workspaceRoot ? line.includes(workspaceRoot) : false;
+
+                if (isExternal && !isWorkspace) {
+                    hiddenLibFrames++;
+                    i++;
+                    // Skip accompanying indented code line if present
+                    if (i < tbLines.length && !/^\s*File\s+"/.test(tbLines[i]) && !/^[A-Za-z0-9_.]+(?:Error|Exception):/.test(tbLines[i])) {
+                        i++;
+                    }
+                    continue;
+                } else {
+                    if (hiddenLibFrames > 0) {
+                        resultTb.push(`    [... ${hiddenLibFrames} external framework frames hidden ...]`);
+                        hiddenLibFrames = 0;
+                    }
+                    resultTb.push(line);
+                    i++;
+                    if (i < tbLines.length && !/^\s*File\s+"/.test(tbLines[i]) && !/^[A-Za-z0-9_.]+(?:Error|Exception):/.test(tbLines[i])) {
+                        resultTb.push(tbLines[i]);
+                        i++;
+                    }
+                    continue;
+                }
+            }
+
+            if (hiddenLibFrames > 0) {
+                resultTb.push(`    [... ${hiddenLibFrames} external framework frames hidden ...]`);
+                hiddenLibFrames = 0;
+            }
+
+            // Preserves final exception lines (e.g. "TemplateDoesNotExist: products.html")
+            resultTb.push(line);
+            i++;
+        }
+
+        if (hiddenLibFrames > 0) {
+            resultTb.push(`    [... ${hiddenLibFrames} external framework frames hidden ...]`);
+        }
+
+        return [...headLines, ...resultTb];
     }
 
     /**

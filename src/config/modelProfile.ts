@@ -126,6 +126,50 @@ export function getModelProfile(workspaceRoot?: string): ModelProfile {
 }
 
 /**
+ * Categorizes a model into capability tiers: 'small' (<= 5B), 'medium' (7-14B), or 'large' (30B+ or cloud).
+ */
+export function resolveModelTier(modelName: string): 'small' | 'medium' | 'large' {
+    if (!modelName) return 'small';
+    const lower = modelName.toLowerCase();
+
+    // 1. Explicit large / cloud indicators
+    if (
+        lower.includes('claude') ||
+        lower.includes('gpt-4') ||
+        lower.includes('gemini') ||
+        lower.includes('deepseek-chat') ||
+        lower.includes('deepseek-coder:33b') ||
+        lower.includes('32b') ||
+        lower.includes('70b') ||
+        lower.includes('405b')
+    ) {
+        return 'large';
+    }
+
+    // 2. Explicit medium indicators (7B to 14B)
+    if (
+        lower.includes('7b') ||
+        lower.includes('8b') ||
+        lower.includes('13b') ||
+        lower.includes('14b') ||
+        lower.includes('mistral') ||
+        lower.includes('qwen2.5-coder:7b')
+    ) {
+        return 'medium';
+    }
+
+    // 3. Explicit small indicators (<= 5B) or fallback default
+    return 'small';
+}
+
+/**
+ * Returns true if the model belongs to the small tier (<= 5B).
+ */
+export function isSmallModel(modelName?: string): boolean {
+    return resolveModelTier(modelName || DEFAULT_MODEL_PROFILE.model) === 'small';
+}
+
+/**
  * Clears the profile cache.
  */
 export function clearProfileCache(): void {
