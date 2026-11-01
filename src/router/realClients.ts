@@ -1542,7 +1542,11 @@ export class LocalOllamaClient implements IEngine {
                                 if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
                                     forceTextSummary = true;
                                 }
-                                messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${safeResultStr}\n\nPlease inspect the output and proceed to the next step.` });
+                                let nextDirective = 'Please inspect the output and proceed to the next step.';
+                                if (tc.name === 'execute_terminal_command' && (safeResultStr.includes('failed with exit code') || safeResultStr.includes('Command failed') || safeResultStr.includes('Error:') || safeResultStr.includes('[GUARD BLOCKED]'))) {
+                                    nextDirective = `[COMMAND FAILED]: The command failed. If this involves a missing package, syntax error, or unknown library/API, you MUST call 'search_web' with the exact error message or inspect the affected files before repeating shell commands.`;
+                                }
+                                messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${safeResultStr}\n\n${nextDirective}` });
 
                                 // Context Compaction: Prune older raw tool results if messages exceed 8 entries
                                 if (messages.length > 8) {

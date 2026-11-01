@@ -223,7 +223,19 @@ async function executeSingleSegment(
     const startTime = Date.now();
     const isWindows = process.platform === 'win32';
 
-    // 0. Transparently handle activation commands as successful no-ops because venv is auto-bound
+    // 0. Guard against terminal file writing via python one-liners (causes Windows shell quote corruption)
+    if (/python(?:\.exe)?\s+-c\s+["']open\(.+?\)\.write\(/i.test(segment)) {
+        return {
+            segment,
+            cwd,
+            ok: false,
+            exitCode: 1,
+            output: '[GUARD BLOCKED]: Writing code files via terminal python one-liners is prohibited because shell quote escaping corrupts code on Windows. Use the official write_file or edit_file tool instead.',
+            durationMs: 1
+        };
+    }
+
+    // 0b. Transparently handle activation commands as successful no-ops because venv is auto-bound
     if (/^\s*(?:source\s+)?(?:\.\/|\.\\)?(?:\.venv|venv|env)[\\/](?:bin|scripts)[\\/]activate(?:\.bat|\.ps1)?\s*$/i.test(segment) ||
         /^\s*(?:activate|deactivate)\s*$/i.test(segment)) {
         return {
@@ -280,6 +292,21 @@ async function executeSingleSegment(
             if (m) {
                 processedSegment = `$env:${m[1]} = ${m[2]}`;
             }
+        } else if (/^\s*touch\s+(.+)$/i.test(processedSegment)) {
+            // Translate POSIX touch to PowerShell New-Item -ItemType File
+            const target = processedSegment.replace(/^\s*touch\s+/i, '').trim();
+            processedSegment = `New-Item -ItemType File -Force -Path ${target}`;
+        }
+
+        // Translate Unix pipe head to PowerShell Select-Object -First
+        if (/\|\s*head\b/i.test(processedSegment)) {
+            processedSegment = processedSegment.replace(/\|\s*head(?:\s+-n|\s+-)?\s*(\d+)/gi, '| Select-Object -First $1');
+            processedSegment = processedSegment.replace(/\|\s*head\b/gi, '| Select-Object -First 10');
+        }
+
+        // Strip trailing or piped 2>&1 on Windows (prevents PowerShell NativeCommandError on innocent stderr)
+        if (/\s+2>&1(?:\s*\||$)/.test(processedSegment)) {
+            processedSegment = processedSegment.replace(/\s+2>&1(?=\s*\||$)/g, '');
         }
     }
 

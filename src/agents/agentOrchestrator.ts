@@ -258,7 +258,7 @@ export class AgentOrchestrator {
                 acceptanceCriteria: ['Task executed and verified clean'],
                 status: 'pending',
                 attempts: 0,
-                maxAttempts: 2
+                maxAttempts: (this.ctx.config && typeof (this.ctx.config as any).maxStepAttempts === 'number') ? (this.ctx.config as any).maxStepAttempts : 2
             }];
             this.session.plan = planSteps;
         }

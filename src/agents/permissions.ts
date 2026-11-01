@@ -40,7 +40,9 @@ export const ROLE_ALLOWED_TOOLS: Record<AgentRoleType, readonly string[]> = {
         'create_skill',
         'search_web',
         'research_web_docs',
-        'get_code_diagnostics'
+        'get_code_diagnostics',
+        'complete_plan_step',
+        'finish'
     ],
     verifier: [
         'execute_terminal_command',
@@ -72,9 +74,7 @@ export const ROLE_PROHIBITED_TOOLS: Record<AgentRoleType, readonly string[]> = {
     ],
     coder: [
         'set_task_plan',
-        'expand_plan_step',
-        'complete_plan_step',
-        'finish'
+        'expand_plan_step'
     ],
     verifier: [
         'write_file',

@@ -516,6 +516,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             }
                         },
                         {
+                            name: "search_web",
+                            description: "Searches official online web docs, framework manuals, and technical solutions from authoritative websites using DuckDuckGo. Supports offset pagination.",
+                            parameters: { 
+                                type: "object", 
+                                properties: { 
+                                    query: { type: "string", description: "Search query, error message, or documentation topic" }, 
+                                    urls: { type: "array", items: { type: "string" }, description: "Optional specific URLs to consult" },
+                                    offset: { type: "number", description: "Character offset to read pagination chunks (default 0)" }
+                                }, 
+                                required: ["query"] 
+                            }
+                        },
+                        {
                             name: "get_code_diagnostics",
                             description: "Inspects compiler diagnostics, LSP red squiggles, and syntax errors for a target file or workspace.",
                             parameters: {

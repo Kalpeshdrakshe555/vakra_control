@@ -61,7 +61,9 @@ RULES:
    - For writing new application code, use 'write_file'.
    - For surgical modifications to existing code, use 'edit_file'.
    - Always base edits on target file context. Inspect files first using 'read_multiple_files' or 'search_codebase'.
-3. You are FORBIDDEN from running terminal verification commands, marking steps complete, or calling 'finish' (the Verifier will evaluate completion).
+3. VERIFICATION & COMPLETION:
+   - When you finish writing or modifying code, execute verification commands (such as tests or 'python manage.py check') using 'execute_terminal_command'.
+   - Once verified clean, call 'complete_plan_step' or 'finish' to conclude the step or task.
 4. UNFAMILIAR ERRORS OR CRASHES:
    - If a terminal command fails or you encounter an unfamiliar library error, call 'search_web' with the exact error message and framework version to retrieve the latest documentation before guessing code edits.${conventions ? `\n[PROJECT CONVENTIONS]:\n${conventions}` : ''}${envSnapshot}`;
 

@@ -127,4 +127,26 @@ suite('Phase 1: Platform Utilities (P1-A)', () => {
             try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         }
     });
+
+    test('commandSequence: blocks python file writing one-liners via terminal guard', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vakra-py-guard-'));
+        try {
+            const res = await runCommandSequence('python -c "open(\'test.py\', \'w\').write(\'hello\')"', tmpDir);
+            assert.strictEqual(res.ok, false);
+            assert.ok(res.combinedOutput.includes('[GUARD BLOCKED]'));
+        } finally {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        }
+    });
+
+    test('commandSequence: translates touch command cleanly', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vakra-touch-'));
+        try {
+            const res = await runCommandSequence('touch newfile.txt', tmpDir);
+            assert.strictEqual(res.ok, true);
+            assert.ok(fs.existsSync(path.join(tmpDir, 'newfile.txt')));
+        } finally {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        }
+    });
 });

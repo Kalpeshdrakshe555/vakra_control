@@ -36,12 +36,12 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         assert.strictEqual(isToolAllowedForRole('researcher', 'execute_terminal_command'), true);
         assert.strictEqual(isToolAllowedForRole('researcher', 'finish'), false);
 
-        // Coder (Surgical Writer, Terminal Scaffolding / Code Modification)
+        // Coder (Surgical Writer, Terminal Scaffolding / Code Modification, Self-Verification)
         assert.strictEqual(isToolAllowedForRole('coder', 'write_file'), true);
         assert.strictEqual(isToolAllowedForRole('coder', 'edit_file'), true);
         assert.strictEqual(isToolAllowedForRole('coder', 'execute_terminal_command'), true);
-        assert.strictEqual(isToolAllowedForRole('coder', 'complete_plan_step'), false);
-        assert.strictEqual(isToolAllowedForRole('coder', 'finish'), false);
+        assert.strictEqual(isToolAllowedForRole('coder', 'complete_plan_step'), true);
+        assert.strictEqual(isToolAllowedForRole('coder', 'finish'), true);
 
         // Verifier (Evaluator, Terminal / Diagnostics / Complete Authority)
         assert.strictEqual(isToolAllowedForRole('verifier', 'execute_terminal_command'), true);
@@ -81,8 +81,8 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         assert.ok(coderNames.includes('write_file'));
         assert.ok(coderNames.includes('edit_file'));
         assert.ok(coderNames.includes('execute_terminal_command'));
-        assert.ok(!coderNames.includes('complete_plan_step'));
-        assert.ok(!coderNames.includes('finish'));
+        assert.ok(coderNames.includes('complete_plan_step'));
+        assert.ok(coderNames.includes('finish'));
 
         // Verifier schema
         const verifierTools = filterToolsForRole('verifier', fullToolDeclarations);
@@ -181,7 +181,7 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
 
         const coderInstruction = RolePromptBuilder.buildSystemInstruction('coder');
         assert.ok(coderInstruction.includes('CODER'));
-        assert.ok(coderInstruction.includes('FORBIDDEN from running terminal verification'));
+        assert.ok(coderInstruction.includes('VERIFICATION & COMPLETION'));
 
         const verifierInstruction = RolePromptBuilder.buildSystemInstruction('verifier');
         assert.ok(verifierInstruction.includes('VERIFIER'));
