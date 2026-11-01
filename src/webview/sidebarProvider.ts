@@ -503,32 +503,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             parameters: { type: "object", properties: { dir: { type: "string" }, depth: { type: "number" } } }
                         },
                         {
-                            name: "research_web_docs",
-                            description: "Researches official online web docs, package APIs, and technical guides from top authoritative websites. Supports offset pagination to stream and read long documentation without truncation.",
-                            parameters: { 
-                                type: "object", 
-                                properties: { 
-                                    query: { type: "string", description: "Topic, library, or error to research" }, 
-                                    urls: { type: "array", items: { type: "string" }, description: "Optional specific URLs to consult (max 2 authoritative sources)" },
-                                    offset: { type: "number", description: "Character offset to read the next chunk of long documentation (default 0)" }
-                                }, 
-                                required: ["query"] 
-                            }
-                        },
-                        {
-                            name: "search_web",
-                            description: "Searches official online web docs, framework manuals, and technical solutions from authoritative websites using DuckDuckGo. Supports offset pagination.",
-                            parameters: { 
-                                type: "object", 
-                                properties: { 
-                                    query: { type: "string", description: "Search query, error message, or documentation topic" }, 
-                                    urls: { type: "array", items: { type: "string" }, description: "Optional specific URLs to consult" },
-                                    offset: { type: "number", description: "Character offset to read pagination chunks (default 0)" }
-                                }, 
-                                required: ["query"] 
-                            }
-                        },
-                        {
                             name: "get_code_diagnostics",
                             description: "Inspects compiler diagnostics, LSP red squiggles, and syntax errors for a target file or workspace.",
                             parameters: {

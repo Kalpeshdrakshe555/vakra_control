@@ -66,8 +66,10 @@ RULES:
 3. VERIFICATION & COMPLETION:
    - When you finish writing or modifying code, execute verification commands (such as tests or 'python manage.py check') using 'execute_terminal_command'.
    - Once verified clean, call 'complete_plan_step' or 'finish' to conclude the step or task.
-4. UNFAMILIAR ERRORS OR CRASHES:
-   - If a terminal command fails or you encounter an unfamiliar library error, call 'search_web' with the exact error message and framework version to retrieve the latest documentation before guessing code edits.${conventions ? `\n[PROJECT CONVENTIONS]:\n${conventions}` : ''}${envSnapshot}`;
+4. UNFAMILIAR ERRORS OR CRASHES (MANDATORY WEB SEARCH):
+   - If ANY command fails or you encounter an unfamiliar library, missing module, or syntax error: YOU MUST CALL 'search_web' with the exact error message to retrieve the verified solution before guessing edits!
+5. AVAILABLE TOOLS:
+   - 'write_file', 'edit_file', 'execute_terminal_command', 'search_web', 'read_multiple_files', 'search_codebase', 'complete_plan_step', 'finish'.${conventions ? `\n[PROJECT CONVENTIONS]:\n${conventions}` : ''}${envSnapshot}`;
 
             case 'verifier':
                 return `You are the VERIFIER agent in an autonomous multi-agent coding system.
@@ -136,8 +138,17 @@ Provide 3 to 5 sequential high-level steps with clear verification criteria. Do 
                 const clampedPre = preTok > preGroundedLimit ? truncateToTokens(preStr, preGroundedLimit) : preStr;
                 sections.push(`### PRE-GROUNDED CRASH & WEB EVIDENCE\n${clampedPre}`);
             }
+            sections.push(`### AVAILABLE TOOLS (Read-only investigation):
+- search_web(query, offset?, urls?): SEARCH THE WEB for official documentation, syntax guides, and error fixes!
+- read_multiple_files(filepaths[]): Read source code files with line numbers.
+- search_codebase(query): Semantic & keyword search in workspace files.
+- list_directory_tree(dir?, depth?): Inspect workspace file structure.
+- get_symbol_outline(filepath): Get class/function definitions.
+- get_code_diagnostics(filepath?): Inspect compiler and LSP diagnostics.
+- execute_terminal_command(command): Run non-destructive inspection commands.`);
+
             sections.push(`### DIRECTIVE
-Investigate the codebase for Step ${opts.activeStep?.id || ''}. Inspect any additional required files using 'read_multiple_files' or 'search_codebase', and summarize the exact root cause and fix.`);
+Investigate the codebase for Step ${opts.activeStep?.id || ''}. If an error, library, or modern API is unfamiliar, call 'search_web' to retrieve verified official documentation, then summarize the exact root cause and fix.`);
         } else if (role === 'coder') {
             if (opts.research) {
                 let evidenceStr = `Summary: ${opts.research.summary}\nTarget Files: ${opts.research.targetFiles.join(', ')}`;
@@ -162,12 +173,22 @@ Suggested Fix: ${opts.previousFailure.suggestedFix || 'Analyze the failing file 
 CRITICAL: Fix the exact error above using 'edit_file' or 'write_file'.`);
             }
 
+            sections.push(`### AVAILABLE TOOLS (Call exactly ONE tool per turn):
+- write_file(filepath, content): Create new code or config files.
+- edit_file(filepath, old_text, new_text): Surgically edit existing files.
+- execute_terminal_command(command): Run CLI scaffolding, pip/npm installs, database migrations, or test commands.
+- search_web(query, offset?, urls?): SEARCH THE WEB for documentation, missing packages, library APIs, and error fixes!
+- read_multiple_files(filepaths[]): Inspect files before modifying them.
+- search_codebase(query): Search symbol or text in workspace.
+- complete_plan_step(sub_step_id?, summary, modified_files?, logic_summary?): Mark current plan step done in PLAN.md.
+- finish(summary): Complete the overall task when verified clean.`);
+
             sections.push(`### DIRECTIVE
 1. For Scaffolding & Setup: Run the official CLI command via 'execute_terminal_command' (e.g. django-admin startproject, python manage.py migrate). Never handwrite boilerplate files from scratch!
 2. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
 3. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').
 4. When Active Step is Verified: Call 'complete_plan_step' to record completion and advance to the next step (or call 'finish' if completing a direct task).
-5. If an Error Occurs: If a terminal command fails or you encounter an unfamiliar library issue, call 'search_web' with the exact error message to find the modern solution.`);
+5. If an Error Occurs: If ANY command fails or you encounter an unfamiliar library issue, call 'search_web' with the exact error message to find the verified modern solution.`);
         } else if (role === 'verifier') {
             if (opts.coderResult) {
                 sections.push(`### CODER IMPLEMENTATION RECORD

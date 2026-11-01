@@ -1198,6 +1198,16 @@ export class LocalOllamaClient implements IEngine {
         }
 
         let messages: any[] = [];
+        if (tools && tools[0]?.functionDeclarations) {
+            const hasToolMention = tools[0].functionDeclarations.some((f: any) => systemInstruction.includes(f.name));
+            if (!hasToolMention) {
+                const toolsOverview = tools[0].functionDeclarations.map((f: any) => {
+                    const params = Object.keys(f.parameters?.properties || {}).join(', ');
+                    return `- ${f.name}(${params}): ${f.description || ''}`;
+                }).join('\n');
+                systemInstruction = (systemInstruction ? systemInstruction + '\n\n' : '') + `### AVAILABLE TOOLS (Call exactly one per turn):\n${toolsOverview}`;
+            }
+        }
         if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
         
         (history || []).forEach(h => {
@@ -1246,7 +1256,7 @@ export class LocalOllamaClient implements IEngine {
 
         // Convert Gemini-format tools to OpenAI-format tools for Groq/OpenAI
         let openAITools: any[] | undefined;
-        if (tools && tools[0]?.functionDeclarations && !isOllama) {
+        if (tools && tools[0]?.functionDeclarations) {
             openAITools = tools[0].functionDeclarations.map((f: any) => ({
                 type: 'function',
                 function: {

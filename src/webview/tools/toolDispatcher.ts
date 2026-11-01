@@ -838,7 +838,29 @@ export class ToolDispatcher {
                     output: res.output,
                     commandText: cmd
                 });
-                return `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}`;
+                let report = `[TERMINAL EXECUTION ${res.error ? 'FAILED' : 'SUCCESS'}]\nExit Code: ${res.exitCode}\nOutput: ${res.output || '(No output)'}`;
+                if (!isSuccess) {
+                    const failOutput = (res.output || (res.error ? String(res.error) : '')).toLowerCase();
+                    if (failOutput.includes('modulenotfounderror: no module named')) {
+                        const m = failOutput.match(/no module named ['"]([^'"]+)['"]/);
+                        if (m && m[1]) {
+                            const mod = m[1];
+                            const PIP_MAP: Record<string, string> = {
+                                'rest_framework': 'djangorestframework',
+                                'pil': 'pillow',
+                                'cv2': 'opencv-python',
+                                'yaml': 'pyyaml',
+                                'bs4': 'beautifulsoup4',
+                                'dotenv': 'python-dotenv',
+                                'jwt': 'pyjwt'
+                            };
+                            const pipPkg = PIP_MAP[mod] || mod;
+                            report += `\n\n💡 [PACKAGE RESOLVER]: Module '${mod}' is missing. Install with:\nexecute_terminal_command("python -m pip install ${pipPkg}")`;
+                        }
+                    }
+                    report += `\n\n🔍 [MANDATORY ACTION]: Command failed. You MUST call 'search_web' with the exact error message or query to find the verified modern solution before repeating commands!`;
+                }
+                return report;
             }
 
             const callId = 'cmd_' + Date.now();

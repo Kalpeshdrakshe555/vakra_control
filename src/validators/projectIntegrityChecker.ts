@@ -18,6 +18,10 @@ export class ProjectIntegrityChecker {
     /**
      * Inspects a workspace and returns all architectural wiring issues found.
      */
+    public static check(workspaceRoot: string): IntegrityIssue[] {
+        return this.checkWorkspace(workspaceRoot);
+    }
+
     public static checkWorkspace(workspaceRoot: string): IntegrityIssue[] {
         if (!workspaceRoot || !fs.existsSync(workspaceRoot)) return [];
 

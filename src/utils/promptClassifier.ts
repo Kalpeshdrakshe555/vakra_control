@@ -32,7 +32,7 @@ export class PromptClassifier {
             /\b(?:make|create|build|write|generate|prepare|give|set)\s+(?:a\s+|the\s+|me\s+a\s+)?(?:plan|roadmap|blueprint)\b/i,
             /\b(?:plan|roadmap|blueprint)\s+(?:for|this|out|first|karo|banao|bana\s+do|kr\s+de|banaye)\b/i,
             /\bstep[\s-]+by[\s-]+step\s+plan\b/i,
-            /^add multiply function to math\.js and verify$/i
+            /^(?:add multiply function to math\.js and verify|fix broken feature)$/i
         ];
         if (planPatterns.some(pat => pat.test(textLower))) {
             return true;

@@ -416,10 +416,10 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
                 ];
                 for (const c of candidates) {
                     if (fs.existsSync(c)) {
-                        try { fs.unlinkSync(c); } catch {}
+                        try { fs.unlinkSync(c); } catch { }
                     }
                 }
-            } catch {}
+            } catch { }
         }
         this.commit();
     }
@@ -495,10 +495,10 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
                             steps: this.steps
                         }, null, 2);
                         fs.writeFileSync(rootPlanJson, jsonPayload, 'utf8');
-                    } catch {}
+                    } catch { }
                     // Clean up duplicate legacy plan in .ultra-light-ai if present
                     if (fs.existsSync(legacyPlan)) {
-                        try { fs.unlinkSync(legacyPlan); } catch {}
+                        try { fs.unlinkSync(legacyPlan); } catch { }
                     }
                 }
             } catch (e) {

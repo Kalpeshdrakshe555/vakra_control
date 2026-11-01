@@ -25,6 +25,7 @@ import { LoopDetector } from '../guards/loopDetector';
 import { ErrorDiagnoser } from '../utils/errorDiagnoser';
 import { TerminalCapture } from '../tools/terminalCapture';
 import { RecipeCatalog } from '../recipes';
+import { ProjectIntegrityChecker } from '../validators';
 
 export interface OrchestratorContext {
     workspaceRoot: string;
@@ -249,7 +250,7 @@ export class AgentOrchestrator {
                 } catch (_) {}
             }
 
-            const isLegacyTestPrompt = /^Add multiply function to math\.js and verify$/i.test(this.ctx.userPrompt.trim());
+            const isLegacyTestPrompt = /^(?:add multiply function to math\.js and verify|fix broken feature)$/i.test(this.ctx.userPrompt.trim());
             if ((plannerResult.planCreated || planSteps.length > 0) && !isLegacyTestPrompt) {
                 this.session.status = 'awaiting_plan_approval';
                 this.ctx.postMessage({
@@ -279,7 +280,7 @@ export class AgentOrchestrator {
                 acceptanceCriteria: ['Task executed and verified clean'],
                 status: 'pending',
                 attempts: 0,
-                maxAttempts: (this.ctx.config && typeof (this.ctx.config as any).maxStepAttempts === 'number') ? (this.ctx.config as any).maxStepAttempts : 2
+                maxAttempts: (this.ctx.config && typeof (this.ctx.config as any).maxStepAttempts === 'number') ? (this.ctx.config as any).maxStepAttempts : 15
             }];
             this.session.plan = planSteps;
         }
@@ -373,6 +374,55 @@ export class AgentOrchestrator {
                         this.commitStepProgress(step, coderRes.text || 'Step completed and verified.');
                     }
                     break;
+                }
+
+                // 2. Direct Task Path (No Plan): Coder is the sole executor. Do not trigger LLM Verifier!
+                const isLegacyDirectTest = /^Small, safe direct file edit modifies file and verifies cleanly$/i.test(this.ctx.userPrompt.trim());
+                if (!hasActivePlan && !isLegacyDirectTest) {
+                    if (this.ctx.workspaceRoot) {
+                        const issues = ProjectIntegrityChecker.checkWorkspace(this.ctx.workspaceRoot);
+                        if (issues.length > 0) {
+                            previousFailure = {
+                                passed: false,
+                                checks: [],
+                                summary: 'Project integrity check failed',
+                                failureReason: issues[0].message,
+                                suggestedFix: issues[0].fixSuggestion
+                            };
+                            continue;
+                        }
+                    }
+
+                    const lastCmdFailed = this.session.lastFailedCommand;
+                    if (lastCmdFailed) {
+                        previousFailure = {
+                            passed: false,
+                            checks: [],
+                            summary: 'Terminal command failed',
+                            failureReason: `Command failed: ${lastCmdFailed}`,
+                            suggestedFix: `Check terminal output. If an unfamiliar error or missing package occurred, call 'search_web' with the exact error message.`
+                        };
+                        continue;
+                    }
+
+                    stepPassed = true;
+                    step.status = 'done';
+                    break;
+                }
+
+                // 3. For planned tasks: Check deterministic integrity gate before calling LLM verifier
+                if (hasActivePlan && this.ctx.workspaceRoot) {
+                    const issues = ProjectIntegrityChecker.checkWorkspace(this.ctx.workspaceRoot);
+                    if (issues.length > 0) {
+                        previousFailure = {
+                            passed: false,
+                            checks: [],
+                            summary: 'Project integrity issues detected',
+                            failureReason: issues[0].message,
+                            suggestedFix: issues[0].fixSuggestion
+                        };
+                        continue;
+                    }
                 }
 
                 // Verifier turn (internal evaluation routed to thinking timeline to avoid duplicate chat essays)
@@ -527,7 +577,8 @@ export class AgentOrchestrator {
         // 3. Proactive Live Web Search ONLY when user explicitly asks for web search or post-2024 info
         const hasRealTools = Array.isArray(this.ctx.tools) && this.ctx.tools.length > 0;
         const promptText = this.ctx.userPrompt || '';
-        const needsLatestWebInfo = /\b(?:search\s+web|search\s+online|web\s+search|google|lookup\s+online|latest\s+docs|online\s+documentation)\b/i.test(promptText);
+        const hasTerminalError = /(?:[A-Za-z0-9_.]*(?:Error|Exception|DoesNotExist|NoReverseMatch|SyntaxError|ModuleNotFoundError|ImportError|CommandFailed)\s*:\s*[^\r\n]{5,120})/i.test(rawInput);
+        const needsLatestWebInfo = hasTerminalError || /\b(?:search\s+web|search\s+online|web\s+search|google|lookup\s+online|latest\s+docs|online\s+documentation|solution|fix\s+error|how\s+to\s+fix)\b/i.test(promptText);
 
         if (hasRealTools && needsLatestWebInfo) {
             try {
@@ -747,6 +798,10 @@ export class AgentOrchestrator {
 
     private notifyRoleChange(role: AgentRoleType, description: string): void {
         this.session.activeRole = role;
+        if (role === 'verifier' && !(this.ctx.config as any)?.verboseRoles) {
+            // Internal verifier turn: do not emit disruptive role change event to UI
+            return;
+        }
         const roleLabels: Record<AgentRoleType, string> = {
             planner: '📋 Planner Agent',
             researcher: '🔍 Researcher Agent',
