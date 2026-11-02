@@ -136,10 +136,10 @@ suite('Phase 5 & 6: Framework Recipes & Context Engineering Suite', () => {
             ]);
 
             const planMdPath = path.join(testDir, 'PLAN.md');
-            const planJsonPath = path.join(testDir, 'PLAN.json');
+            const planJsonPath = path.join(testDir, '.ultra-light-ai', 'PLAN.json');
 
             assert.ok(fs.existsSync(planMdPath), 'PLAN.md should be written to workspace root');
-            assert.ok(fs.existsSync(planJsonPath), 'PLAN.json should be written to workspace root');
+            assert.ok(fs.existsSync(planJsonPath), 'PLAN.json should be written inside .ultra-light-ai/');
 
             const jsonRaw = fs.readFileSync(planJsonPath, 'utf8');
             const parsed = JSON.parse(jsonRaw);

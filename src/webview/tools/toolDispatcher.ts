@@ -92,6 +92,33 @@ export class ToolDispatcher {
         }
 
         // Dual-Layer Role Permission Gate
+        // 0. Normalize common local model argument aliases across all tools
+        if (args && typeof args === 'object') {
+            if (name === 'write_file' || name === 'edit_file') {
+                if (!args.filepath) {
+                    const candidate = (Array.isArray(args.filepaths) ? args.filepaths[0] : args.filepaths) || args.path || args.file;
+                    if (candidate) args.filepath = String(candidate);
+                }
+            }
+            if (name === 'write_file') {
+                if (args.code !== undefined && args.content === undefined) {
+                    args.content = args.code;
+                }
+            }
+            if (name === 'edit_file') {
+                if (args.oldText !== undefined && args.old_text === undefined) args.old_text = args.oldText;
+                if (args.newText !== undefined && args.new_text === undefined) args.new_text = args.newText;
+                if (args.search !== undefined && args.old_text === undefined) args.old_text = args.search;
+                if (args.replace !== undefined && args.new_text === undefined) args.new_text = args.replace;
+            }
+            if (name === 'execute_terminal_command') {
+                if (!args.command) {
+                    const cmdCandidate = args.command ?? args.cmd ?? args.terminal_command ?? args.shell_command;
+                    if (cmdCandidate) args.command = String(cmdCandidate);
+                }
+            }
+        }
+
         if (ctx.activeRole) {
             const roleValidation = validateRoleToolCall(ctx.activeRole, name, args);
             if (!roleValidation.allowed) {

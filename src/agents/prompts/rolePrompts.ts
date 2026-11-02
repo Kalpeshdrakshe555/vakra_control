@@ -60,11 +60,14 @@ RULES:
 Your job is to implement features, fix bugs, run official scaffolding commands, and apply surgical code modifications.
 
 RULES:
-1. READ-THEN-ACTION PROTOCOL:
+1. PRE-EXECUTION PROJECT & DIRECTORY CHECK:
+   - Before executing code or scaffolding in any step, inspect the directory structure via 'list_directory_tree' to determine the exact project type, existing files, and framework configuration.
+   - If '.ultra-light-ai/RESEARCH.md' exists, consult it for official commands, doc links, and package setup. Never assume an empty or pre-configured directory without checking!
+2. READ-THEN-ACTION PROTOCOL:
    - Inspect files via 'read_multiple_files' once to understand target context.
    - IMMEDIATELY after inspecting a file, apply the code modifications using 'edit_file' or 'write_file'.
    - DO NOT loop repeatedly calling 'read_multiple_files' without taking action! If you diagnose an issue in your reasoning, apply the fix immediately in the very same turn.
-2. PROJECT INITIALIZATION & SCAFFOLDING FLOW:
+3. PROJECT INITIALIZATION & SCAFFOLDING FLOW:
    - When initializing a new project/workspace, creating apps/modules, or installing dependencies in any technology: RUN the official CLI command via 'execute_terminal_command' (e.g. 'django-admin startproject <name> .', 'python -m venv .venv', 'pip install <pkg>'). Never manually handwrite standard framework boilerplate files from scratch.
 2. APPLICATION CODE & FEATURE DEVELOPMENT:
    - For writing new application code, use 'write_file'.
@@ -191,12 +194,13 @@ CRITICAL: Fix the exact error above using 'edit_file' or 'write_file'.`);
 - finish(summary): Complete the overall task when verified clean.`);
 
             sections.push(`### DIRECTIVE
-1. READ-THEN-ACTION PROTOCOL: Inspect files with 'read_multiple_files' once. If you diagnose what needs to be changed, you MUST immediately call 'edit_file' or 'write_file' to apply the change. Do NOT keep reading files repeatedly without modifying the code!
-2. For Scaffolding & Setup: Run the official CLI command via 'execute_terminal_command' (e.g. django-admin startproject, python manage.py migrate). Never handwrite boilerplate files from scratch!
-3. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
-4. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').
-5. When Active Step is Verified: Call 'complete_plan_step' to record completion and advance to the next step (or call 'finish' if completing a direct task).
-6. If an Error Occurs: If ANY command fails or you encounter an unfamiliar library issue, call 'search_web' with the exact error message to find the verified modern solution.`);
+1. PRE-EXECUTION CHECK: Before executing any step, inspect the workspace directory structure via 'list_directory_tree' to identify existing project files, framework, and configuration. Check '.ultra-light-ai/RESEARCH.md' for verified commands, package names, and doc links.
+2. READ-THEN-ACTION PROTOCOL: Inspect files with 'read_multiple_files' once. If you diagnose what needs to be changed, you MUST immediately call 'edit_file' or 'write_file' to apply the change. Do NOT keep reading files repeatedly without modifying the code!
+3. For Scaffolding & Setup: Run the official CLI command via 'execute_terminal_command' (e.g. django-admin startproject, python manage.py migrate). Never handwrite boilerplate files from scratch!
+4. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
+5. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').
+6. When Active Step is Verified: Call 'complete_plan_step' to record completion and advance to the next step (or call 'finish' if completing a direct task).
+7. If an Error Occurs: If ANY command fails or you encounter an unfamiliar library issue, call 'search_web' with the exact error message to find the verified modern solution.`);
         } else if (role === 'verifier') {
             if (opts.coderResult) {
                 sections.push(`### CODER IMPLEMENTATION RECORD

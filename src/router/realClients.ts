@@ -1359,6 +1359,7 @@ export class LocalOllamaClient implements IEngine {
                 const decoder = new TextDecoder();
                 let buffer = '';
                 let isInsideThinking = false;
+                let isInsideToolCallTag = false;
                 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -1386,13 +1387,20 @@ export class LocalOllamaClient implements IEngine {
                                     }
                                 }
                                 if (content) {
+                                    fullText += (isInsideThinking ? '</think>' : '') + content;
                                     if (isInsideThinking) {
                                         isInsideThinking = false;
-                                        fullText += '</think>' + content;
-                                        onChunk({ text: '</think>' + content, done: false });
-                                    } else {
-                                        fullText += content;
+                                        onChunk({ text: '</think>', done: false });
+                                    }
+                                    if (content.includes('<tool_call>') || content.includes('<function=') || content.includes('<function ') || content.includes('<tool-call>')) {
+                                        isInsideToolCallTag = true;
+                                    }
+                                    if (!isInsideToolCallTag) {
                                         onChunk({ text: content, done: false });
+                                    } else {
+                                        if (content.includes('</tool_call>') || content.includes('</function>') || content.includes('</tool-call>')) {
+                                            isInsideToolCallTag = false;
+                                        }
                                     }
                                 }
                             } else {
@@ -1437,13 +1445,20 @@ export class LocalOllamaClient implements IEngine {
                                     }
 
                                     if (content) {
+                                        fullText += (isInsideThinking ? '</think>' : '') + content;
                                         if (isInsideThinking) {
                                             isInsideThinking = false;
-                                            fullText += '</think>' + content;
-                                            onChunk({ text: '</think>' + content, done: false });
-                                        } else {
-                                            fullText += content;
+                                            onChunk({ text: '</think>', done: false });
+                                        }
+                                        if (content.includes('<tool_call>') || content.includes('<function=') || content.includes('<function ') || content.includes('<tool-call>')) {
+                                            isInsideToolCallTag = true;
+                                        }
+                                        if (!isInsideToolCallTag) {
                                             onChunk({ text: content, done: false });
+                                        } else {
+                                            if (content.includes('</tool_call>') || content.includes('</function>') || content.includes('</tool-call>')) {
+                                                isInsideToolCallTag = false;
+                                            }
                                         }
                                     }
                                 }

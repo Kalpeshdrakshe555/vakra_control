@@ -624,7 +624,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             if (planContent) {
                                 contextSources.push({
                                     name: 'Active Project Plan (PLAN.md)',
-                                    content: `[CURRENT WORKSPACE PLAN]\n${planContent}\n\n[MANDATORY EXECUTION DIRECTIVE]:\n1. Find the FIRST unchecked step (- [ ]) in this plan.\n2. Execute ONLY that step right now.\n3. After completing it, mark it (- [x]) in PLAN.md using edit_file.`,
+                                    content: `[CURRENT WORKSPACE PLAN (PLAN.md)]\n${planContent}\n\n[MANDATORY EXECUTION DIRECTIVE]:\n1. PRE-STEP CHECK: Inspect existing files and project type using 'list_directory_tree'. If '.ultra-light-ai/RESEARCH.md' exists, consult it for official commands, doc links, and package setup.\n2. Find the FIRST unchecked step (- [ ]) in this plan.\n3. Execute ONLY that step right now.\n4. After completing it, mark it (- [x]) in PLAN.md using complete_plan_step or edit_file.`,
                                     priority: 15
                                 });
                                 break;

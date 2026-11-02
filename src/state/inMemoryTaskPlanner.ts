@@ -478,12 +478,18 @@ export class InMemoryTaskPlanner implements vscode.Disposable {
         if (root) {
             try {
                 const rootPlan = path.join(root, 'PLAN.md');
-                const rootPlanJson = path.join(root, 'PLAN.json');
-                const legacyPlan = path.join(root, '.ultra-light-ai', 'PLAN.md');
+                const aiDir = path.join(root, '.ultra-light-ai');
+                if (!fs.existsSync(aiDir)) {
+                    try { fs.mkdirSync(aiDir, { recursive: true }); } catch {}
+                }
+                const rootPlanJson = path.join(aiDir, 'PLAN.json');
+                const legacyRootPlanJson = path.join(root, 'PLAN.json');
+                const legacyPlan = path.join(aiDir, 'PLAN.md');
 
                 if (this.steps.length === 0) {
                     if (fs.existsSync(rootPlan)) fs.unlinkSync(rootPlan);
                     if (fs.existsSync(rootPlanJson)) fs.unlinkSync(rootPlanJson);
+                    if (fs.existsSync(legacyRootPlanJson)) fs.unlinkSync(legacyRootPlanJson);
                     if (fs.existsSync(legacyPlan)) fs.unlinkSync(legacyPlan);
                 } else {
                     const md = this.generatePlanMarkdown();

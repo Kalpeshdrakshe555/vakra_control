@@ -202,9 +202,16 @@ export class AgentOrchestrator {
             const matchedRecipe = RecipeCatalog.findRecipe(this.ctx.userPrompt);
             if (matchedRecipe && this.ctx.workspaceRoot) {
                 try {
-                    const researchPath = path.join(this.ctx.workspaceRoot, 'RESEARCH.md');
+                    const aiDir = path.join(this.ctx.workspaceRoot, '.ultra-light-ai');
+                    if (!fs.existsSync(aiDir)) fs.mkdirSync(aiDir, { recursive: true });
+                    const researchPath = path.join(aiDir, 'RESEARCH.md');
                     const researchMd = RecipeCatalog.generateResearchDoc(matchedRecipe, this.ctx.userPrompt);
                     fs.writeFileSync(researchPath, researchMd, 'utf8');
+                    // Clean up any legacy root RESEARCH.md
+                    const legacyRootResearch = path.join(this.ctx.workspaceRoot, 'RESEARCH.md');
+                    if (fs.existsSync(legacyRootResearch)) {
+                        try { fs.unlinkSync(legacyRootResearch); } catch {}
+                    }
                 } catch (e) {
                     console.warn('[AgentOrchestrator] Failed to write RESEARCH.md:', e);
                 }
@@ -511,6 +518,10 @@ export class AgentOrchestrator {
                 try {
                     StateLedger.clear(this.ctx.workspaceRoot);
                     SessionMemory.getInstance(this.ctx.workspaceRoot).clear();
+                    const aiResearch = path.join(this.ctx.workspaceRoot, '.ultra-light-ai', 'RESEARCH.md');
+                    if (fs.existsSync(aiResearch)) {
+                        try { fs.unlinkSync(aiResearch); } catch {}
+                    }
                 } catch {}
             }
             this.ctx.postMessage({ command: 'statusUpdate', text: '✅ All task steps verified and complete.' });
@@ -534,7 +545,25 @@ export class AgentOrchestrator {
         const summaries: string[] = [];
         const rawInput = `${this.ctx.userPrompt}\n${TerminalCapture.getLastOutput() || ''}`;
 
-        // 0. Recipe and Official Documentation Grounding
+        // 0. Architectural Blueprint & RESEARCH.md Grounding
+        if (this.ctx.workspaceRoot) {
+            const aiResearch = path.join(this.ctx.workspaceRoot, '.ultra-light-ai', 'RESEARCH.md');
+            const rootResearch = path.join(this.ctx.workspaceRoot, 'RESEARCH.md');
+            const targetResearch = fs.existsSync(aiResearch) ? aiResearch : (fs.existsSync(rootResearch) ? rootResearch : null);
+            if (targetResearch) {
+                try {
+                    const rContent = fs.readFileSync(targetResearch, 'utf8');
+                    evidence.push({
+                        filepath: '.ultra-light-ai/RESEARCH.md',
+                        snippet: rContent.slice(0, 8000),
+                        relevance: 'Framework architecture, official doc links, CLI scaffolding commands, and required packages'
+                    });
+                    summaries.push('Grounded architectural specification & official docs from .ultra-light-ai/RESEARCH.md.');
+                } catch {}
+            }
+        }
+
+        // 0b. Recipe and Official Documentation Grounding
         const matchedRecipe = RecipeCatalog.findRecipe(this.ctx.userPrompt);
         if (matchedRecipe && matchedRecipe.docs) {
             for (const doc of matchedRecipe.docs) {
