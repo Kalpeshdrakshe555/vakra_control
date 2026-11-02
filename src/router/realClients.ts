@@ -1924,6 +1924,12 @@ export function createConfiguredClient(
                 client: new LocalOllamaClient(m, 'https://api.groq.com/openai', keyStr, configuredTemp),
                 brainName: `AI (${m} - Groq)`
             };
+        } else if (keyStr.startsWith('nvapi-')) {
+            const m = model || 'meta/llama-3.1-70b-instruct';
+            return {
+                client: new LocalOllamaClient(m, 'https://integrate.api.nvidia.com/v1', keyStr, configuredTemp),
+                brainName: `AI (${m} - NVIDIA NIM)`
+            };
         } else if (keyStr.startsWith('sk-or-')) {
             const m = model || 'deepseek/deepseek-chat';
             return {
