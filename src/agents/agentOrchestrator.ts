@@ -401,15 +401,34 @@ export class AgentOrchestrator {
 
                 if (this.session.abortController.signal.aborted) break;
 
-                // 1. Direct Self-Verification: If Coder explicitly verified and called complete_plan_step or finish
+                // 1. Direct Self-Verification & Mutation Check
                 const coderCompletedStep = coderRes.toolCallsExecuted.some(t => t.tool === 'complete_plan_step' || t.tool === 'finish');
+                const codeMutatedInStep = coderRes.toolCallsExecuted.some(t => 
+                    t.tool === 'write_file' || t.tool === 'edit_file' || t.tool === 'replace_symbol'
+                );
+                const lastCmdFailed = this.session.lastFailedCommand;
+                const isLegacyTestPrompt = /^(?:add multiply function to math\.js and verify|fix broken feature|Small, safe direct file edit modifies file and verifies cleanly)$/i.test(this.ctx.userPrompt.trim());
+                const stepNeedsExplicitVerifier = isLegacyTestPrompt ||
+                    (step.acceptanceCriteria && step.acceptanceCriteria.some(c => /test|assert|verify with|exit code/i.test(c))) ||
+                    (this.ctx.userPrompt && /verify with node|run test|assert/i.test(this.ctx.userPrompt));
+
+                // If NO code was modified, NO command failed, and step has no explicit test assertions:
+                // Advance step immediately without calling Verifier!
+                if (!codeMutatedInStep && !lastCmdFailed && !stepNeedsExplicitVerifier) {
+                    stepPassed = true;
+                    step.status = 'done';
+                    if (hasActivePlan) {
+                        this.commitStepProgress(step, coderRes.text || 'Step completed (read-only action).');
+                    }
+                    break;
+                }
 
                 // 2. Active Verifier Gate (Emits Verifier Role and Executes Sanity Checks)
                 this.session.status = 'verifying';
                 this.notifyRoleChange('verifier', `Verifying Step ${step.id}`);
 
                 // Gate A: Project Integrity Gate (Unregistered apps, namespace collisions, broken settings)
-                if (this.ctx.workspaceRoot) {
+                if (this.ctx.workspaceRoot && codeMutatedInStep) {
                     const issues = ProjectIntegrityChecker.checkWorkspace(this.ctx.workspaceRoot);
                     if (issues.length > 0) {
                         previousFailure = {
@@ -424,7 +443,6 @@ export class AgentOrchestrator {
                 }
 
                 // Gate B: Terminal Command Failure Gate
-                const lastCmdFailed = this.session.lastFailedCommand;
                 if (lastCmdFailed) {
                     let liveWebFix = '';
                     try {
@@ -450,34 +468,57 @@ export class AgentOrchestrator {
                     continue;
                 }
 
-                // Gate C: Automated Framework Verification (e.g. Django manage.py check)
-                if (this.ctx.workspaceRoot && fs.existsSync(path.join(this.ctx.workspaceRoot, 'manage.py'))) {
-                    try {
-                        const checkRes = await this.dispatchWithRoleCheck('verifier', {
-                            name: 'execute_terminal_command',
-                            args: { command: 'python manage.py check' }
-                        });
-                        const checkStr = typeof checkRes === 'string' ? checkRes : JSON.stringify(checkRes);
-                        const isFail = checkStr.includes('FAILED') || /exit code:\s*[1-9]/i.test(checkStr) || checkStr.startsWith('Error:');
-                        if (isFail) {
-                            previousFailure = {
-                                passed: false,
-                                checks: [{ name: 'python manage.py check', status: 'failed', errorSnippet: checkStr.slice(0, 500) }],
-                                summary: 'Django sanity check failed',
-                                failureReason: checkStr.slice(0, 300),
-                                suggestedFix: 'Fix the Django models, views, or settings so python manage.py check exits with 0 errors.'
-                            };
-                            continue;
+                // Gate C: Automated Framework & Code Sanity Verification (Language-Agnostic)
+                if (this.ctx.workspaceRoot && codeMutatedInStep) {
+                    let frameworkCheckCmd: string | null = null;
+                    let frameworkName = 'Sanity';
+
+                    if (fs.existsSync(path.join(this.ctx.workspaceRoot, 'manage.py'))) {
+                        frameworkCheckCmd = 'python manage.py check';
+                        frameworkName = 'Django';
+                    } else if (fs.existsSync(path.join(this.ctx.workspaceRoot, 'tsconfig.json'))) {
+                        frameworkCheckCmd = 'npx tsc --noEmit';
+                        frameworkName = 'TypeScript';
+                    } else if (fs.existsSync(path.join(this.ctx.workspaceRoot, 'Cargo.toml'))) {
+                        frameworkCheckCmd = 'cargo check';
+                        frameworkName = 'Rust';
+                    } else if (fs.existsSync(path.join(this.ctx.workspaceRoot, 'go.mod'))) {
+                        frameworkCheckCmd = 'go vet ./...';
+                        frameworkName = 'Go';
+                    } else {
+                        // Check if any Python file was modified in a non-Django project
+                        const modifiedPy = coderRes.toolCallsExecuted
+                            .filter(t => (t.tool === 'write_file' || t.tool === 'edit_file') && t.args?.filepath && String(t.args.filepath).endsWith('.py'))
+                            .map(t => String(t.args.filepath));
+                        if (modifiedPy.length > 0) {
+                            frameworkCheckCmd = `python -m py_compile ${modifiedPy.slice(0, 3).join(' ')}`;
+                            frameworkName = 'Python';
                         }
-                    } catch {}
+                    }
+
+                    if (frameworkCheckCmd) {
+                        try {
+                            const checkRes = await this.dispatchWithRoleCheck('verifier', {
+                                name: 'execute_terminal_command',
+                                args: { command: frameworkCheckCmd }
+                            });
+                            const checkStr = typeof checkRes === 'string' ? checkRes : JSON.stringify(checkRes);
+                            const isFail = checkStr.includes('FAILED') || /exit code:\s*[1-9]/i.test(checkStr) || checkStr.startsWith('Error:');
+                            if (isFail) {
+                                previousFailure = {
+                                    passed: false,
+                                    checks: [{ name: frameworkCheckCmd, status: 'failed', errorSnippet: checkStr.slice(0, 500) }],
+                                    summary: `${frameworkName} sanity check failed`,
+                                    failureReason: checkStr.slice(0, 300),
+                                    suggestedFix: `Fix the code in ${frameworkName} project so '${frameworkCheckCmd}' exits with 0 errors.`
+                                };
+                                continue;
+                            }
+                        } catch {}
+                    }
                 }
 
                 // Gate D: If step has explicit test criteria, or legacy test prompt, invoke VerifierRoleHandler
-                const isLegacyTestPrompt = /^(?:add multiply function to math\.js and verify|fix broken feature|Small, safe direct file edit modifies file and verifies cleanly)$/i.test(this.ctx.userPrompt.trim());
-                const stepNeedsExplicitVerifier = isLegacyTestPrompt ||
-                    (step.acceptanceCriteria && step.acceptanceCriteria.some(c => /test|assert|verify with|exit code/i.test(c))) ||
-                    (this.ctx.userPrompt && /verify with node|run test|assert/i.test(this.ctx.userPrompt));
-
                 if (stepNeedsExplicitVerifier && !coderCompletedStep) {
                     const verifierRes = await VerifierRoleHandler.execute(
                         {
@@ -541,7 +582,13 @@ export class AgentOrchestrator {
                 break;
             }
 
-            if (!stepPassed && this.session.status === 'failed') {
+            if (!stepPassed) {
+                if (this.session.abortController.signal.aborted) {
+                    this.session.status = 'aborted';
+                } else {
+                    this.session.status = 'failed';
+                    lastCoderText = `Step ${step.id} failed after ${step.attempts} attempts: ${previousFailure?.failureReason || 'verification failed'}.`;
+                }
                 break;
             }
         }
@@ -801,6 +848,11 @@ export class AgentOrchestrator {
 
         // Dispatch through authoritative ToolDispatcher
         const result = await this.ctx.dispatchTool(call, role);
+
+        // If file content or environment was modified, reset loop history so files can be re-inspected
+        if (call.name === 'write_file' || call.name === 'edit_file' || call.name === 'execute_terminal_command') {
+            this.loopDetector.reset();
+        }
         const resStr = typeof result === 'string' ? result : JSON.stringify(result);
         const resultOk = typeof result !== 'string' || (
             !resStr.startsWith('Error:') &&

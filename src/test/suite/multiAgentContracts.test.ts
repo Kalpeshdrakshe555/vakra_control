@@ -13,6 +13,8 @@ import {
 import { RolePromptBuilder } from '../../agents/prompts/rolePrompts';
 import { ToolDispatcher } from '../../webview/tools/toolDispatcher';
 import { LoopDetector } from '../../guards/loopDetector';
+import { PromptClassifier } from '../../utils/promptClassifier';
+import { extractTextToolCalls } from '../../router/realClients';
 
 suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
 
@@ -167,6 +169,11 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         const callB = { tool: 'read_multiple_files', argsHash: LoopDetector.hashArgs({ paths: ['src/b.ts'] }) };
         const check3 = detector.check(callB);
         assert.strictEqual(check3.repeat, false);
+
+        // Turn 4: after an edit action occurs, reset() unblocks re-reading callA
+        detector.reset();
+        const check4 = detector.check(callA);
+        assert.strictEqual(check4.repeat, false, 'LoopDetector must allow re-reading previous files after edits reset history');
     });
 
     test('RolePromptBuilder constructs compact, role-bounded system instructions', () => {
@@ -186,5 +193,57 @@ suite('Phase 4: Multi-Agent Role Permissions & Contract Hardening', () => {
         const verifierInstruction = RolePromptBuilder.buildSystemInstruction('verifier');
         assert.ok(verifierInstruction.includes('VERIFIER'));
         assert.ok(verifierInstruction.includes('EMPIRICAL PROOF ONLY'));
+    });
+
+    test('PromptClassifier accurately routes bird eye view & architectural queries to info without triggering coder', () => {
+        // Inquiries containing 'project' or 'app' without code modification intent MUST classify as 'info'
+        assert.strictEqual(PromptClassifier.classifyPrompt("is project ka bird eye view de"), 'info');
+        assert.strictEqual(PromptClassifier.classifyPrompt("give me a bird's eye view of the project"), 'info');
+        assert.strictEqual(PromptClassifier.classifyPrompt("explain the architecture of this app"), 'info');
+        assert.strictEqual(PromptClassifier.classifyPrompt("codebase tour and summary"), 'info');
+        assert.strictEqual(PromptClassifier.classifyPrompt("project ka structure samjhao"), 'info');
+
+        // Explicit creation or code modification must classify as 'general' or 'backend'
+        assert.strictEqual(PromptClassifier.classifyPrompt("create a new fullstack project from scratch"), 'general');
+        assert.strictEqual(PromptClassifier.classifyPrompt("build an ecommerce app with django"), 'general');
+        assert.strictEqual(PromptClassifier.classifyPrompt("fix database error in project"), 'backend');
+    });
+
+    test('extractTextToolCalls strips <think> tags so thoughts do not execute as tools', () => {
+        const textWithThoughtTool = `<think>
+I might need to run execute_terminal_command(command="python manage.py check") to verify the setup.
+Let me inspect the tree first.
+</think>
+Here is the bird's eye view of the project:
+1. config/ - Central settings
+2. core/ - Main application logic`;
+
+        const calls = extractTextToolCalls(textWithThoughtTool);
+        assert.strictEqual(calls.length, 0, 'Tools inside <think> tags must NEVER be extracted as real tool calls');
+
+        const textWithRealTool = `<think>
+I need to read settings.py
+</think>
+read_multiple_files(filepaths=["config/settings.py"])`;
+
+        const realCalls = extractTextToolCalls(textWithRealTool);
+        assert.strictEqual(realCalls.length, 1);
+        assert.strictEqual(realCalls[0].name, 'read_multiple_files');
+        assert.deepStrictEqual(realCalls[0].args.filepaths, ['config/settings.py']);
+    });
+
+    test('Researcher turn prompt includes direct Codebase Architect instructions when activeStep is absent', () => {
+        const overviewPrompt = RolePromptBuilder.buildTurnPrompt('researcher', {
+            userPrompt: 'give bird eye view of project'
+        });
+        assert.ok(overviewPrompt.includes('CODEBASE OVERVIEW & USER INQUIRY RESPONSE'));
+        assert.ok(overviewPrompt.includes('Technical Lead & Codebase Architect'));
+        assert.ok(overviewPrompt.includes('Do NOT hide the answer inside thinking tags'));
+
+        const stepPrompt = RolePromptBuilder.buildTurnPrompt('researcher', {
+            userPrompt: 'implement user model',
+            activeStep: { id: '1.1', title: 'Create model' } as any
+        });
+        assert.ok(stepPrompt.includes('Step 1.1'));
     });
 });

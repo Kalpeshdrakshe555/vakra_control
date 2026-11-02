@@ -76,20 +76,22 @@ export class PromptClassifier {
 
         const textLower = text.toLowerCase();
 
-        // Full project / application tasks MUST get general classification with all tools enabled
+        // 1. Explicit Code Modification Intent (writing, editing, fixing, scaffolding)
+        const hasModificationIntent = /\b(?:fix|error|bug|issue|create|build|implement|edit|change|modify|refactor|update|delete|remove|add|setup|scaffold|write\s+code|banao|kar\s+do|kr\s+de)\b/i.test(textLower);
+
+        // 2. High-Priority Informational & Architectural Queries (Bird's Eye View, Overview, Codebase Tour)
+        // Must take precedence over generic keywords like 'project' or 'app' when NO modification is requested!
+        const isInfoOrOverviewQuery = /\b(?:bird['’]?s?\s*eye\s*view|overview|architecture|architectural\s*blueprint|summary|summarize|walk\s*through|codebase\s*tour|explain|describe|what\s+is|what\s+are|what\s+does|how\s+does|how\s+do|why\s+is|why\s+does|kya\s+hai|kya\s+chal\s+raha\s+hai|samjhao|batao|dekh\s+ke\s+bata|review\s+codebase|analyze\s+codebase)\b/i.test(textLower);
+        if (isInfoOrOverviewQuery && !hasModificationIntent) {
+            return 'info';
+        }
+
+        // 3. Full project / application coding tasks MUST get general classification with all tools enabled
         const fullstackKeywords = [
-            'full stack', 'fullstack', 'project', 'build', 'create', 'complete',
-            'ecommerce', 'e-commerce', 'app', 'system', 'scratch', 'refactor',
-            'develop', 'scaffold', 'implement', 'analyze', 'adhura'
+            'full stack', 'fullstack', 'from scratch', 'ecommerce', 'e-commerce', 'scaffold'
         ];
         if (fullstackKeywords.some(kw => textLower.includes(kw))) {
             return 'general';
-        }
-
-        const isExplanationQuery = /^(?:explain|describe|what\s+is|what\s+are|what\s+does|how\s+does|how\s+do|why\s+is|why\s+does|walk\s+me\s+through)\b/i.test(text.trim());
-        const hasModificationIntent = /\b(?:fix|error|bug|issue|create|build|implement|edit|change|modify|refactor|update|delete|remove|add)\b/i.test(textLower);
-        if (isExplanationQuery && !hasModificationIntent) {
-            return 'info';
         }
 
         const uiKeywords = ['design', 'button', 'css', 'layout', 'color', 'ui', 'frontend', 'tailwind', 'component', 'view', 'styles', 'svg', 'logo'];
@@ -100,10 +102,10 @@ export class PromptClassifier {
         let backendScore = backendKeywords.filter(kw => textLower.includes(kw)).length;
         let infoScore = infoKeywords.filter(kw => textLower.includes(kw)).length;
 
+        if (infoScore > 0 && !hasModificationIntent && uiScore === 0 && backendScore === 0) return 'info';
         if (uiScore > backendScore && uiScore > infoScore) return 'ui';
         if (backendScore > uiScore && backendScore > infoScore) return 'backend';
-        if (infoScore > uiScore && infoScore > backendScore) return 'info';
-        if (infoScore > 0 && uiScore === 0 && backendScore === 0) return 'info';
+        if (infoScore > uiScore && infoScore > backendScore && !hasModificationIntent) return 'info';
 
         return 'general';
     }

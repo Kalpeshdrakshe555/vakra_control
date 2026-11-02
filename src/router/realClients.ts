@@ -345,6 +345,11 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     const results: Array<{ name: string; args: any; raw: string }> = [];
     if (!text || typeof text !== 'string') return results;
 
+    // Never extract tool calls from inside reasoning / thinking blocks
+    const cleanText = text
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+
     const pushUnique = (name: string, rawArgs: any, raw: string) => {
         let toolName = name === 'final_answer' ? 'finish' : name;
         const args = { ...rawArgs };
@@ -386,7 +391,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     // e.g.: list_directory_tree \n { "dir": ".", "depth": 2 }
     const nakedRegex = new RegExp(`(?:^|\\n)\\s*(${KNOWN_TOOLS_REGEX_STR})\\s*(?::|->)?\\s*\\n*\\s*(?:\`\`\`(?:json)?\\s*\\n*)?(\\{[\\s\\S]*?\\})(?:\\s*\\n*\`\`\`)?`, 'gi');
     let nakedMatch;
-    while ((nakedMatch = nakedRegex.exec(text)) !== null) {
+    while ((nakedMatch = nakedRegex.exec(cleanText)) !== null) {
         const toolName = nakedMatch[1].trim();
         const rawJson = nakedMatch[2].trim();
         const parsed = tryParseJsonRelaxed(rawJson);
@@ -398,7 +403,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     // Pattern 2: JSON Object with "name" or "tool" property matching a known tool
     const jsonToolRegex = /\{[\s\S]*?"(?:name|tool)"\s*:\s*"([a-zA-Z_0-9]+)"[\s\S]*?\}/g;
     let jsonMatch;
-    while ((jsonMatch = jsonToolRegex.exec(text)) !== null) {
+    while ((jsonMatch = jsonToolRegex.exec(cleanText)) !== null) {
         const parsed = tryParseJsonRelaxed(jsonMatch[0]);
         if (parsed) {
             const toolName = parsed.name || parsed.tool;
@@ -415,7 +420,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     // Pattern 3: Standard Function call syntax: e.g. search_web(query="...")
     const funcRegex = new RegExp(`\\b(${KNOWN_TOOLS_REGEX_STR})\\s*\\(([\\s\\S]*?)\\)`, 'gi');
     let match;
-    while ((match = funcRegex.exec(text)) !== null) {
+    while ((match = funcRegex.exec(cleanText)) !== null) {
         const toolName = match[1];
         const rawArgs = match[2].trim();
         let parsedArgs: any = {};
@@ -477,7 +482,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
 
     // Pattern 4: XML <tool_call>...</tool_call> or <action>...</action>
     const xmlRegex = /<(?:tool_call|action)>([\s\S]*?)<\/(?:tool_call|action)>/gi;
-    while ((match = xmlRegex.exec(text)) !== null) {
+    while ((match = xmlRegex.exec(cleanText)) !== null) {
         const parsed = tryParseJsonRelaxed(match[1].trim());
         if (parsed && parsed.name) {
             pushUnique(parsed.name, parsed.arguments || parsed.args || {}, match[0]);
@@ -489,7 +494,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     // Handles parameter closing tags: </parameter>, </content>, </filepaths>, or next parameter tag
     const tagFnRegex = /(?:<tool_call>[\s\n]*)?<function[=\s](?:name=)?["']?([a-zA-Z0-9_]+)["']?>([\s\S]*?)(?:<\/function>(?:[\s\n]*<\/tool_call>)?|<\/tool_call>|$)/gi;
     let tagFnMatch;
-    while ((tagFnMatch = tagFnRegex.exec(text)) !== null) {
+    while ((tagFnMatch = tagFnRegex.exec(cleanText)) !== null) {
         const toolName = tagFnMatch[1].trim();
         const body = tagFnMatch[2];
         const args: any = {};
@@ -513,7 +518,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     // Pattern 5: Line-based shorthand: e.g. read_multiple_files \n catalog/views.py
     const shorthandRegex = new RegExp(`(?:^|\\n)\\s*(${KNOWN_TOOLS_REGEX_STR})\\s*(?::|->)?\\s*\\n\\s*([a-zA-Z0-9_\\-\\.\\/\\\\]+\\.[a-zA-Z0-9]+)\\s*(?:\\n|$)`, 'gi');
     let shortMatch;
-    while ((shortMatch = shorthandRegex.exec(text)) !== null) {
+    while ((shortMatch = shorthandRegex.exec(cleanText)) !== null) {
         const tool = shortMatch[1].trim();
         const arg = shortMatch[2].trim();
         if (tool === 'read_multiple_files' || tool === 'get_code_diagnostics' || tool === 'get_symbol_outline') {
@@ -530,8 +535,8 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     let inString = false;
     let escape = false;
 
-    for (let i = 0; i < text.length; i++) {
-        const char = text[i];
+    for (let i = 0; i < cleanText.length; i++) {
+        const char = cleanText[i];
         if (escape) {
             escape = false;
             continue;
@@ -553,7 +558,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
             } else if (char === '}') {
                 braceCount--;
                 if (braceCount === 0 && openBraceIndex !== -1) {
-                    const candidate = text.substring(openBraceIndex, i + 1).trim();
+                    const candidate = cleanText.substring(openBraceIndex, i + 1).trim();
                     const parsed = tryParseJsonRelaxed(candidate);
                     if (parsed && typeof parsed === 'object') {
                         const inferred = inferToolFromObject(parsed);
@@ -574,7 +579,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     if (results.length === 0) {
         const bashBlockRegex = /```(?:bash|sh|cmd|powershell)\s*\n([\s\S]*?)\n```/gi;
         let bashMatch;
-        while ((bashMatch = bashBlockRegex.exec(text)) !== null) {
+        while ((bashMatch = bashBlockRegex.exec(cleanText)) !== null) {
             const rawCmd = bashMatch[1].trim();
             if (rawCmd.length > 0 && !rawCmd.startsWith('#')) {
                 results.push({
@@ -591,7 +596,7 @@ export function extractTextToolCalls(text: string): Array<{ name: string; args: 
     // Only matches recognized file extensions to avoid confusing regular prose (e.g. "checking whether...")
     if (results.length === 0) {
         const readIntentRegex = /(?:#|\/\/)?\s*(?:I am reading|Reading|Let me read|Let me inspect|I will inspect|Let's check|Checking)\s+(?:the\s+)?(?:project'?s?\s+main\s+)?`?([a-zA-Z0-9_\-\.\/\\]+\.(?:ts|js|py|json|html|css|tsx|jsx|txt|yaml|yml|toml|sql|sh|java|go|rs|cpp|c|h))`?/i;
-        const readMatch = readIntentRegex.exec(text);
+        const readMatch = readIntentRegex.exec(cleanText);
         if (readMatch && readMatch[1]) {
             const rawPath = readMatch[1].trim();
             if (!rawPath.endsWith('.md') && !rawPath.includes(' ')) {
@@ -1064,7 +1069,8 @@ export class GeminiCloudClient implements IEngine {
                     functionCallToExecute = { name: textCalls[0].name, args: textCalls[0].args };
                 } else {
                     const toolSpecs = getToolSpecsFromTools(tools);
-                    const repaired = repairToolCall(fullText, toolSpecs);
+                    const cleanForRepair = fullText.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+                    const repaired = repairToolCall(cleanForRepair, toolSpecs);
                     if (repaired) {
                         functionCallToExecute = { name: repaired.name, args: repaired.args };
                     }
@@ -1084,11 +1090,19 @@ export class GeminiCloudClient implements IEngine {
                 const callCount = (toolExecutionHistory.get(callSignature) || 0) + 1;
                 toolExecutionHistory.set(callSignature, callCount);
 
-                if (callCount > 2) {
+                if (callCount > 3) {
                     toolResult = `[LOOP PREVENTED]: Tool '${functionCallToExecute.name}' with the same arguments was already executed ${callCount - 1} times in this turn. Aborting repeat execution to prevent loop.`;
                 } else {
                     try {
                         toolResult = await onToolCall(functionCallToExecute);
+                        // If file was edited/written or terminal command ran, unblock all prior read caches
+                        if (functionCallToExecute.name === 'write_file' || functionCallToExecute.name === 'edit_file' || functionCallToExecute.name === 'execute_terminal_command') {
+                            for (const key of toolExecutionHistory.keys()) {
+                                if (key.startsWith('read_multiple_files:') || key.startsWith('read_file:') || key.startsWith('list_directory_tree:')) {
+                                    toolExecutionHistory.delete(key);
+                                }
+                            }
+                        }
                     } catch (err: any) {
                         if (signal?.aborted || err?.message?.includes('aborted') || err?.message?.includes('AbortError')) {
                             if (onChunk) onChunk({ text: '\n\n*🛑 Generation stopped by user.*', done: true, usage: finalUsage });
@@ -1517,7 +1531,8 @@ export class LocalOllamaClient implements IEngine {
                         }));
                     } else {
                         const toolSpecs = getToolSpecsFromTools(tools);
-                        const repaired = repairToolCall(fullText, toolSpecs);
+                        const cleanForRepair = fullText.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+                        const repaired = repairToolCall(cleanForRepair, toolSpecs);
                         if (repaired) {
                             toolCallsAccumulator = [{
                                 id: `call_repaired_0`,
@@ -1550,14 +1565,24 @@ export class LocalOllamaClient implements IEngine {
                                 const count = (localToolExecutionCounts.get(callSig) || 0) + 1;
                                 localToolExecutionCounts.set(callSig, count);
 
-                                if (count > 1) {
+                                if (count > 2) {
                                     forceTextSummary = true;
-                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called in this turn. Do NOT repeat tool calls; summarize your findings or complete the task now.`;
+                                    const loopMsg = `[LOOP PREVENTED]: Tool '${tc.name}' with identical parameters was already called ${count - 1} times in this turn. Halting repeated execution. Please analyze previous results and proceed to the next step.`;
                                     messages.push({ role: 'user', content: loopMsg });
                                     continue;
                                 }
 
                                 const result = await onToolCall({ name: tc.name, args });
+
+                                // If code is modified or command executed, unblock read tool deduplication
+                                if (tc.name === 'write_file' || tc.name === 'edit_file' || tc.name === 'execute_terminal_command') {
+                                    for (const key of localToolExecutionCounts.keys()) {
+                                        if (key.startsWith('read_multiple_files:') || key.startsWith('read_file:') || key.startsWith('list_directory_tree:')) {
+                                            localToolExecutionCounts.delete(key);
+                                        }
+                                    }
+                                }
+
                                 let safeResultStr = typeof result === 'string' ? result : JSON.stringify(result);
                                 // Permit full file reads up to 25k chars, only clamp non-file results
                                 const maxChars = tc.name === 'read_multiple_files' ? 25000 : 8000;
@@ -1569,7 +1594,7 @@ export class LocalOllamaClient implements IEngine {
                                 }
                                 let nextDirective = 'Please inspect the output and proceed to the next step.';
                                 if (tc.name === 'read_multiple_files') {
-                                    nextDirective = 'Context loaded. You have inspected the code. Now call edit_file or write_file to apply the code fix, or run execute_terminal_command.';
+                                    nextDirective = 'Context loaded. You may inspect additional files if needed to understand the project architecture, or apply code modifications using edit_file or write_file, or run execute_terminal_command.';
                                 }
                                 if (tc.name === 'execute_terminal_command' && (safeResultStr.includes('failed with exit code') || safeResultStr.includes('Command failed') || safeResultStr.includes('Error:') || safeResultStr.includes('[GUARD BLOCKED]'))) {
                                     nextDirective = `[MANDATORY ACTION: COMMAND FAILED]: The command failed. YOU MUST CALL 'search_web' with the exact error message to retrieve the verified solution before repeating commands or editing code!`;
@@ -1684,6 +1709,20 @@ export class LocalOllamaClient implements IEngine {
                         totalTokens: estPrompt + estComp
                     };
                 }
+
+                // Rescue trapped thinking content if content outside think tags is empty
+                const outsideThink = fullText.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+                if (!outsideThink) {
+                    const thinkMatch = fullText.match(/<(?:think|thought)>([\s\S]*?)<\/(?:think|thought)>/i);
+                    if (thinkMatch && thinkMatch[1].trim().length > 0) {
+                        const rescued = thinkMatch[1].trim();
+                        fullText += '\n\n' + rescued;
+                        if (stream && onChunk) {
+                            onChunk({ text: '\n\n' + rescued, done: false });
+                        }
+                    }
+                }
+
                 onChunk({ text: '', done: true, usage: currentUsage });
                 return { text: fullText, usage: currentUsage };
 
@@ -1716,7 +1755,8 @@ export class LocalOllamaClient implements IEngine {
                                 }));
                             } else {
                                 const toolSpecs = getToolSpecsFromTools(tools);
-                                const repaired = repairToolCall(raw, toolSpecs);
+                                const cleanForRepair = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+                                const repaired = repairToolCall(cleanForRepair, toolSpecs);
                                 if (repaired) {
                                     toolCalls = [{
                                         id: `call_repaired_0`,
@@ -1754,6 +1794,13 @@ export class LocalOllamaClient implements IEngine {
 
                                         if (onChunk) onChunk({ text: `\n> *⚙️ Tool: \`${tc.function.name}\`*\n`, done: false });
                                         const result = await onToolCall({ name: tc.function.name, args });
+                                        if (tc.function.name === 'write_file' || tc.function.name === 'edit_file' || tc.function.name === 'execute_terminal_command') {
+                                            for (const key of localToolExecutionCounts.keys()) {
+                                                if (key.startsWith('read_multiple_files:') || key.startsWith('read_file:') || key.startsWith('list_directory_tree:')) {
+                                                    localToolExecutionCounts.delete(key);
+                                                }
+                                            }
+                                        }
                                         const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
                                         if (resultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.function.name === 'set_task_plan' || (tc.function.name === 'complete_plan_step' && (resultStr.includes('COMPLETE') || resultStr.includes('STOP AND HANDOFF')))) {
                                             forceTextSummary = true;
@@ -1794,6 +1841,13 @@ export class LocalOllamaClient implements IEngine {
 
                                         if (onChunk) onChunk({ text: `\n> *⚙️ Tool: \`${tc.function.name}\`*\n`, done: false });
                                         const result = await onToolCall({ name: tc.function.name, args });
+                                        if (tc.function.name === 'write_file' || tc.function.name === 'edit_file' || tc.function.name === 'execute_terminal_command') {
+                                            for (const key of localToolExecutionCounts.keys()) {
+                                                if (key.startsWith('read_multiple_files:') || key.startsWith('read_file:') || key.startsWith('list_directory_tree:')) {
+                                                    localToolExecutionCounts.delete(key);
+                                                }
+                                            }
+                                        }
                                         const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
                                         if (resultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.function.name === 'set_task_plan' || (tc.function.name === 'complete_plan_step' && (resultStr.includes('COMPLETE') || resultStr.includes('STOP AND HANDOFF')))) {
                                             forceTextSummary = true;

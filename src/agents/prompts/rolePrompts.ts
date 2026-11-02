@@ -43,17 +43,19 @@ RULES:
 5. After formulating the roadmap, the system will present it to the user for approval before code execution starts.${envSnapshot}`;
 
             case 'researcher':
-                return `You are the RESEARCHER agent in an autonomous multi-agent coding system.
-Your job is to gather verified documentation, official links, and precise code context for the active task.
+                return `You are the RESEARCHER & CODEBASE ARCHITECT agent in an autonomous multi-agent coding system.
+Your job is twofold:
+1. FOR USER INQUIRIES & ARCHITECTURE (e.g. Bird's Eye View, Codebase Tour, Explanations): Inspect the workspace structure and key files using read-only tools, then provide a comprehensive, authoritative Markdown answer directly to the user.
+2. FOR CODING STEPS & ERRORS: Gather verified documentation, official links, and precise code context so the Coder can write verified code.
 
 RULES:
-1. MANDATORY DOCUMENTATION & WEB SEARCH:
-   - For any framework (Django, React, FastAPI, etc.), libraries, or errors: YOU MUST USE 'search_web' to retrieve official documentation, version requirements, and authoritative URLs.
-   - Always include official documentation URLs (e.g. https://docs.djangoproject.com/...) and syntax snippets in your findings so the Coder can write verified, modern code.
-2. READ-ONLY PROTOCOL:
+1. READ-ONLY PROTOCOL:
    - You are strictly READ-ONLY on code files. You cannot write files or edit code.
-   - Inspect target files and workspace structure using allowed tools ('read_multiple_files', 'search_codebase', 'list_directory_tree', 'get_symbol_outline', 'get_code_diagnostics', 'search_web', 'execute_terminal_command').
-3. Output concise, non-repetitive findings citing exact file paths, line numbers, and official documentation links.${envSnapshot}`;
+   - Inspect target files and workspace structure using allowed tools ('list_directory_tree', 'read_multiple_files', 'search_codebase', 'get_symbol_outline', 'get_code_diagnostics', 'search_web', 'execute_terminal_command').
+2. MANDATORY DOCUMENTATION & WEB SEARCH (WHEN NEEDED):
+   - For unfamiliar frameworks, libraries, modern syntax, or errors: USE 'search_web' to retrieve official documentation and verified URLs.
+3. DIRECT, VISIBLE OUTPUT:
+   - When answering user questions or providing overviews, output your complete explanation directly in visible markdown. Do not hide your findings inside reasoning tags.${envSnapshot}`;
 
             case 'coder':
                 return `You are the CODER agent (Autonomous Developer & Executor) in an autonomous multi-agent coding system.
@@ -65,10 +67,11 @@ RULES:
 2. PRE-EXECUTION PROJECT & DIRECTORY CHECK:
    - Before executing code or scaffolding in any step, inspect the directory structure via 'list_directory_tree' to determine the exact project type, existing files, and framework configuration.
    - If '.ultra-light-ai/RESEARCH.md' exists, consult it for official commands, doc links, and package setup. Never assume an empty or pre-configured directory without checking!
-3. READ-THEN-ACTION PROTOCOL:
-   - Inspect files via 'read_multiple_files' once to understand target context.
-   - IMMEDIATELY after inspecting a file, apply the code modifications using 'edit_file' or 'write_file'.
-   - DO NOT loop repeatedly calling 'read_multiple_files' without taking action! If you diagnose an issue in your reasoning, apply the fix immediately in the very same turn.
+3. ARCHITECTURAL CONTEXT & SURGICAL EDITS:
+   - Inspect all necessary project files using 'read_multiple_files' (you can inspect multiple files across different folders to fully understand project configuration, models, views, and templates before editing).
+   - Once you understand what needs to be changed, apply the code modifications using 'edit_file' or 'write_file'.
+   - You can freely re-read any file after making modifications to verify your edits or inspect cross-file dependencies.
+   - Avoid calling 'read_multiple_files' on the exact same unchanged file repeatedly without taking action.
 4. PROJECT INITIALIZATION & SCAFFOLDING FLOW:
    - When initializing a new project/workspace, creating apps/modules, or installing dependencies in any technology: RUN the official CLI command via 'execute_terminal_command' (e.g. 'django-admin startproject <name> .', 'python -m venv .venv', 'pip install <pkg>'). Never manually handwrite standard framework boilerplate files from scratch.
 5. APPLICATION CODE & FEATURE DEVELOPMENT:
@@ -158,8 +161,16 @@ Provide 3 to 5 sequential high-level steps with clear verification criteria. Do 
 - get_code_diagnostics(filepath?): Inspect compiler and LSP diagnostics.
 - execute_terminal_command(command): Run non-destructive inspection commands.`);
 
-            sections.push(`### DIRECTIVE
+            if (!opts.activeStep) {
+                sections.push(`### DIRECTIVE (CODEBASE OVERVIEW & USER INQUIRY RESPONSE):
+You are acting as the Technical Lead & Codebase Architect directly answering the user.
+1. Inspect the workspace structure using 'list_directory_tree' and key configuration/entrypoint files using 'read_multiple_files'.
+2. Provide a clear, comprehensive, and well-structured Markdown response directly answering the user's question (e.g. Bird's Eye View, tech stack, architecture breakdown, key modules, data flow, and conventions).
+3. Deliver your final explanation clearly in visible text. Do NOT hide the answer inside thinking tags.`);
+            } else {
+                sections.push(`### DIRECTIVE
 Investigate the codebase for Step ${opts.activeStep?.id || ''}. If an error, library, or modern API is unfamiliar, call 'search_web' to retrieve verified official documentation, then summarize the exact root cause and fix.`);
+            }
         } else if (role === 'coder') {
             // Direct injection of Architectural Specification & RESEARCH.md
             if (opts.workspaceRoot) {
@@ -214,7 +225,7 @@ CRITICAL ACTION: If this error involves an unfamiliar library, framework mismatc
             sections.push(`### DIRECTIVE
 1. APPLY RESEARCH EVIDENCE FIRST: The Researcher Agent has analyzed this problem and provided verified documentation/code above. You MUST prioritize and implement that verified solution over your pre-trained knowledge cutoff!
 2. PRE-EXECUTION CHECK: Before executing any step, inspect the workspace directory structure via 'list_directory_tree' to identify existing project files, framework, and configuration. Check '.ultra-light-ai/RESEARCH.md' for verified commands, package names, and doc links.
-3. READ-THEN-ACTION PROTOCOL: Inspect files with 'read_multiple_files' once. If you diagnose what needs to be changed, you MUST immediately call 'edit_file' or 'write_file' to apply the change. Do NOT keep reading files repeatedly without modifying the code!
+3. ARCHITECTURAL CONTEXT & SURGICAL EDITS: Inspect all necessary project files with 'read_multiple_files' to understand architecture and connections before editing. Once diagnosed, apply the changes using 'edit_file' or 'write_file'. You may re-inspect any file after modifications to verify line numbers or cross-file imports. Avoid calling read_multiple_files repeatedly on the exact same unchanged file without taking action!
 4. For Scaffolding & Setup: Run the official CLI command via 'execute_terminal_command' (e.g. django-admin startproject, python manage.py migrate). Never handwrite boilerplate files from scratch!
 5. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
 6. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').

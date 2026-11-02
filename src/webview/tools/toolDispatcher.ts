@@ -40,8 +40,8 @@ export interface ToolExecutionContext {
 }
 
 export class ToolDispatcher {
-    private static consecutiveReadCount = 0;
-    private static lastReadFiles: Set<string> = new Set<string>();
+    private static immediateLastReadKey: string = '';
+    private static consecutiveIdenticalReadCount: number = 0;
     private static lastFailedCommand: string | null = null;
     private static lastCommandErrorText: string = '';
     private static webSearchPerformedForLastError: boolean = false;
@@ -60,8 +60,8 @@ export class ToolDispatcher {
     }
 
     public static resetSessionState(): void {
-        this.consecutiveReadCount = 0;
-        this.lastReadFiles.clear();
+        this.immediateLastReadKey = '';
+        this.consecutiveIdenticalReadCount = 0;
         this.lastFailedCommand = null;
         this.lastCommandErrorText = '';
         this.webSearchPerformedForLastError = false;
@@ -346,10 +346,6 @@ export class ToolDispatcher {
 
         if (name === 'read_multiple_files') {
             if (!workspaceRoot) return "Error: No workspace open.";
-            this.consecutiveReadCount++;
-            if (this.consecutiveReadCount >= 3) {
-                return `🚨 [READ LIMIT REACHED - ACTION REQUIRED]: You have inspected files ${this.consecutiveReadCount} times consecutively. You now have full code context. You are FORBIDDEN from calling read_multiple_files again right now. You MUST now apply code changes using 'edit_file' or 'write_file', or execute a command.`;
-            }
             let filepaths: string[] = [];
             if (Array.isArray(args.paths)) {
                 filepaths = args.paths;
@@ -368,12 +364,22 @@ export class ToolDispatcher {
             const startLine = typeof args.start_line === 'number' ? Math.max(1, args.start_line) : undefined;
             const endLine = typeof args.end_line === 'number' ? Math.max(1, args.end_line) : undefined;
 
-            let targetFilepaths: string[] = filepaths.slice(0, 3);
+            // Allow inspecting up to 8 files at once for comprehensive architecture context
+            let targetFilepaths: string[] = filepaths.slice(0, 8);
             const joinedKey = targetFilepaths.slice().sort().join('|') + `:${startLine || 0}-${endLine || 0}`;
-            if (this.lastReadFiles.has(joinedKey) && !this.filesModifiedSinceLastCommand) {
-                return `Notice: File section [${targetFilepaths.join(', ')}] was already inspected recently and has not been modified. Please proceed to writing/editing code or running a verification check.`;
+
+            // Smart Loop Detection: Only notice if the EXACT same file(s) and lines are repeated
+            // back-to-back with zero modifications or intervening actions in between.
+            if (joinedKey === this.immediateLastReadKey && !this.filesModifiedSinceLastCommand) {
+                this.consecutiveIdenticalReadCount++;
+                if (this.consecutiveIdenticalReadCount >= 2) {
+                    return `Notice: File section [${targetFilepaths.join(', ')}] was already inspected with identical line ranges in your previous action. The code content is already in your context above. You may proceed to applying code modifications using 'edit_file' or 'write_file', or specify different files/line ranges if needed.`;
+                }
+            } else {
+                this.immediateLastReadKey = joinedKey;
+                this.consecutiveIdenticalReadCount = 1;
+                this.filesModifiedSinceLastCommand = false;
             }
-            this.lastReadFiles.add(joinedKey);
 
             postMessage({
                 command: 'statusUpdate',
@@ -461,8 +467,9 @@ export class ToolDispatcher {
         }
 
         if (name === 'write_file') {
-            this.consecutiveReadCount = 0;
-            this.lastReadFiles.clear();
+            this.immediateLastReadKey = '';
+            this.consecutiveIdenticalReadCount = 0;
+            this.filesModifiedSinceLastCommand = true;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
             if (!filepath || typeof filepath !== 'string' || !filepath.trim()) {
@@ -605,8 +612,9 @@ export class ToolDispatcher {
         }
 
         if (name === 'edit_file') {
-            this.consecutiveReadCount = 0;
-            this.lastReadFiles.clear();
+            this.immediateLastReadKey = '';
+            this.consecutiveIdenticalReadCount = 0;
+            this.filesModifiedSinceLastCommand = true;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { filepath } = args;
             if (!filepath || typeof filepath !== 'string' || !filepath.trim()) {
@@ -696,8 +704,9 @@ export class ToolDispatcher {
 
             if (!matchedOldText) {
                 // Unblock re-reads so the model is NEVER trapped in a blind loop!
-                this.lastReadFiles.clear();
-                this.consecutiveReadCount = 0;
+                this.immediateLastReadKey = '';
+                this.consecutiveIdenticalReadCount = 0;
+                this.filesModifiedSinceLastCommand = true;
                 const sampleLines = fileContent.split(/\r?\n/).slice(0, 35).map((l, i) => `${i + 1}: ${l}`).join('\n');
                 return `edit_file failed: old_text snippet was not found in ${filepath}.\n[DIAGNOSTIC]: File has been unlocked. Inspect the exact line content below and provide the matching lines:\n${sampleLines.slice(0, 900)}`;
             }
@@ -835,7 +844,9 @@ export class ToolDispatcher {
         }
 
         if (name === 'execute_terminal_command') {
-            this.consecutiveReadCount = 0;
+            this.immediateLastReadKey = '';
+            this.consecutiveIdenticalReadCount = 0;
+            this.filesModifiedSinceLastCommand = true;
             if (!workspaceRoot) return "Error: No workspace open.";
             const { command } = args;
             if (!command) return "Error: command is required.";
