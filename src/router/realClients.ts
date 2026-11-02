@@ -1124,13 +1124,13 @@ export class GeminiCloudClient implements IEngine {
                 });
 
                 // Context Compaction for Small Models: Prune older raw tool outputs if contents exceed 8 entries
-                if (contents.length > 8) {
-                    for (let cIdx = 1; cIdx < contents.length - 4; cIdx++) {
+                if (contents.length > 25) {
+                    for (let cIdx = 1; cIdx < contents.length - 6; cIdx++) {
                         const c = contents[cIdx];
                         if (c.role === 'function' && c.parts?.[0]?.functionResponse) {
                             const resObj = c.parts[0].functionResponse.response;
-                            if (typeof resObj?.result === 'string' && resObj.result.length > 300) {
-                                resObj.result = '(Prior step tool output pruned for token budget.)';
+                            if (typeof resObj?.result === 'string' && resObj.result.length > 15000) {
+                                resObj.result = resObj.result.slice(0, 5000) + '\n...(truncated long historical output)';
                             }
                         }
                     }
@@ -1143,8 +1143,8 @@ export class GeminiCloudClient implements IEngine {
             return { text: fullText, usage: finalUsage };
         } // end tool loop
         
-        if (onChunk) onChunk({ text: '\n\n*Completed maximum autonomous tool executions for this turn. Proceeding with the project roadmap.*', done: true, usage: finalUsage });
-        return { text: fullText || 'Completed autonomous tool executions for this turn. Proceeding with next planned steps.', usage: finalUsage };
+        if (onChunk) onChunk({ text: '', done: true, usage: finalUsage });
+        return { text: fullText || 'Tool executions completed for this turn.', usage: finalUsage };
     }
 }
 
@@ -1267,7 +1267,7 @@ export class LocalOllamaClient implements IEngine {
             }));
         }
 
-        const MAX_TOOL_ITERATIONS = Math.min(this.maxToolIterations || 8, 8);
+        const MAX_TOOL_ITERATIONS = Math.max(this.maxToolIterations || 25, 25);
         const localToolExecutionCounts = new Map<string, number>();
         let lastFullText = '';
         let previousIterationText = '';
@@ -1577,11 +1577,11 @@ export class LocalOllamaClient implements IEngine {
                                 messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${safeResultStr}\n\n${nextDirective}` });
 
                                 // Context Compaction: Prune older raw tool results if messages exceed 8 entries
-                                if (messages.length > 8) {
-                                    for (let mIdx = 1; mIdx < messages.length - 4; mIdx++) {
+                                if (messages.length > 25) {
+                                    for (let mIdx = 1; mIdx < messages.length - 6; mIdx++) {
                                         const m = messages[mIdx];
-                                        if (m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('[Tool Result') && m.content.length > 300) {
-                                            m.content = '[Tool Result]: (Prior tool output pruned for 4B/9B context budget. Key facts preserved in session.)';
+                                        if (m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('[Tool Result') && m.content.length > 15000) {
+                                            m.content = m.content.slice(0, 5000) + '\n...(truncated long historical output)';
                                         }
                                     }
                                 }
@@ -1642,11 +1642,11 @@ export class LocalOllamaClient implements IEngine {
                                 messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: safeResultStr });
 
                                 // Context Compaction: Prune older raw tool results if messages exceed 8 entries
-                                if (messages.length > 8) {
-                                    for (let mIdx = 1; mIdx < messages.length - 4; mIdx++) {
+                                if (messages.length > 25) {
+                                    for (let mIdx = 1; mIdx < messages.length - 6; mIdx++) {
                                         const m = messages[mIdx];
-                                        if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 300) {
-                                            m.content = '(Prior tool output pruned for token budget.)';
+                                        if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 15000) {
+                                            m.content = m.content.slice(0, 5000) + '\n...(truncated long historical output)';
                                         }
                                     }
                                 }
@@ -1848,9 +1848,9 @@ export class LocalOllamaClient implements IEngine {
         }
 
         if (stream && onChunk) {
-            onChunk({ text: '\n\n*Completed maximum autonomous tool executions for this turn. Proceeding with the project roadmap.*', done: true });
+            onChunk({ text: '', done: true });
         }
-        return { text: lastFullText || 'Completed autonomous tool executions for this turn. Proceeding with next planned steps.' };
+        return { text: lastFullText || 'Tool executions completed for this turn.' };
     }
 }
 

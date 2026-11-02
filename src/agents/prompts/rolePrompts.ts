@@ -101,14 +101,13 @@ RULES:
      */
     public static buildTurnPrompt(role: AgentRoleType, opts: PromptContextOptions): string {
         const sections: string[] = [];
-        const isSmall = isSmallModel(opts.modelName);
-
-        const planLimit = isSmall ? 300 : 800;
-        const mapLimit = isSmall ? 500 : 1000;
-        const preGroundedLimit = isSmall ? 1500 : 12000;
-        const codeContextLimit = isSmall ? 1500 : 18000;
-        const failureLimitChars = isSmall ? 800 : 1500;
-        const ledgerLimit = isSmall ? 300 : 800;
+        // Full context allocation across all models: eliminates hallucination caused by partial file context
+        const planLimit = 2500;
+        const mapLimit = 2500;
+        const preGroundedLimit = 16000;
+        const codeContextLimit = 24000;
+        const failureLimitChars = 4000;
+        const ledgerLimit = 2500;
 
         // 1. User Prompt / Goal
         sections.push(`### TASK OBJECTIVE\n${opts.userPrompt.trim()}`);

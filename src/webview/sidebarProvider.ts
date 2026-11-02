@@ -666,7 +666,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         if (contextSources.length > 0) {
-            const allocated = allocateBudget(5000, contextSources);
+            const allocated = allocateBudget(25000, contextSources);
             const contextStr = allocated.map(a => `--- ${a.name} ---\n${a.content}`).join('\n\n');
             finalPrompt = `--- Context ---\n${contextStr}\n\n--- User Request ---\n${finalPrompt}`;
         }
