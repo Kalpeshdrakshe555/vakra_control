@@ -53,3 +53,13 @@ venv/
 env/
 __pycache__/
 *.pyc
+
+# Media & Video Recordings
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+scratch_video/
+scratch_video_search/
+

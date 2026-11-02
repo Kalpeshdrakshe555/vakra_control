@@ -60,25 +60,27 @@ RULES:
 Your job is to implement features, fix bugs, run official scaffolding commands, and apply surgical code modifications.
 
 RULES:
-1. PRE-EXECUTION PROJECT & DIRECTORY CHECK:
+1. RESEARCH-FIRST IMPLEMENTATION (CRITICAL):
+   - When RESEARCH EVIDENCE or live web search documentation is provided in the prompt or in '.ultra-light-ai/RESEARCH.md', you MUST strictly apply that verified solution. Do not guess or fall back to outdated pre-trained weights!
+2. PRE-EXECUTION PROJECT & DIRECTORY CHECK:
    - Before executing code or scaffolding in any step, inspect the directory structure via 'list_directory_tree' to determine the exact project type, existing files, and framework configuration.
    - If '.ultra-light-ai/RESEARCH.md' exists, consult it for official commands, doc links, and package setup. Never assume an empty or pre-configured directory without checking!
-2. READ-THEN-ACTION PROTOCOL:
+3. READ-THEN-ACTION PROTOCOL:
    - Inspect files via 'read_multiple_files' once to understand target context.
    - IMMEDIATELY after inspecting a file, apply the code modifications using 'edit_file' or 'write_file'.
    - DO NOT loop repeatedly calling 'read_multiple_files' without taking action! If you diagnose an issue in your reasoning, apply the fix immediately in the very same turn.
-3. PROJECT INITIALIZATION & SCAFFOLDING FLOW:
+4. PROJECT INITIALIZATION & SCAFFOLDING FLOW:
    - When initializing a new project/workspace, creating apps/modules, or installing dependencies in any technology: RUN the official CLI command via 'execute_terminal_command' (e.g. 'django-admin startproject <name> .', 'python -m venv .venv', 'pip install <pkg>'). Never manually handwrite standard framework boilerplate files from scratch.
-2. APPLICATION CODE & FEATURE DEVELOPMENT:
+5. APPLICATION CODE & FEATURE DEVELOPMENT:
    - For writing new application code, use 'write_file'.
    - For surgical modifications to existing code, use 'edit_file'.
    - Always base edits on target file context. Inspect files first using 'read_multiple_files' or 'search_codebase'.
-3. VERIFICATION & COMPLETION:
+6. VERIFICATION & COMPLETION:
    - When you finish writing or modifying code, execute verification commands (such as tests or 'python manage.py check') using 'execute_terminal_command'.
    - Once verified clean, call 'complete_plan_step' or 'finish' to conclude the step or task.
-4. UNFAMILIAR ERRORS OR CRASHES (MANDATORY WEB SEARCH):
+7. UNFAMILIAR ERRORS OR CRASHES (MANDATORY WEB SEARCH):
    - If ANY command fails or you encounter an unfamiliar library, missing module, or syntax error: YOU MUST CALL 'search_web' with the exact error message to retrieve the verified solution before guessing edits!
-5. AVAILABLE TOOLS:
+8. AVAILABLE TOOLS:
    - 'write_file', 'edit_file', 'execute_terminal_command', 'search_web', 'read_multiple_files', 'search_codebase', 'complete_plan_step', 'finish'.${conventions ? `\n[PROJECT CONVENTIONS]:\n${conventions}` : ''}${envSnapshot}`;
 
             case 'verifier':
@@ -179,11 +181,11 @@ Investigate the codebase for Step ${opts.activeStep?.id || ''}. If an error, lib
             if (opts.research) {
                 let evidenceStr = `Summary: ${opts.research.summary}\nTarget Files: ${opts.research.targetFiles.join(', ')}`;
                 if (opts.research.evidence && opts.research.evidence.length > 0) {
-                    evidenceStr += '\nEvidence:\n' + opts.research.evidence.map(e => `--- File Evidence (${e.filepath}) ---\n${e.snippet || e.relevance}`).join('\n\n');
+                    evidenceStr += '\n\nVerified Evidence, Error Diagnosis & Web Documentation:\n' + opts.research.evidence.map(e => `[RESEARCH SOURCE: ${e.filepath}]\n${e.snippet || e.relevance}`).join('\n\n');
                 }
                 const evTok = estimateTokens(evidenceStr);
                 const clampedEv = evTok > codeContextLimit ? truncateToTokens(evidenceStr, codeContextLimit) : evidenceStr;
-                sections.push(`### RESEARCH EVIDENCE (FULL CODE CONTEXT)\n${clampedEv}`);
+                sections.push(`### 🔬 RESEARCHER GROUNDING & VERIFIED EVIDENCE\n[CRITICAL DIRECTIVE FOR CODER]:\nThe Researcher Agent investigated the active task/error and retrieved the verified documentation, file lines, and solutions below.\nYOU MUST APPLY THIS RESEARCH EVIDENCE TO IMPLEMENT THE FIX. DO NOT RELY ON GUESSWORK OR OUTDATED PRE-TRAINED KNOWLEDGE.\n\n${clampedEv}`);
             }
 
             if (opts.previousFailure) {
@@ -210,13 +212,14 @@ CRITICAL ACTION: If this error involves an unfamiliar library, framework mismatc
 - finish(summary): Complete the overall task when verified clean.`);
 
             sections.push(`### DIRECTIVE
-1. PRE-EXECUTION CHECK: Before executing any step, inspect the workspace directory structure via 'list_directory_tree' to identify existing project files, framework, and configuration. Check '.ultra-light-ai/RESEARCH.md' for verified commands, package names, and doc links.
-2. READ-THEN-ACTION PROTOCOL: Inspect files with 'read_multiple_files' once. If you diagnose what needs to be changed, you MUST immediately call 'edit_file' or 'write_file' to apply the change. Do NOT keep reading files repeatedly without modifying the code!
-3. For Scaffolding & Setup: Run the official CLI command via 'execute_terminal_command' (e.g. django-admin startproject, python manage.py migrate). Never handwrite boilerplate files from scratch!
-4. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
-5. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').
-6. When Active Step is Verified: Call 'complete_plan_step' to record completion and advance to the next step (or call 'finish' if completing a direct task).
-7. MANDATORY ERROR RECOVERY (CALL 'search_web'): If ANY command fails, a test fails, or you encounter an unfamiliar library/syntax error: YOUR IMMEDIATE NEXT TOOL CALL MUST BE 'search_web' with the exact error message to retrieve the official modern solution! Do not guess blind fixes!`);
+1. APPLY RESEARCH EVIDENCE FIRST: The Researcher Agent has analyzed this problem and provided verified documentation/code above. You MUST prioritize and implement that verified solution over your pre-trained knowledge cutoff!
+2. PRE-EXECUTION CHECK: Before executing any step, inspect the workspace directory structure via 'list_directory_tree' to identify existing project files, framework, and configuration. Check '.ultra-light-ai/RESEARCH.md' for verified commands, package names, and doc links.
+3. READ-THEN-ACTION PROTOCOL: Inspect files with 'read_multiple_files' once. If you diagnose what needs to be changed, you MUST immediately call 'edit_file' or 'write_file' to apply the change. Do NOT keep reading files repeatedly without modifying the code!
+4. For Scaffolding & Setup: Run the official CLI command via 'execute_terminal_command' (e.g. django-admin startproject, python manage.py migrate). Never handwrite boilerplate files from scratch!
+5. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
+6. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').
+7. When Active Step is Verified: Call 'complete_plan_step' to record completion and advance to the next step (or call 'finish' if completing a direct task).
+8. MANDATORY ERROR RECOVERY (CALL 'search_web'): If ANY command fails, a test fails, or you encounter an unfamiliar library/syntax error: YOUR IMMEDIATE NEXT TOOL CALL MUST BE 'search_web' with the exact error message to retrieve the official modern solution! Do not guess blind fixes!`);
         } else if (role === 'verifier') {
             if (opts.coderResult) {
                 sections.push(`### CODER IMPLEMENTATION RECORD

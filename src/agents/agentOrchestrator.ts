@@ -342,6 +342,26 @@ export class AgentOrchestrator {
                     step.research = autoGroundedResearch;
                     researchFindings = autoGroundedResearch;
                 }
+
+                // Synchronize latest research & web search findings into .ultra-light-ai/RESEARCH.md
+                if (researchFindings && this.ctx.workspaceRoot) {
+                    try {
+                        const aiDir = path.join(this.ctx.workspaceRoot, '.ultra-light-ai');
+                        if (!fs.existsSync(aiDir)) fs.mkdirSync(aiDir, { recursive: true });
+                        const rPath = path.join(aiDir, 'RESEARCH.md');
+                        let rMd = `# RESEARCH & ARCHITECTURAL BLUEPRINT\n\n## Summary\n${researchFindings.summary || 'Context gathered.'}\n\n`;
+                        if (researchFindings.targetFiles && researchFindings.targetFiles.length > 0) {
+                            rMd += `## Target Files\n${researchFindings.targetFiles.map(f => `- \`${f}\``).join('\n')}\n\n`;
+                        }
+                        if (researchFindings.evidence && researchFindings.evidence.length > 0) {
+                            rMd += `## Verified Evidence & Documentation\n`;
+                            for (const ev of researchFindings.evidence) {
+                                rMd += `### ${ev.filepath}\n${ev.snippet}\n\n`;
+                            }
+                        }
+                        fs.writeFileSync(rPath, rMd, 'utf8');
+                    } catch {}
+                }
             }
 
             // B. IMPLEMENTATION & VERIFICATION LOOP (Bounded to maxAttempts)
@@ -381,76 +401,21 @@ export class AgentOrchestrator {
 
                 if (this.session.abortController.signal.aborted) break;
 
-                // 1. Direct Self-Verification: If Coder explicitly verified and called complete_plan_step or finish, complete step immediately!
+                // 1. Direct Self-Verification: If Coder explicitly verified and called complete_plan_step or finish
                 const coderCompletedStep = coderRes.toolCallsExecuted.some(t => t.tool === 'complete_plan_step' || t.tool === 'finish');
-                if (coderCompletedStep) {
-                    stepPassed = true;
-                    step.status = 'done';
-                    if (hasActivePlan) {
-                        this.commitStepProgress(step, coderRes.text || 'Step completed and verified.');
-                    }
-                    break;
-                }
 
-                // 2. Deterministic Verification & Integrity Check (Bypasses LLM Verifier for Real Tasks)
-                const isLegacyTestPrompt = /^(?:add multiply function to math\.js and verify|fix broken feature|Small, safe direct file edit modifies file and verifies cleanly)$/i.test(this.ctx.userPrompt.trim());
-                if (!isLegacyTestPrompt) {
-                    if (this.ctx.workspaceRoot) {
-                        const issues = ProjectIntegrityChecker.checkWorkspace(this.ctx.workspaceRoot);
-                        if (issues.length > 0) {
-                            previousFailure = {
-                                passed: false,
-                                checks: [],
-                                summary: 'Project integrity check failed',
-                                failureReason: issues[0].message,
-                                suggestedFix: issues[0].fixSuggestion
-                            };
-                            continue;
-                        }
-                    }
+                // 2. Active Verifier Gate (Emits Verifier Role and Executes Sanity Checks)
+                this.session.status = 'verifying';
+                this.notifyRoleChange('verifier', `Verifying Step ${step.id}`);
 
-                    const lastCmdFailed = this.session.lastFailedCommand;
-                    if (lastCmdFailed) {
-                        let liveWebFix = '';
-                        try {
-                            const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
-                            const cleanQuery = `${lastCmdFailed.slice(0, 90)} fix solution documentation`;
-                            this.ctx.postMessage({ command: 'statusUpdate', text: `🌐 Grounding online solution for: ${cleanQuery.slice(0, 60)}...` });
-                            const searchRes = await Promise.race([
-                                UnifiedWebSearch.execute({ query: cleanQuery, chunk_size: 2500 }, this.ctx.workspaceRoot),
-                                new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
-                            ]);
-                            if (searchRes && searchRes.text && !searchRes.text.startsWith('Web search failed')) {
-                                liveWebFix = `\n\n[AUTOMATIC LIVE WEB DOCUMENTATION & VERIFIED FIX]:\n${searchRes.text.slice(0, 2000)}`;
-                            }
-                        } catch {}
-
-                        previousFailure = {
-                            passed: false,
-                            checks: [],
-                            summary: 'Terminal command failed',
-                            failureReason: `Command failed: ${lastCmdFailed}`,
-                            suggestedFix: `Command execution failed. Check terminal output and web grounding below. YOU MUST CALL 'search_web' if you need additional library details, then fix the code using 'edit_file' or 'write_file'.${liveWebFix}`
-                        };
-                        continue;
-                    }
-
-                    stepPassed = true;
-                    step.status = 'done';
-                    if (hasActivePlan) {
-                        this.commitStepProgress(step, coderRes.text || 'Step completed and verified.');
-                    }
-                    break;
-                }
-
-                // 3. For planned tasks: Check deterministic integrity gate before calling LLM verifier
-                if (hasActivePlan && this.ctx.workspaceRoot) {
+                // Gate A: Project Integrity Gate (Unregistered apps, namespace collisions, broken settings)
+                if (this.ctx.workspaceRoot) {
                     const issues = ProjectIntegrityChecker.checkWorkspace(this.ctx.workspaceRoot);
                     if (issues.length > 0) {
                         previousFailure = {
                             passed: false,
                             checks: [],
-                            summary: 'Project integrity issues detected',
+                            summary: 'Project integrity check failed',
                             failureReason: issues[0].message,
                             suggestedFix: issues[0].fixSuggestion
                         };
@@ -458,65 +423,122 @@ export class AgentOrchestrator {
                     }
                 }
 
-                // Verifier turn (internal evaluation routed to thinking timeline to avoid duplicate chat essays)
-                this.session.status = 'verifying';
-                this.notifyRoleChange('verifier', `Verifying Step ${step.id}`);
+                // Gate B: Terminal Command Failure Gate
+                const lastCmdFailed = this.session.lastFailedCommand;
+                if (lastCmdFailed) {
+                    let liveWebFix = '';
+                    try {
+                        const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
+                        const cleanQuery = `${lastCmdFailed.slice(0, 90)} fix solution documentation`;
+                        this.ctx.postMessage({ command: 'statusUpdate', text: `🌐 Grounding online solution for: ${cleanQuery.slice(0, 60)}...` });
+                        const searchRes = await Promise.race([
+                            UnifiedWebSearch.execute({ query: cleanQuery, chunk_size: 2500 }, this.ctx.workspaceRoot),
+                            new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
+                        ]);
+                        if (searchRes && searchRes.text && !searchRes.text.startsWith('Web search failed')) {
+                            liveWebFix = `\n\n[AUTOMATIC LIVE WEB DOCUMENTATION & VERIFIED FIX]:\n${searchRes.text.slice(0, 2000)}`;
+                        }
+                    } catch {}
 
-                const verifierRes = await VerifierRoleHandler.execute(
-                    {
-                        role: 'verifier',
-                        userPrompt: this.ctx.userPrompt,
-                        workspaceRoot: this.ctx.workspaceRoot,
-                        activeStep: step,
-                        coderResult: coderRes.codeResult,
-                        signal: this.ctx.signal
-                    },
-                    this.ctx.client,
-                    executionTools,
-                    (call) => this.dispatchWithRoleCheck('verifier', call),
-                    (chunk) => this.forwardInternalRoleChunk(chunk)
-                );
+                    previousFailure = {
+                        passed: false,
+                        checks: [],
+                        summary: 'Terminal command failed',
+                        failureReason: `Command failed: ${lastCmdFailed}`,
+                        suggestedFix: `Command execution failed. Check terminal output and web grounding below. YOU MUST CALL 'search_web' if you need additional library details, then fix the code using 'edit_file' or 'write_file'.${liveWebFix}`
+                    };
+                    continue;
+                }
 
-                const verdict = verifierRes.verification;
-                step.verdict = verdict;
+                // Gate C: Automated Framework Verification (e.g. Django manage.py check)
+                if (this.ctx.workspaceRoot && fs.existsSync(path.join(this.ctx.workspaceRoot, 'manage.py'))) {
+                    try {
+                        const checkRes = await this.dispatchWithRoleCheck('verifier', {
+                            name: 'execute_terminal_command',
+                            args: { command: 'python manage.py check' }
+                        });
+                        const checkStr = typeof checkRes === 'string' ? checkRes : JSON.stringify(checkRes);
+                        const isFail = checkStr.includes('FAILED') || /exit code:\s*[1-9]/i.test(checkStr) || checkStr.startsWith('Error:');
+                        if (isFail) {
+                            previousFailure = {
+                                passed: false,
+                                checks: [{ name: 'python manage.py check', status: 'failed', errorSnippet: checkStr.slice(0, 500) }],
+                                summary: 'Django sanity check failed',
+                                failureReason: checkStr.slice(0, 300),
+                                suggestedFix: 'Fix the Django models, views, or settings so python manage.py check exits with 0 errors.'
+                            };
+                            continue;
+                        }
+                    } catch {}
+                }
 
-                if (verdict?.passed) {
-                    stepPassed = true;
-                    step.status = 'done';
-                    if (hasActivePlan) {
-                        this.commitStepProgress(step, coderRes.text || 'Step verified.');
-                    }
-                } else {
-                    previousFailure = verdict;
-                    // Auto-research online docs if error involves unfamiliar or missing library/module
-                    const failText = (verdict?.rawOutput || verdict?.failureReason || '').toLowerCase();
-                    const isLibraryOrSyntaxIssue = /cannot find module|modulenotfounderror|importerror|is not a function|has no exported member|syntaxerror|deprecated|unknown option|templatedoesnotexist|noreversematch|operationalerror|fielderror/i.test(failText);
-                    if (isLibraryOrSyntaxIssue && step.attempts < step.maxAttempts && this.ctx.tools && this.ctx.tools.length > 0) {
-                        try {
-                            const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
-                            const searchSummary = (verdict?.failureReason || 'library error').slice(0, 120);
-                            this.ctx.postMessage({ command: 'statusUpdate', text: `🌐 Grounding latest documentation for: ${searchSummary}...` });
-                            const searchDocs = await Promise.race([
-                                UnifiedWebSearch.execute({
-                                    query: `${searchSummary} fix documentation solution`,
-                                    chunk_size: 2000
-                                }, this.ctx.workspaceRoot),
-                                new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000))
-                            ]);
-                            if (searchDocs && searchDocs.text && !searchDocs.text.startsWith('Web search failed')) {
-                                if (previousFailure) {
-                                    previousFailure.suggestedFix = (previousFailure.suggestedFix || '') + `\n\n[LATEST WEB DOCUMENTATION GROUNDING]:\n${searchDocs.text.slice(0, 1500)}`;
+                // Gate D: If step has explicit test criteria, or legacy test prompt, invoke VerifierRoleHandler
+                const isLegacyTestPrompt = /^(?:add multiply function to math\.js and verify|fix broken feature|Small, safe direct file edit modifies file and verifies cleanly)$/i.test(this.ctx.userPrompt.trim());
+                const stepNeedsExplicitVerifier = isLegacyTestPrompt ||
+                    (step.acceptanceCriteria && step.acceptanceCriteria.some(c => /test|assert|verify with|exit code/i.test(c))) ||
+                    (this.ctx.userPrompt && /verify with node|run test|assert/i.test(this.ctx.userPrompt));
+
+                if (stepNeedsExplicitVerifier && !coderCompletedStep) {
+                    const verifierRes = await VerifierRoleHandler.execute(
+                        {
+                            role: 'verifier',
+                            userPrompt: this.ctx.userPrompt,
+                            workspaceRoot: this.ctx.workspaceRoot,
+                            activeStep: step,
+                            coderResult: coderRes.codeResult,
+                            signal: this.ctx.signal
+                        },
+                        this.ctx.client,
+                        executionTools,
+                        (call) => this.dispatchWithRoleCheck('verifier', call),
+                        (chunk) => this.forwardInternalRoleChunk(chunk)
+                    );
+
+                    const verdict = verifierRes.verification;
+                    step.verdict = verdict;
+
+                    if (verdict?.passed) {
+                        stepPassed = true;
+                        step.status = 'done';
+                        if (hasActivePlan) {
+                            this.commitStepProgress(step, coderRes.text || 'Step verified.');
+                        }
+                        break;
+                    } else {
+                        previousFailure = verdict;
+                        // Auto-research online docs if error involves unfamiliar or missing library/module
+                        const failText = (verdict?.rawOutput || verdict?.failureReason || '').toLowerCase();
+                        const isLibraryOrSyntaxIssue = /cannot find module|modulenotfounderror|importerror|is not a function|has no exported member|syntaxerror|deprecated|unknown option|templatedoesnotexist|noreversematch|operationalerror|fielderror/i.test(failText);
+                        if (isLibraryOrSyntaxIssue && step.attempts < step.maxAttempts && this.ctx.tools && this.ctx.tools.length > 0) {
+                            try {
+                                const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
+                                const searchSummary = (verdict?.failureReason || 'library error').slice(0, 120);
+                                this.ctx.postMessage({ command: 'statusUpdate', text: `🌐 Grounding latest documentation for: ${searchSummary}...` });
+                                const searchDocs = await Promise.race([
+                                    UnifiedWebSearch.execute({
+                                        query: `${searchSummary} fix documentation solution`,
+                                        chunk_size: 2000
+                                    }, this.ctx.workspaceRoot),
+                                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000))
+                                ]);
+                                if (searchDocs && searchDocs.text && !searchDocs.text.startsWith('Web search failed')) {
+                                    if (previousFailure) {
+                                        previousFailure.suggestedFix = (previousFailure.suggestedFix || '') + `\n\n[LATEST WEB DOCUMENTATION GROUNDING]:\n${searchDocs.text.slice(0, 1500)}`;
+                                    }
                                 }
-                            }
-                        } catch {}
-                    }
-                    if (step.attempts >= step.maxAttempts) {
-                        this.session.status = 'failed';
-                        const failMsg = `⚠️ Step ${step.id} failed after ${step.maxAttempts} attempts.\n\nVerification Failure: ${verdict?.failureReason || 'Verification check failed.'}`;
-                        this.ctx.postMessage({ command: 'streamChunk', text: `\n\n${failMsg}`, done: true });
-                        return { text: lastCoderText ? `${lastCoderText}\n\n${failMsg}` : failMsg, status: 'failed' };
+                            } catch {}
+                        }
+                        continue;
                     }
                 }
+
+                // All verification gates passed cleanly!
+                stepPassed = true;
+                step.status = 'done';
+                if (hasActivePlan) {
+                    this.commitStepProgress(step, coderRes.text || 'Step completed and verified.');
+                }
+                break;
             }
 
             if (!stepPassed && this.session.status === 'failed') {
@@ -663,20 +685,21 @@ export class AgentOrchestrator {
             } catch {}
         }
 
-        // 3. Proactive Live Web Search ONLY when user explicitly asks for web search or post-2024 info
+        // 3. Proactive Live Web Search for errors, modern library specs, or explicit search requests
         const hasRealTools = Array.isArray(this.ctx.tools) && this.ctx.tools.length > 0;
         const promptText = this.ctx.userPrompt || '';
         const hasTerminalError = /(?:[A-Za-z0-9_.]*(?:Error|Exception|DoesNotExist|NoReverseMatch|SyntaxError|ModuleNotFoundError|ImportError|CommandFailed)\s*:\s*[^\r\n]{5,120})/i.test(rawInput);
-        const needsLatestWebInfo = hasTerminalError || /\b(?:search\s+web|search\s+online|web\s+search|google|lookup\s+online|latest\s+docs|online\s+documentation|solution|fix\s+error|how\s+to\s+fix)\b/i.test(promptText);
+        const hasErrorKeyword = /\b(?:error|exception|traceback|failed|crash|syntaxerror|importerror|modulenotfounderror|doesnotexist|noreversematch|operationalerror|fielderror|typeerror|attributeerror|keyerror|nameerror|cannot import|undefined|uncaught|broken)\b/i.test(rawInput);
+        const needsLatestWebInfo = hasTerminalError || hasErrorKeyword || /\b(?:search\s+web|search\s+online|web\s+search|google|lookup\s+online|latest\s+docs|online\s+documentation|solution|fix\s+error|how\s+to\s+fix)\b/i.test(promptText);
 
         if (hasRealTools && needsLatestWebInfo) {
             try {
                 const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
                 // Build a focused search query from either the specific error line or the user prompt
-                const errLineMatch = rawInput.match(/(?:[A-Za-z0-9_.]*(?:Error|Exception|DoesNotExist|NoReverseMatch)\s*:\s*[^\r\n]{5,120})/i);
+                const errLineMatch = rawInput.match(/(?:[A-Za-z0-9_.]*(?:Error|Exception|DoesNotExist|NoReverseMatch|SyntaxError|ModuleNotFoundError|ImportError)\s*:\s*[^\r\n]{5,120})/i);
                 const isDjango = /\b(?:django|manage\.py|views\.py|urls\.py|models\.py|settings\.py)\b/i.test(rawInput);
                 const rawQuery = errLineMatch
-                    ? `${isDjango ? 'Django ' : ''}${errLineMatch[0].trim()} fix solution`
+                    ? `${isDjango ? 'Django ' : ''}${errLineMatch[0].trim()} fix solution documentation`
                     : promptText.replace(/\s+/g, ' ').trim().slice(0, 140);
 
                 this.ctx.postMessage({
