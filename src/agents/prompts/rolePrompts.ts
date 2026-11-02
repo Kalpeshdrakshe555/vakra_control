@@ -159,6 +159,23 @@ Provide 3 to 5 sequential high-level steps with clear verification criteria. Do 
             sections.push(`### DIRECTIVE
 Investigate the codebase for Step ${opts.activeStep?.id || ''}. If an error, library, or modern API is unfamiliar, call 'search_web' to retrieve verified official documentation, then summarize the exact root cause and fix.`);
         } else if (role === 'coder') {
+            // Direct injection of Architectural Specification & RESEARCH.md
+            if (opts.workspaceRoot) {
+                const fsModule = require('fs');
+                const pathModule = require('path');
+                const aiResearch = pathModule.join(opts.workspaceRoot, '.ultra-light-ai', 'RESEARCH.md');
+                const rootResearch = pathModule.join(opts.workspaceRoot, 'RESEARCH.md');
+                const targetResearch = fsModule.existsSync(aiResearch) ? aiResearch : (fsModule.existsSync(rootResearch) ? rootResearch : null);
+                if (targetResearch) {
+                    try {
+                        const rContent = fsModule.readFileSync(targetResearch, 'utf8').trim();
+                        if (rContent) {
+                            sections.push(`### 📖 ARCHITECTURAL SPECIFICATION & MANDATORY BLUEPRINT (.ultra-light-ai/RESEARCH.md)\n${rContent}\n\n[MANDATORY ARCHITECTURAL DIRECTIVE]:\nYou MUST strictly follow the verified framework versions, package installation commands, and official doc links specified above! Do NOT invent custom conflicting app structures or unapproved file layouts.`);
+                        }
+                    } catch {}
+                }
+            }
+
             if (opts.research) {
                 let evidenceStr = `Summary: ${opts.research.summary}\nTarget Files: ${opts.research.targetFiles.join(', ')}`;
                 if (opts.research.evidence && opts.research.evidence.length > 0) {
@@ -179,7 +196,7 @@ ${(opts.previousFailure.rawOutput || opts.previousFailure.failureReason || '').s
 \`\`\`
 Suggested Fix: ${opts.previousFailure.suggestedFix || 'Analyze the failing file and correct the syntax/logic.'}
 
-CRITICAL: Fix the exact error above using 'edit_file' or 'write_file'.`);
+CRITICAL ACTION: If this error involves an unfamiliar library, framework mismatch, or missing package, YOUR FIRST ACTION MUST BE calling 'search_web' with the exact error message! Then apply the fix using 'edit_file' or 'write_file'.`);
             }
 
             sections.push(`### AVAILABLE TOOLS (Call exactly ONE tool per turn):
@@ -199,7 +216,7 @@ CRITICAL: Fix the exact error above using 'edit_file' or 'write_file'.`);
 4. For Code Implementation: Create or edit files directly using 'write_file' or 'edit_file'. Do NOT run terminal commands to write or modify code!
 5. Self-Verification: Verify your changes using official non-destructive checks (e.g. 'python manage.py check', compiler build, or 'get_code_diagnostics').
 6. When Active Step is Verified: Call 'complete_plan_step' to record completion and advance to the next step (or call 'finish' if completing a direct task).
-7. If an Error Occurs: If ANY command fails or you encounter an unfamiliar library issue, call 'search_web' with the exact error message to find the verified modern solution.`);
+7. MANDATORY ERROR RECOVERY (CALL 'search_web'): If ANY command fails, a test fails, or you encounter an unfamiliar library/syntax error: YOUR IMMEDIATE NEXT TOOL CALL MUST BE 'search_web' with the exact error message to retrieve the official modern solution! Do not guess blind fixes!`);
         } else if (role === 'verifier') {
             if (opts.coderResult) {
                 sections.push(`### CODER IMPLEMENTATION RECORD

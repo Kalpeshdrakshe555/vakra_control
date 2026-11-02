@@ -927,6 +927,7 @@ export class ToolDispatcher {
                         this.lastFailedCommand = null;
                     } else {
                         this.lastFailedCommand = cmd;
+                        resText += `\n\n🔍 [MANDATORY ACTION: WEB SEARCH REQUIRED]: Command failed. You MUST call 'search_web' with the exact error message to find the verified solution before attempting further commands!`;
                     }
                     SessionMemory.getInstance(workspaceRoot).recordToolResult('execute_terminal_command', args, resText, isSuccess);
                     resolve(resText);

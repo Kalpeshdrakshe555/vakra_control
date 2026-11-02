@@ -411,12 +411,26 @@ export class AgentOrchestrator {
 
                     const lastCmdFailed = this.session.lastFailedCommand;
                     if (lastCmdFailed) {
+                        let liveWebFix = '';
+                        try {
+                            const { UnifiedWebSearch } = require('../tools/unifiedWebSearch');
+                            const cleanQuery = `${lastCmdFailed.slice(0, 90)} fix solution documentation`;
+                            this.ctx.postMessage({ command: 'statusUpdate', text: `🌐 Grounding online solution for: ${cleanQuery.slice(0, 60)}...` });
+                            const searchRes = await Promise.race([
+                                UnifiedWebSearch.execute({ query: cleanQuery, chunk_size: 2500 }, this.ctx.workspaceRoot),
+                                new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
+                            ]);
+                            if (searchRes && searchRes.text && !searchRes.text.startsWith('Web search failed')) {
+                                liveWebFix = `\n\n[AUTOMATIC LIVE WEB DOCUMENTATION & VERIFIED FIX]:\n${searchRes.text.slice(0, 2000)}`;
+                            }
+                        } catch {}
+
                         previousFailure = {
                             passed: false,
                             checks: [],
                             summary: 'Terminal command failed',
                             failureReason: `Command failed: ${lastCmdFailed}`,
-                            suggestedFix: `Check terminal output. If an unfamiliar error or missing package occurred, call 'search_web' with the exact error message.`
+                            suggestedFix: `Command execution failed. Check terminal output and web grounding below. YOU MUST CALL 'search_web' if you need additional library details, then fix the code using 'edit_file' or 'write_file'.${liveWebFix}`
                         };
                         continue;
                     }
@@ -543,7 +557,9 @@ export class AgentOrchestrator {
         const evidence: AgentEvidence[] = [];
         const targetFiles = new Set<string>();
         const summaries: string[] = [];
-        const rawInput = `${this.ctx.userPrompt}\n${TerminalCapture.getLastOutput() || ''}`;
+        const userRequirements = (this.ctx.taskPlanner && typeof this.ctx.taskPlanner.getUserRequirements === 'function' ? this.ctx.taskPlanner.getUserRequirements() : '') || '';
+        const effectiveGoal = userRequirements || this.ctx.userPrompt;
+        const rawInput = `${effectiveGoal}\n${this.ctx.userPrompt}\n${TerminalCapture.getLastOutput() || ''}`;
 
         // 0. Architectural Blueprint & RESEARCH.md Grounding
         if (this.ctx.workspaceRoot) {
@@ -564,7 +580,20 @@ export class AgentOrchestrator {
         }
 
         // 0b. Recipe and Official Documentation Grounding
-        const matchedRecipe = RecipeCatalog.findRecipe(this.ctx.userPrompt);
+        const matchedRecipe = RecipeCatalog.findRecipe(effectiveGoal) || RecipeCatalog.findRecipe(this.ctx.userPrompt);
+        if (matchedRecipe && this.ctx.workspaceRoot) {
+            const aiDir = path.join(this.ctx.workspaceRoot, '.ultra-light-ai');
+            if (!fs.existsSync(aiDir)) {
+                try { fs.mkdirSync(aiDir, { recursive: true }); } catch {}
+            }
+            const researchPath = path.join(aiDir, 'RESEARCH.md');
+            if (!fs.existsSync(researchPath)) {
+                try {
+                    const researchMd = RecipeCatalog.generateResearchDoc(matchedRecipe, effectiveGoal);
+                    fs.writeFileSync(researchPath, researchMd, 'utf8');
+                } catch {}
+            }
+        }
         if (matchedRecipe && matchedRecipe.docs) {
             for (const doc of matchedRecipe.docs) {
                 evidence.push({

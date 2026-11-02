@@ -1572,7 +1572,7 @@ export class LocalOllamaClient implements IEngine {
                                     nextDirective = 'Context loaded. You have inspected the code. Now call edit_file or write_file to apply the code fix, or run execute_terminal_command.';
                                 }
                                 if (tc.name === 'execute_terminal_command' && (safeResultStr.includes('failed with exit code') || safeResultStr.includes('Command failed') || safeResultStr.includes('Error:') || safeResultStr.includes('[GUARD BLOCKED]'))) {
-                                    nextDirective = `[COMMAND FAILED]: The command failed. If this involves a missing package, syntax error, or unknown library/API, you MUST call 'search_web' with the exact error message or inspect the affected files before repeating shell commands.`;
+                                    nextDirective = `[MANDATORY ACTION: COMMAND FAILED]: The command failed. YOU MUST CALL 'search_web' with the exact error message to retrieve the verified solution before repeating commands or editing code!`;
                                 }
                                 messages.push({ role: 'user', content: `[Tool Result (${tc.name})]:\n${safeResultStr}\n\n${nextDirective}` });
 
@@ -1638,6 +1638,9 @@ export class LocalOllamaClient implements IEngine {
                                 }
                                 if (safeResultStr.includes('[STOP CRITICAL DIRECTIVE]') || tc.name === 'set_task_plan' || (tc.name === 'complete_plan_step' && (safeResultStr.includes('COMPLETE') || safeResultStr.includes('STOP AND HANDOFF')))) {
                                     forceTextSummary = true;
+                                }
+                                if (safeResultStr.includes('failed with exit code') || safeResultStr.includes('Command failed') || safeResultStr.includes('Error:') || safeResultStr.includes('[GUARD BLOCKED]')) {
+                                    safeResultStr += `\n\n[MANDATORY ACTION: COMMAND / CODE ERROR DETECTED]:\nCall 'search_web' with the exact error message to find the official verified solution before attempting code edits!`;
                                 }
                                 messages.push({ role: 'tool', tool_call_id: tc.id || `call_${toolCallsAccumulator.indexOf(tc)}`, content: safeResultStr });
 
